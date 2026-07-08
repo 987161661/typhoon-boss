@@ -1,0 +1,91 @@
+{
+  "colors": {
+    "void": "#05080A",
+    "ink": "#07131A",
+    "panel": "rgba(3, 10, 14, 0.78)",
+    "panelStrong": "rgba(5, 12, 16, 0.92)",
+    "textPrimary": "#D8DEE6",
+    "textMuted": "#7D8790",
+    "alertRed": "#FF3B32",
+    "alertRedSoft": "#FF5A4C",
+    "radarCyan": "#00D8FF",
+    "radarCyanSoft": "#17BFEA",
+    "warningAmber": "#FFB000",
+    "warningYellow": "#FFCC33",
+    "lineSubtle": "rgba(216, 222, 230, 0.16)",
+    "lineHot": "rgba(255, 59, 50, 0.58)",
+    "lineCool": "rgba(0, 216, 255, 0.42)"
+  },
+  "typography": {
+    "display": {
+      "family": "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
+      "weight": 900,
+      "case": "uppercase"
+    },
+    "chineseTitle": {
+      "family": "'Microsoft YaHei', 'PingFang SC', 'Noto Sans CJK SC', sans-serif",
+      "weight": 900
+    },
+    "body": {
+      "family": "'Microsoft YaHei', 'PingFang SC', 'Noto Sans CJK SC', sans-serif",
+      "weight": 500
+    },
+    "numeric": {
+      "family": "'Roboto Mono', 'DIN Alternate', Consolas, monospace",
+      "variant": "tabular-nums"
+    }
+  },
+  "layout": {
+    "topBandHeight": "clamp(88px, 11vh, 120px)",
+    "rightRailWidth": "clamp(360px, 20vw, 430px)",
+    "leftRailWidth": "clamp(220px, 14vw, 280px)",
+    "bottomBandHeight": "clamp(112px, 15vh, 160px)",
+    "panelRadius": "3px",
+    "cutCorner": "14px",
+    "gridSize": "72px",
+    "provinceCardMinHeight": "64px",
+    "metricRowMinHeight": "42px"
+  },
+  "motion": {
+    "radarSweep": "7s linear infinite",
+    "vortexSpin": "14s linear infinite",
+    "pulse": "1.45s ease-in-out infinite",
+    "bootScan": "2.2s ease-out forwards"
+  },
+  "effects": {
+    "panelBlur": "18px",
+    "redGlow": "0 0 24px rgba(255, 59, 50, 0.42)",
+    "cyanGlow": "0 0 22px rgba(0, 216, 255, 0.34)",
+    "deepShadow": "0 24px 90px rgba(0, 0, 0, 0.48)"
+  },
+  "assets": {
+    "controlAtlas": "/ui-rebuild/hud-control-atlas.png",
+    "panelRed": "/ui-rebuild/hud-panel-red.png",
+    "panelCyan": "/ui-rebuild/hud-panel-cyan.png",
+    "cardRed": "/ui-rebuild/hud-card-red.png",
+    "cardAmber": "/ui-rebuild/hud-card-amber.png",
+    "cardCyan": "/ui-rebuild/hud-card-cyan.png",
+    "lineStrip": "/ui-rebuild/hud-line-strip.png"
+  },
+  "semantics": {
+    "highAlert": "alertRed",
+    "mediumAlert": "warningAmber",
+    "lowAlert": "radarCyan",
+    "systemLive": "alertRed",
+    "systemSupport": "radarCyan"
+  },
+  "themes": {
+    "nightRadar": {
+      "dataTheme": "night-radar",
+      "surface": "dark graphite glass HUD",
+      "texture": "/ui-rebuild/hud-control-atlas.png",
+      "accents": ["alertRed", "radarCyan", "warningAmber"]
+    },
+    "archiveCommand": {
+      "dataTheme": "archive-command",
+      "surface": "live paper dossier interface with CSS-generated sheets, tabs, ledgers, stamps, and desk props",
+      "texture": "CSS-generated aged paper and brass controls; no source-reference crops",
+      "accents": ["stampRed", "agedBrass", "fadedBlueGray"]
+    }
+  }
+}

@@ -1,0 +1,86 @@
+{
+  "version": 1,
+  "orchestrator": {
+    "id": "orchestrator",
+    "role": "UI Rebuild Product Manager",
+    "skills": ["task decomposition", "handoff design", "acceptance criteria", "integration review"],
+    "inputs": ["user request", "ref-pic.png", "repo structure"],
+    "outputs": ["brief.md", "phase plan", "final merge decision"],
+    "writeScope": ["ui-rebuild/*"],
+    "parallelization": "Coordinates independent agents and owns final sequencing."
+  },
+  "agents": [
+    {
+      "id": "reference-visual-analyst",
+      "role": "Reference Visual Analyst",
+      "skills": ["image analysis", "layout extraction", "visual hierarchy", "asset identification"],
+      "inputs": ["ref-pic.png"],
+      "outputs": ["reference-analysis.md"],
+      "writeScope": ["ui-rebuild/reference-analysis.md"],
+      "parallelization": "Can run in parallel with project-audit."
+    },
+    {
+      "id": "project-audit",
+      "role": "Existing Project Audit Agent",
+      "skills": ["Next.js audit", "component mapping", "CSS audit", "risk detection"],
+      "inputs": ["app/**", "components/**", "lib/**", "package.json"],
+      "outputs": ["component-map.md", "qa-report.md verification commands"],
+      "writeScope": ["ui-rebuild/component-map.md", "ui-rebuild/qa-report.md"],
+      "parallelization": "Can run in parallel with reference-visual-analyst."
+    },
+    {
+      "id": "design-system",
+      "role": "UI Space Standardization Agent",
+      "skills": ["design tokens", "layout grammar", "HUD primitives", "responsive rules"],
+      "inputs": ["reference-analysis.md", "project audit"],
+      "outputs": ["design-tokens.json", "component contracts"],
+      "writeScope": ["ui-rebuild/design-tokens.json", "ui-rebuild/component-map.md"],
+      "parallelization": "Runs after reference analysis and project audit."
+    },
+    {
+      "id": "asset-generation",
+      "role": "UI Asset Generation Agent",
+      "skills": ["image generation", "asset manifesting", "texture planning"],
+      "inputs": ["reference-analysis.md", "design-tokens.json"],
+      "outputs": ["asset-manifest.json", "public asset files"],
+      "writeScope": ["ui-rebuild/asset-manifest.json", "public/ui-rebuild/**"],
+      "parallelization": "Can run beside component mapping after tokens exist."
+    },
+    {
+      "id": "frontend-implementation",
+      "role": "Frontend Implementation Agent",
+      "skills": ["React", "Next.js", "MapLibre", "CSS architecture", "accessibility"],
+      "inputs": ["component-map.md", "design-tokens.json", "asset-manifest.json"],
+      "outputs": ["implemented UI changes", "verification notes"],
+      "writeScope": ["app/**", "components/**", "lib/**", "public/ui-rebuild/**"],
+      "parallelization": "Should receive disjoint file ownership if multiple workers are used."
+    },
+    {
+      "id": "interaction-state",
+      "role": "Interaction And Data State Agent",
+      "skills": ["state modeling", "motion design", "fixtures", "data-driven rendering"],
+      "inputs": ["lib/types.ts", "API routes", "component-map.md"],
+      "outputs": ["state model", "fixture or data adapter changes"],
+      "writeScope": ["lib/**", "components/**"],
+      "parallelization": "Use only when interaction/data work is split from layout implementation."
+    },
+    {
+      "id": "visual-qa",
+      "role": "Visual QA Agent",
+      "skills": ["browser screenshot QA", "responsive inspection", "layout regression detection"],
+      "inputs": ["running app", "ref-pic.png", "success criteria"],
+      "outputs": ["qa-report.md"],
+      "writeScope": ["ui-rebuild/qa-report.md"],
+      "parallelization": "Can run while implementation continues on unrelated fixes."
+    },
+    {
+      "id": "architecture-review",
+      "role": "Architecture Review Agent",
+      "skills": ["code review", "abstraction review", "duplication detection", "risk assessment"],
+      "inputs": ["diff", "component-map.md", "design-tokens.json"],
+      "outputs": ["review findings"],
+      "writeScope": ["ui-rebuild/qa-report.md"],
+      "parallelization": "Run before final delivery or when repetitive UI variants appear."
+    }
+  ]
+}
