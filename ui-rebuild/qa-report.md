@@ -734,3 +734,46 @@ Runtime checks captured from CDP at 1366x768:
 - `.dossier-footer` is hidden at the laptop breakpoint.
 - `.bottom-command` is absent.
 - `.dossier-panel` first-viewport fit is restored: `clientHeight=673`, `scrollHeight=673`.
+# Boss atlas QA report
+
+## Commands run
+
+- `npm.cmd run typecheck` — passed.
+- `npm.cmd run build` — passed after the Boss atlas integration.
+
+## Viewports checked
+
+- Build-level responsive CSS coverage: desktop (sidebar + large detail), narrow screens (`max-width: 850px`).
+- In-app browser visual capture was attempted against local `/dex`, but the local browser webview did not attach before timeout. No screenshot could be produced in this run.
+
+## Fixed issues
+
+- Replaced the flat card grid with a two-stage state model: year, then storm, then selected dossier.
+- Made the top visual explicitly a *current satellite reference*, not a fabricated historical image for the selected record.
+- Added small-screen stacking rules to preserve both the year rail and storm list.
+
+## Remaining risk
+
+- Historic, storm-scoped satellite imagery needs a timestamped archive source before the top panel can truthfully be labelled as the selected storm's historic real image.
+
+## World-track dossier update
+
+- Replaced the top satellite-reference panel with an SVG world track map rendered from the selected record's public path points.
+- Red circles are labelled and implemented as the maximum recorded seventh-grade wind-radius approximation; they are not represented as a measured damage footprint.
+- Verified `/api/dex` returns lifecycle timestamps, 94 path points, and official landing nodes for sample `202610`.
+- `npm.cmd run typecheck` and `npm.cmd run build` passed after the update; `/dex` returned HTTP 200 from the restarted local server.
+- Browser console monitoring captured no new client exception while navigating to `/dex`. The browser debugging connection closed during the monitoring window, so no screenshot artifact was retained.
+
+## Auto-zoom and evidence update
+
+- The top SVG now derives its `viewBox` from all selected track points plus recorded seventh-grade wind radii. It preserves the world land layer but frames the active Boss path rather than always rendering the full globe.
+- Added an on-demand `/api/dex/evidence` route for GDACS event evidence. It is fetched only for the selected Boss so the archive list does not trigger a large external request fan-out.
+- Verified `npm.cmd run typecheck`, `npm.cmd run build`, and local `/dex` HTTP 200 after this update.
+- Current local Node network could not complete GDACS TLS handshakes even though the public endpoint was independently reachable from the system HTTP client. The UI treats a failed lookup as absent evidence; it does not invent countries, alert levels, or losses.
+
+## Map annotation scaling fix
+
+- Screenshot reference: `C:\Users\98716\AppData\Local\Temp\codex-clipboard-5ca00215-dd74-4b54-9c07-e4e014979035.png`.
+- Converted all SVG annotation dimensions from fixed map units to a `uiScale` derived from the auto-fit `viewBox`: route stroke, glow, dash interval, marker radius, label offsets, text size, and outline width now remain screen-readable as the geographic layer zooms.
+- LAND pins use a scaled local group transform, so their diamond and text stay attached to the associated route point without covering the map.
+- Visual check: `C:\Users\98716\AppData\Local\Temp\dex-auto-zoom-final2.png` at 1366×768. Route, wind-radius circles, landing markers, and start/end labels are legible without the oversized-label collision from the supplied reference.

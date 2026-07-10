@@ -65,6 +65,13 @@
       "constraints": "Frame size is 384px. The production-grade Blender renderer is scripts/render_typhoon_flipbook_blender.py and can overwrite this same atlas when Blender is installed. No baked text, track, wind rings, map fragments, or labels."
     },
     {
+      "id": "runtime-satellite-like-storm-core",
+      "path": "lib/stormVisualRenderer.ts, components/TyphoonMap.tsx, app/globals.css",
+      "sourceType": "runtime-generated",
+      "usage": "Animated canvas-generated typhoon Boss core that uses live storm facts for cloud size, eye clarity, eyewall density, spiral bands, track-relative tailing, optional Himawari crop blending, and animated satellite-style cloud evolution.",
+      "constraints": "Do not replace with a fixed PNG for each storm. The renderer must remain fact-driven and automatic: max wind, minimum pressure, wind radii, motion, track, map zoom, and satellite availability decide the visual form and on-map size."
+    },
+    {
       "id": "hud-noise",
       "path": "public/ui-rebuild/hud-noise.png",
       "sourceType": "generated",

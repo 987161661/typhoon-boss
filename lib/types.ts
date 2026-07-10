@@ -16,6 +16,14 @@ export interface ForecastPoint extends TrackPoint {
   probability: number;
 }
 
+export interface ForecastScenario {
+  id: string;
+  agency: string;
+  agencyCode: string;
+  points: ForecastPoint[];
+  isPrimary: boolean;
+}
+
 export interface StormSkill {
   name: string;
   detail: string;
@@ -46,6 +54,7 @@ export interface Storm {
   };
   track: TrackPoint[];
   forecast: ForecastPoint[];
+  forecastScenarios: ForecastScenario[];
   skills: StormSkill[];
   notice: string;
 }
@@ -73,6 +82,46 @@ export interface DexEntry {
   minPressure: number;
   summary: string;
   tags: string[];
+  lifecycle: {
+    startedAt: string | null;
+    endedAt: string | null;
+    durationHours: number | null;
+    origin: DexTrackPoint | null;
+    finalPosition: DexTrackPoint | null;
+  };
+  track: DexTrackPoint[];
+  landfalls: DexLandfall[];
+  impactData: {
+    formationCause: string | null;
+    affectedWindow: string | null;
+    directEconomicLoss: string | null;
+    sourceNote: string;
+    gdacs?: {
+      alertLevel: string;
+      countries: string[];
+      severity: string;
+      sourceUrl: string;
+      from: string;
+      to: string;
+    };
+  };
+}
+
+export interface DexTrackPoint {
+  time: string;
+  lat: number;
+  lon: number;
+  wind: number;
+  pressure: number;
+  windRadiusKm: number;
+}
+
+export interface DexLandfall {
+  time: string;
+  place: string;
+  lat: number;
+  lon: number;
+  note?: string;
 }
 
 export type EnvironmentLayerStatus = "available" | "unavailable";
@@ -89,6 +138,21 @@ export interface SatelliteLayerPayload extends EnvironmentLayerMeta {
   imageUrl: string | null;
   remoteImageUrl?: string;
   product: string;
+  globalTileUrl?: string | null;
+  globalImageUrl?: string | null;
+  globalProduct?: string;
+  globalUpdatedAt?: string;
+  globalBounds?: {
+    west: number;
+    south: number;
+    east: number;
+    north: number;
+  };
+  synchronizedAt?: string;
+  synchronizationSkewMinutes?: number;
+  referenceUpdatedAt?: string;
+  referenceSkewMinutes?: number;
+  refreshIntervalMinutes?: number;
   isStale: boolean;
   bounds: {
     west: number;
@@ -111,6 +175,13 @@ export interface WindFieldPayload extends EnvironmentLayerMeta {
   model: string;
   unit: "m/s";
   points: WindFieldPoint[];
+  sampling?: "storm" | "viewport";
+  coverage?: {
+    west: number;
+    south: number;
+    east: number;
+    north: number;
+  };
 }
 
 export interface ImpactAreaPayload extends EnvironmentLayerMeta {

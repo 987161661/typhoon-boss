@@ -1,31 +1,27 @@
 import type { Storm, TrackPoint } from "@/lib/types";
+import { getProvinceReferencePoints } from "@/lib/provinceGeo";
+import { getAhiEvidenceForStorm, type AhiEvidenceSummary } from "./ahiEvidence";
 import { sampleBossEnvironment, type EnvironmentFeatures } from "./environmentSampler";
 import { getHimawariProductsForStorm, type SatelliteProductsSummary } from "./satelliteProducts";
+import { getStormStructureIntelligence } from "./structureIntelligence";
 import type {
   BossArchetype,
   BossEvent,
   BossEvidenceLevel,
   BossPhase,
+  BossPhaseAxes,
   BossProfile,
   BossSkill,
-  BossSkillEvidence
+  BossSkillEvidence,
+  BossStructureSummary
 } from "./types";
 
 const SOURCE_POLICY = {
-  canonicalAuthority: "中央气象台 / 国家气象中心台风产品",
+  canonicalAuthority: "权威口径以中央气象台 / 国家气象中心和属地气象应急部门为准",
   machineReadableTrackSource: "浙江省水利厅公开台风路径接口",
-  regionalWarningAuthority: "国家海洋预报台 / 属地气象台与应急部门"
+  regionalWarningAuthority: "国家海洋预报台 / 属地气象台与应急部门",
+  structureAnalysisSource: "JTWC结构分析；JAXA / NOAA微波交叉验证待接入"
 };
-
-const WATCH_POINTS = [
-  { name: "浙江", lon: 120.2, lat: 30.3 },
-  { name: "福建", lon: 119.3, lat: 26.1 },
-  { name: "广东", lon: 113.3, lat: 23.1 },
-  { name: "海南", lon: 110.3, lat: 20.0 },
-  { name: "台湾", lon: 121.0, lat: 23.7 },
-  { name: "上海", lon: 121.5, lat: 31.2 },
-  { name: "江苏", lon: 118.8, lat: 32.1 }
-];
 
 export async function buildBossProfiles(storms: Storm[]): Promise<BossProfile[]> {
   return Promise.all(storms.map((storm) => buildBossProfile(storm)));
@@ -34,10 +30,18 @@ export async function buildBossProfiles(storms: Storm[]): Promise<BossProfile[]>
 export async function buildBossProfile(storm: Storm): Promise<BossProfile> {
   const intensity = buildIntensityFeatures(storm);
   const landfall = buildLandfallFeatures(storm);
-  const [environment, satellite] = await Promise.all([sampleBossEnvironment(storm), getHimawariProductsForStorm(storm)]);
-  const archetype = chooseArchetype(storm, intensity, landfall, environment);
-  const phase = choosePhase(storm, intensity, landfall);
+  const [environment, satellite, ahi, structure] = await Promise.all([
+    sampleBossEnvironment(storm),
+    getHimawariProductsForStorm(storm),
+    getAhiEvidenceForStorm(storm),
+    getStormStructureIntelligence(storm)
+  ]);
+  const archetype = chooseArchetype(storm, intensity, landfall, environment, structure);
+  const phase = choosePhase(storm, intensity, landfall, structure);
+  const phaseAxes = buildPhaseAxes(storm, intensity, landfall, structure);
+  const displayPhaseLabel = structure.state === "unknown" ? phaseLabel(phase) : structure.stateLabel;
   const skills = chooseSkills([
+    eyewallTransformationSkill(structure),
     windPressureCoreSkill(storm, intensity),
     outerRingSkill(storm),
     innerWallSkill(storm),
@@ -50,9 +54,10 @@ export async function buildBossProfile(storm: Storm): Promise<BossProfile> {
     convectiveChargeSkill(environment),
     stallingDrainSkill(storm, environment),
     satelliteRainPotentialHintSkill(environment, satellite),
-    coreRestructureHintSkill(storm, intensity, satellite)
+    coreRestructureHintSkill(storm, intensity, satellite),
+    ahiMultibandEvidenceSkill(ahi)
   ]);
-  const events = buildEvents(storm, intensity, landfall);
+  const events = buildEvents(storm, intensity, landfall, structure);
   const energy = calculateBossEnergy(storm);
 
   return {
@@ -61,20 +66,23 @@ export async function buildBossProfile(storm: Storm): Promise<BossProfile> {
     nameZh: storm.nameZh,
     nameEn: storm.nameEn,
     title: `${storm.nameZh} ${archetypeLabel(archetype)}`,
-    subtitle: `${phaseLabel(phase)} / ${storm.stage}`,
+    subtitle: `${displayPhaseLabel} / ${storm.stage}`,
     archetype,
     archetypeLabel: archetypeLabel(archetype),
     phase,
-    phaseLabel: phaseLabel(phase),
+    phaseLabel: displayPhaseLabel,
+    phaseAxes,
     rating: String(storm.rating),
     energy,
-    riskSummary: buildRiskSummary(storm, archetype, phase, landfall, environment, satellite),
+    riskSummary: buildRiskSummary(storm, archetype, phase, landfall, environment, satellite, structure),
     primarySkillIds: skills.slice(0, 3).map((skill) => skill.id),
     skills,
     events,
-    evidenceSummary: buildEvidenceSummary(storm, skills, environment, satellite),
+    evidenceSummary: buildEvidenceSummary(storm, skills, environment, satellite, ahi, structure),
     environment: buildEnvironmentSummary(environment),
     satellite: buildSatelliteSummary(satellite),
+    ahi: buildAhiSummary(ahi),
+    structure,
     sourcePolicy: SOURCE_POLICY,
     generatedAt: new Date().toISOString()
   };
@@ -106,9 +114,10 @@ function buildIntensityFeatures(storm: Storm) {
 
 function buildLandfallFeatures(storm: Storm) {
   const path = [storm.position, ...storm.forecast.map((point) => ({ lon: point.lon, lat: point.lat }))];
-  const distances = WATCH_POINTS.map((watch) => ({
-    name: watch.name,
-    distanceKm: Math.min(...path.map((point) => distanceBetweenKm(point, watch)))
+  const watchPoints = getProvinceReferencePoints({ coastalOnly: true });
+  const distances = watchPoints.map((watch) => ({
+    name: watch.shortName,
+    distanceKm: Math.min(...path.map((point) => distanceBetweenKm(point, { lon: watch.center[0], lat: watch.center[1] })))
   })).sort((a, b) => a.distanceKm - b.distanceKm);
   const nearest = distances[0] ?? null;
   const influenceRadius = Math.max(storm.windRadiiKm.r7 || 0, 260);
@@ -125,10 +134,12 @@ function chooseArchetype(
   storm: Storm,
   intensity: ReturnType<typeof buildIntensityFeatures>,
   landfall: ReturnType<typeof buildLandfallFeatures>,
-  environment: EnvironmentFeatures
+  environment: EnvironmentFeatures,
+  structure: BossStructureSummary
 ): BossArchetype {
   const scores: Record<BossArchetype, number> = {
     "wind-core": scoreWindCore(storm),
+    "eyewall-shifter": structure.state === "unknown" || structure.state === "stable-eye" ? 0 : 10.5,
     "rain-bulk": scoreRainBulk(environment),
     "giant-radius": clamp((storm.windRadiiKm.r7 || 0) / 70, 0, 9),
     "track-trickster": storm.forecast.length >= 7 ? 3.2 : 1.4,
@@ -144,15 +155,53 @@ function chooseArchetype(
 function choosePhase(
   storm: Storm,
   intensity: ReturnType<typeof buildIntensityFeatures>,
-  landfall: ReturnType<typeof buildLandfallFeatures>
+  landfall: ReturnType<typeof buildLandfallFeatures>,
+  structure: BossStructureSummary
 ): BossPhase {
   if (isArchived(storm)) return "archived";
+  if (structure.state !== "unknown" && structure.state !== "stable-eye") return "restructuring-hint";
   if (landfall.isLandfallPressure) return "landfall-pressure";
   if (intensity.isRapidIntensifying) return "intensifying";
   if (intensity.isWeakening) return "weakening";
   if (isStrongStorm(storm) && hasMeaningfulIntensitySwing(intensity)) return "restructuring-hint";
   if (storm.maxWind < 24) return "forming";
   return "mature";
+}
+
+function buildPhaseAxes(
+  storm: Storm,
+  intensity: ReturnType<typeof buildIntensityFeatures>,
+  landfall: ReturnType<typeof buildLandfallFeatures>,
+  structure: BossStructureSummary
+): BossPhaseAxes {
+  const intensityValue = isArchived(storm)
+    ? "archived"
+    : intensity.isRapidIntensifying
+      ? "intensifying"
+      : intensity.isWeakening
+        ? "weakening"
+        : storm.maxWind < 24
+          ? "forming"
+          : "mature";
+  const intensityLabels = {
+    forming: "生成中",
+    intensifying: "增强中",
+    mature: "成熟体",
+    weakening: "减弱中",
+    archived: "停编归档"
+  } as const;
+  const threatValue = isArchived(storm) ? "archived" : landfall.isLandfallPressure ? "landfall-pressure" : "open-ocean";
+  const threatLabels = {
+    "open-ocean": "远洋活动",
+    "landfall-pressure": "登陆压迫",
+    archived: "威胁解除"
+  } as const;
+
+  return {
+    intensity: { value: intensityValue, label: intensityLabels[intensityValue] },
+    threat: { value: threatValue, label: threatLabels[threatValue] },
+    structure: { value: structure.state, label: structure.stateLabel }
+  };
 }
 
 function chooseSkills(candidates: Array<BossSkill | null>) {
@@ -168,6 +217,41 @@ function chooseSkills(candidates: Array<BossSkill | null>) {
     selected[selected.length - 1] = visualHint;
   }
   return selected;
+}
+
+function eyewallTransformationSkill(structure: BossStructureSummary): BossSkill | null {
+  if (structure.state === "unknown" || structure.state === "stable-eye") return null;
+  const severityByState: Partial<Record<BossStructureSummary["state"], number>> = {
+    "secondary-ring-forming": 7,
+    "replacement-active": 9,
+    "replacement-stalled": 8,
+    "replacement-completed": 7,
+    "replacement-collapsed": 6
+  };
+  const nameByState: Partial<Record<BossStructureSummary["state"], string>> = {
+    "secondary-ring-forming": "二重眼墙生成",
+    "replacement-active": "眼壁蜕变",
+    "replacement-stalled": "蜕变受阻",
+    "replacement-completed": "外环继位",
+    "replacement-collapsed": "外环崩解"
+  };
+  return {
+    id: `core_structure_${structure.state}`,
+    name: nameByState[structure.state] ?? "内核结构变化",
+    category: "structure",
+    severity: severityByState[structure.state] ?? 5,
+    confidence: structure.confidence,
+    evidenceLevel: structure.evidenceLevel,
+    detail: `${structure.cycleLabel}。${structure.detail}`,
+    evidence: [
+      evidence(
+        "jtwc",
+        structure.evidenceLevel,
+        ["innerEyewall", "outerEyewall", "replacementState", "windRingRadius"],
+        `${structure.sourceLabel} ${structure.bulletinId ?? "current"} 归一化为 ${structure.stateLabel}。`
+      )
+    ]
+  };
 }
 
 function windPressureCoreSkill(storm: Storm, intensity: ReturnType<typeof buildIntensityFeatures>): BossSkill {
@@ -393,20 +477,64 @@ function coreRestructureHintSkill(
   };
 }
 
+function ahiMultibandEvidenceSkill(ahi: AhiEvidenceSummary): BossSkill | null {
+  if (ahi.status === "unavailable" || ahi.availableBands.length === 0) return null;
+  const hasCoreBand = ahi.availableBands.includes("B13");
+  const hasMoistureBand = ahi.availableBands.includes("B08");
+  if (!hasCoreBand && !hasMoistureBand) return null;
+  return {
+    id: "ahi_multiband_evidence",
+    name: "AHI 多波段证据",
+    category: "structure",
+    severity: hasCoreBand && hasMoistureBand ? 5 : 3,
+    confidence: 0.42,
+    evidenceLevel: "visualHint",
+    detail: `Himawari-9 AHI ${ahi.slot ?? "--"} 时次可用 ${ahi.availableBands.join("/")} 波段，仅作为云顶冷却、水汽外流和结构观察证据，不替代官方台风强度。`,
+    evidence: [
+      evidence(
+        "noaa-himawari-ahi",
+        "visualHint",
+        ahi.availableBands.map((band) => `AHI:${band}`),
+        "NOAA Open Data Himawari-9 AHI L1b metadata confirms raw multispectral files are available for satellite evidence."
+      )
+    ]
+  };
+}
+
 function buildEvents(
   storm: Storm,
   intensity: ReturnType<typeof buildIntensityFeatures>,
-  landfall: ReturnType<typeof buildLandfallFeatures>
+  landfall: ReturnType<typeof buildLandfallFeatures>,
+  structure: BossStructureSummary
 ): BossEvent[] {
   const latestTime = storm.updatedAt || new Date().toISOString();
   const events: BossEvent[] = [];
+  if (structure.state !== "unknown" && structure.state !== "stable-eye") {
+    const structureTitles: Partial<Record<BossStructureSummary["state"], string>> = {
+      "secondary-ring-forming": "二重眼墙生成",
+      "replacement-active": "眼壁置换进行中",
+      "replacement-stalled": "眼壁蜕变受阻",
+      "replacement-completed": "外环继位完成",
+      "replacement-collapsed": "置换结构崩解"
+    };
+    events.push({
+      id: `event-structure-${structure.bulletinId ?? structure.observedAt}-${structure.state}`,
+      time: structure.observedAt,
+      title: structureTitles[structure.state] ?? structure.stateLabel,
+      detail: `${structure.cycleLabel} / ${structure.detail}`,
+      evidenceLevel: structure.evidenceLevel,
+      category: "structure",
+      sourceLabel: structure.sourceLabel
+    });
+  }
   if (intensity.isRapidIntensifying) {
     events.push({
       id: "event-intensifying",
       time: latestTime,
       title: "增强记录",
       detail: `近12小时风速变化 ${signed(intensity.windDelta12h)} m/s，气压变化 ${signed(intensity.pressureDelta12h)} hPa。`,
-      evidenceLevel: "confirmed"
+      evidenceLevel: "confirmed",
+      category: "intensity"
     });
   }
   if (intensity.isWeakening) {
@@ -415,7 +543,8 @@ function buildEvents(
       time: latestTime,
       title: "减弱记录",
       detail: `历史点显示风速或气压已出现回落趋势。`,
-      evidenceLevel: "confirmed"
+      evidenceLevel: "confirmed",
+      category: "intensity"
     });
   }
   if (landfall.isLandfallPressure && landfall.nearestProvince) {
@@ -424,7 +553,8 @@ function buildEvents(
       time: latestTime,
       title: "防线压迫",
       detail: `路径走廊靠近${landfall.nearestProvince}，属地预警仍需查看官方发布。`,
-      evidenceLevel: "inferred"
+      evidenceLevel: "inferred",
+      category: "landfall"
     });
   }
   return events.slice(0, 4);
@@ -434,7 +564,9 @@ function buildEvidenceSummary(
   storm: Storm,
   skills: BossSkill[],
   environment: EnvironmentFeatures,
-  satellite: SatelliteProductsSummary
+  satellite: SatelliteProductsSummary,
+  ahi: AhiEvidenceSummary,
+  structure: BossStructureSummary
 ): BossSkillEvidence[] {
   const fields = new Set(skills.flatMap((skill) => skill.evidence.flatMap((item) => item.fields)));
   const summary: BossSkillEvidence[] = [
@@ -442,7 +574,7 @@ function buildEvidenceSummary(
       "canonical-authority",
       "confirmed",
       ["authority-policy"],
-      `${SOURCE_POLICY.canonicalAuthority}作为全国权威口径；当前引擎保留字段校验接口。`
+      `${SOURCE_POLICY.canonicalAuthority}；当前引擎只用机器可读路径源生成 Boss 技能。`
     ),
     evidence(
       "zhejiang-typhoon",
@@ -475,6 +607,28 @@ function buildEvidenceSummary(
   } else {
     summary.push(evidence("jma-himawari", "visualHint", [], `Himawari 产品状态不可用：${satellite.warnings[0] ?? "未知原因"}`));
   }
+  if (ahi.status !== "unavailable") {
+    summary.push(
+      evidence(
+        "noaa-himawari-ahi",
+        "visualHint",
+        ahi.availableBands.map((band) => `AHI:${band}`),
+        `Himawari-9 AHI ${ahi.slot ?? "--"} raw L1b metadata is available for ${ahi.availableBands.length}/${ahi.bands.length} evidence bands; raw files are not interpreted as official warnings.`
+      )
+    );
+  } else {
+    summary.push(evidence("noaa-himawari-ahi", "visualHint", [], `Himawari-9 AHI metadata unavailable: ${ahi.warnings[0] ?? "unknown reason"}`));
+  }
+  if (structure.state !== "unknown") {
+    summary.push(
+      evidence(
+        "jtwc",
+        structure.evidenceLevel,
+        ["coreStructure", "eyewallReplacement", "bulletin"],
+        `${structure.sourceLabel} ${structure.bulletinId ?? "current"}：${structure.stateLabel}。`
+      )
+    );
+  }
   return summary;
 }
 
@@ -484,7 +638,8 @@ function buildRiskSummary(
   phase: BossPhase,
   landfall: ReturnType<typeof buildLandfallFeatures>,
   environment: EnvironmentFeatures,
-  satellite: SatelliteProductsSummary
+  satellite: SatelliteProductsSummary,
+  structure: BossStructureSummary
 ) {
   const regionText = landfall.provincesInCorridor.length > 0 ? `，路径走廊需关注${landfall.provincesInCorridor.join("、")}` : "";
   const environmentText =
@@ -492,7 +647,8 @@ function buildRiskSummary(
       ? "，环境模型提示水汽/降水/对流条件存在抬升"
       : "";
   const satelliteText = satellite.status !== "unavailable" ? "，卫星产品已接入视觉提示链路" : "";
-  return `${storm.nameZh} 当前为${storm.stage}，Boss 原型判定为${archetypeLabel(archetype)}，阶段为${phaseLabel(phase)}${regionText}${environmentText}${satelliteText}。真实预警以中央气象台和属地气象应急部门为准。`;
+  const structureText = structure.state !== "unknown" ? `，内核结构为${structure.stateLabel}` : "";
+  return `${storm.nameZh} 当前为${storm.stage}，Boss 原型判定为${archetypeLabel(archetype)}，阶段为${phaseLabel(phase)}${structureText}${regionText}${environmentText}${satelliteText}。真实预警以中央气象台和属地气象应急部门为准。`;
 }
 
 function buildEnvironmentSummary(environment: EnvironmentFeatures) {
@@ -523,6 +679,31 @@ function buildSatelliteSummary(satellite: SatelliteProductsSummary) {
       use: product.use
     })),
     warnings: satellite.warnings
+  };
+}
+
+function buildAhiSummary(ahi: AhiEvidenceSummary) {
+  return {
+    source: ahi.source,
+    status: ahi.status,
+    sensor: ahi.sensor,
+    dataset: ahi.dataset,
+    bucket: ahi.bucket,
+    slot: ahi.slot,
+    updatedAt: ahi.updatedAt,
+    availableBands: ahi.availableBands,
+    bands: ahi.bands.map((band) => ({
+      band: band.band,
+      label: band.label,
+      use: band.use,
+      resolution: band.resolution,
+      status: band.status,
+      segmentCount: band.segmentCount,
+      sampleKey: band.sampleKey,
+      sampleUrl: band.sampleUrl
+    })),
+    attribution: ahi.attribution,
+    warnings: ahi.warnings
   };
 }
 
@@ -572,6 +753,7 @@ function evidence(
 function archetypeLabel(value: BossArchetype) {
   const labels: Record<BossArchetype, string> = {
     "wind-core": "风压核心型",
+    "eyewall-shifter": "眼壁蜕变型",
     "rain-bulk": "水汽雨洪型",
     "giant-radius": "巨型风圈型",
     "track-trickster": "路径诡诈型",

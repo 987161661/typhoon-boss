@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import sharp from "sharp";
 import { makeCircle } from "@/lib/provinceGeo";
 import { getCurrentStorms } from "@/lib/realTyphoonData";
 import type {
@@ -10,27 +11,63 @@ import type {
   WindFieldPoint
 } from "@/lib/types";
 
-const JMA_BASE_URL = "https://www.data.jma.go.jp/mscweb/data/himawari";
 const JMA_REGION = {
   id: "teasia",
   label: "Himawari Tropical Southeast Asia RGB",
   product: "rgb",
   bounds: {
-    west: 90,
-    south: -10,
-    east: 150,
-    north: 35
+    west: 69.8,
+    south: 0,
+    east: 150.4,
+    north: 40.1
   }
 };
-const NOAA_HIMAWARI_IMAGE_URL = "https://www.ospo.noaa.gov/jma/teasia/rgb.jpg";
-const JMA_ATTRIBUTION = "NOAA OSPO / JMA Himawari Tropical Southeast Asia RGB";
+const NOAA_HIMAWARI_BASE_URL = "https://www.ospo.noaa.gov/jma/teasia";
+const NOAA_HIMAWARI_FRAME_LIST_URL = `${NOAA_HIMAWARI_BASE_URL}/txtfiles/rgb_names.txt`;
+const NOAA_GMGSI_BASE_URL = "https://www.ospo.noaa.gov/Visualization01/cData/Atmosphere/Imagery/GMGSI";
+const NOAA_GMGSI_PRODUCT = "GMGSI_LW_GIF_C";
+const GLOBAL_SATELLITE_BOUNDS = {
+  west: -180,
+  south: -60,
+  east: 180,
+  north: 60
+};
+const JMA_ATTRIBUTION = "NOAA OSPO GMGSI 全球长波红外云图 + JMA/Himawari 东亚 RGB · 30 分钟同步检查";
 const OPEN_METEO_SOURCE = "Open-Meteo Forecast API";
 const OPEN_METEO_ATTRIBUTION = "Open-Meteo weather forecast model blend";
+const SATELLITE_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+const SATELLITE_IMAGE_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
+const WIND_FIELD_CACHE_TTL_MS = 4 * 60 * 1000;
 const IMPACT_SOURCE = "浙江省水利厅台风路径公开接口风圈半径";
 const NO_STORE_HEADERS = {
   "Cache-Control": "no-store, max-age=0"
 };
 const execFileAsync = promisify(execFile);
+const satelliteImageCache = new Map<string, { expiresAt: number; bytes: Uint8Array; contentType: string }>();
+const windFieldCache = new Map<string, { expiresAt: number; payload: WindFieldPayload }>();
+const windFieldInFlight = new Map<string, Promise<WindFieldPayload>>();
+let satelliteFrameCache: { slotKey: string; promise: Promise<SynchronizedSatelliteFrames> } | null = null;
+
+interface SatelliteFrame {
+  id: string;
+  capturedAt: string;
+  remoteUrl: string;
+}
+
+interface SynchronizedSatelliteFrames {
+  regional: SatelliteFrame;
+  global: SatelliteFrame;
+  synchronizedAt: string;
+  skewMinutes: number;
+  refreshSlot: string;
+}
+
+export interface WindFieldBounds {
+  west: number;
+  south: number;
+  east: number;
+  north: number;
+}
 
 interface OpenMeteoLocation {
   latitude: number;
@@ -47,66 +84,96 @@ export function noStoreHeaders() {
   return NO_STORE_HEADERS;
 }
 
-export async function getSatelliteLayer(): Promise<SatelliteLayerPayload> {
-  const slot = latestJmaSlot();
-  const imageUrl = `/api/environment/satellite-image?region=${JMA_REGION.id}&product=${JMA_REGION.product}&time=${slot.key}`;
+export async function getSatelliteLayer(referenceUpdatedAt?: string | null): Promise<SatelliteLayerPayload> {
+  const frames = await getSynchronizedSatelliteFrames();
+  const imageUrl = `/api/environment/satellite-image?region=${JMA_REGION.id}&product=${JMA_REGION.product}&frame=${encodeURIComponent(frames.regional.id)}`;
+  const globalImageUrl = `/api/environment/global-satellite-image?frame=${encodeURIComponent(frames.global.id)}`;
+  const oldestFrameAt = Math.min(new Date(frames.regional.capturedAt).getTime(), new Date(frames.global.capturedAt).getTime());
+  const referenceAt = parseReferenceTime(referenceUpdatedAt);
+  const synchronizedAt = new Date(frames.synchronizedAt).getTime();
 
   return {
-    source: "NOAA OSPO Himawari Real-Time Image",
-    updatedAt: slot.iso,
+    source: "NOAA OSPO synchronized geostationary satellite imagery",
+    updatedAt: frames.regional.capturedAt,
     status: "available",
     attribution: JMA_ATTRIBUTION,
     imageUrl,
-    remoteImageUrl: NOAA_HIMAWARI_IMAGE_URL,
+    remoteImageUrl: frames.regional.remoteUrl,
     product: JMA_REGION.label,
-    isStale: Date.now() - new Date(slot.iso).getTime() > 60 * 60 * 1000,
+    globalTileUrl: null,
+    globalImageUrl,
+    globalProduct: "NOAA OSPO GMGSI Global Longwave Infrared Cloud Mosaic",
+    globalUpdatedAt: frames.global.capturedAt,
+    globalBounds: GLOBAL_SATELLITE_BOUNDS,
+    synchronizedAt: frames.synchronizedAt,
+    synchronizationSkewMinutes: frames.skewMinutes,
+    referenceUpdatedAt: referenceAt ? new Date(referenceAt).toISOString() : undefined,
+    referenceSkewMinutes: referenceAt ? Math.round(Math.abs(referenceAt - synchronizedAt) / 60_000) : undefined,
+    refreshIntervalMinutes: SATELLITE_REFRESH_INTERVAL_MS / 60_000,
+    isStale: Date.now() - oldestFrameAt > 4 * 60 * 60 * 1000,
     bounds: JMA_REGION.bounds
   };
 }
 
-export async function fetchJmaImage(region: string, product: string, time: string): Promise<Response> {
-  if (region !== JMA_REGION.id || !/^[a-z0-9]{3,4}$/.test(product) || !/^\d{4}$/.test(time)) {
+export async function fetchJmaImage(region: string, product: string, frame: string): Promise<Response> {
+  if (region !== JMA_REGION.id || product !== JMA_REGION.product || !/^\d{7}_\d{4}rgb$/.test(frame)) {
     return new Response("Invalid Himawari image request", { status: 400 });
   }
 
-  if (region === "teasia" && product === "rgb") {
-    const image = await fetchNoaaImageWithPowershell();
-    return new Response(image, {
-      status: 200,
-      headers: {
-        "Content-Type": "image/jpeg",
-        "Cache-Control": "no-store, max-age=0",
-        "X-Remote-Source": NOAA_HIMAWARI_IMAGE_URL
-      }
-    });
-  }
-
-  const remoteUrl = jmaRemoteImageUrl(time, product, region);
-  const response = await fetch(remoteUrl, {
-    headers: {
-      Accept: "image/jpeg,image/*"
-    },
-    cache: "no-store"
-  });
-
-  if (!response.ok || !response.body) {
-    return new Response("Himawari image unavailable", { status: 502 });
-  }
-
-  return new Response(response.body, {
+  const remoteUrl = `${NOAA_HIMAWARI_BASE_URL}/img/${frame}.jpg`;
+  const image = await getCachedSatelliteImage(`regional:${frame}`, remoteUrl, prepareRegionalCloudOverlay);
+  return new Response(Buffer.from(image.bytes), {
     status: 200,
     headers: {
-      "Content-Type": response.headers.get("Content-Type") ?? "image/jpeg",
-      "Cache-Control": "no-store, max-age=0",
+      "Content-Type": image.contentType,
+      "Cache-Control": "public, max-age=1800, stale-while-revalidate=3600, immutable",
       "X-Remote-Source": remoteUrl
     }
   });
 }
 
-async function fetchNoaaImageWithPowershell() {
+export async function fetchGlobalSatelliteImage(frame: string): Promise<Response> {
+  if (!/^GLOBCOMPLIR_v3r0_blend_s\d{15}_e\d{15}_c\d{15}$/.test(frame)) {
+    return new Response("Invalid global satellite image request", { status: 400 });
+  }
+
+  const remoteUrl = `${NOAA_GMGSI_BASE_URL}/${NOAA_GMGSI_PRODUCT}/${frame}.gif`;
+  const image = await getCachedSatelliteImage(`global:${frame}`, remoteUrl, prepareGlobalCloudOverlay);
+  return new Response(Buffer.from(image.bytes), {
+    status: 200,
+    headers: {
+      "Content-Type": image.contentType,
+      "Cache-Control": "public, max-age=1800, stale-while-revalidate=3600, immutable",
+      "X-Remote-Source": remoteUrl
+    }
+  });
+}
+
+async function getCachedSatelliteImage(
+  key: string,
+  remoteUrl: string,
+  transform: (bytes: Uint8Array) => Promise<Uint8Array>
+) {
+  const cached = satelliteImageCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached;
+  }
+  const source = await fetchRemoteBytesWithPowershell(remoteUrl);
+  const bytes = await transform(source);
+  if (satelliteImageCache.size > 12) satelliteImageCache.clear();
+  const entry = {
+    expiresAt: Date.now() + SATELLITE_IMAGE_CACHE_TTL_MS,
+    bytes,
+    contentType: "image/png"
+  };
+  satelliteImageCache.set(key, entry);
+  return entry;
+}
+
+async function fetchRemoteBytesWithPowershell(remoteUrl: string) {
   const script = [
     "$ProgressPreference='SilentlyContinue'",
-    `$bytes=(Invoke-WebRequest -UseBasicParsing '${NOAA_HIMAWARI_IMAGE_URL}').Content`,
+    `$bytes=(Invoke-WebRequest -UseBasicParsing '${remoteUrl}').Content`,
     "[Console]::Out.Write([Convert]::ToBase64String($bytes))"
   ].join("; ");
   let lastError: unknown;
@@ -158,14 +225,56 @@ export async function getImpactArea(stormId?: string | null): Promise<ImpactArea
   }
 }
 
-export async function getWindField(stormId?: string | null): Promise<WindFieldPayload> {
+export async function getWindField(stormId?: string | null, requestedBounds?: WindFieldBounds | null): Promise<WindFieldPayload> {
+  const bounds = requestedBounds ? normalizeWindFieldBounds(requestedBounds) : null;
+  const cacheKey = bounds ? `viewport:${windBoundsCacheKey(bounds)}` : stormId ?? "default";
+  const cached = windFieldCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.payload;
+  }
+  const inFlight = windFieldInFlight.get(cacheKey);
+  if (inFlight) {
+    return inFlight;
+  }
+
+  const request = loadWindField(stormId, bounds).then(
+    (payload) => {
+      windFieldCache.set(cacheKey, {
+        expiresAt: Date.now() + (payload.status === "available" ? WIND_FIELD_CACHE_TTL_MS : 20 * 1000),
+        payload
+      });
+      windFieldInFlight.delete(cacheKey);
+      return payload;
+    },
+    (error) => {
+      windFieldInFlight.delete(cacheKey);
+      throw error;
+    }
+  );
+  windFieldInFlight.set(cacheKey, request);
+  return request;
+}
+
+async function loadWindField(stormId?: string | null, viewportBounds?: WindFieldBounds | null): Promise<WindFieldPayload> {
   const storms = await getCurrentStorms().catch(() => []);
   const storm = storms.find((item) => item.id === stormId) ?? storms[0] ?? null;
-  const samplePoints = buildWindSampleGrid(storm);
+  if (!storm && !viewportBounds) {
+    return {
+      source: OPEN_METEO_SOURCE,
+      updatedAt: new Date().toISOString(),
+      status: "unavailable",
+      attribution: OPEN_METEO_ATTRIBUTION,
+      reason: "当前没有活动台风，未生成环境风场采样网格。",
+      model: "Open-Meteo best match, 10m wind",
+      unit: "m/s",
+      points: []
+    };
+  }
+  const sampleBounds = viewportBounds ?? buildStormWindBounds(storm as Storm);
+  const samplePoints = buildWindSampleGrid(sampleBounds);
 
   try {
-    const locations: OpenMeteoLocation[] = [];
-    for (const points of chunk(samplePoints, 8)) {
+    const batches = await Promise.all(chunk(samplePoints, 54).map(async (points) => {
       const latitude = points.map((point) => point.lat.toFixed(2)).join(",");
       const longitude = points.map((point) => point.lon.toFixed(2)).join(",");
       const query = new URLSearchParams({
@@ -179,10 +288,11 @@ export async function getWindField(stormId?: string | null): Promise<WindFieldPa
       const response = await fetchOpenMeteoWithRetry(query);
       if (!response.ok) throw new Error(`Open-Meteo wind request failed: ${response.status}`);
       const raw = (await response.json()) as OpenMeteoLocation | OpenMeteoLocation[];
-      locations.push(...(Array.isArray(raw) ? raw : [raw]));
-    }
+      return Array.isArray(raw) ? raw : [raw];
+    }));
+    const locations = batches.flat();
     const points = locations.map(convertWindPoint).filter((point): point is WindFieldPoint => Boolean(point));
-    if (points.length < 80) throw new Error(`Open-Meteo returned only ${points.length} usable wind samples.`);
+    if (points.length < 42) throw new Error(`Open-Meteo returned only ${points.length} usable wind samples.`);
 
     return {
       source: OPEN_METEO_SOURCE,
@@ -191,7 +301,9 @@ export async function getWindField(stormId?: string | null): Promise<WindFieldPa
       attribution: OPEN_METEO_ATTRIBUTION,
       model: "Open-Meteo best match, 10m wind",
       unit: "m/s",
-      points
+      points,
+      sampling: viewportBounds ? "viewport" : "storm",
+      coverage: sampleBounds
     };
   } catch (error) {
     return {
@@ -202,7 +314,9 @@ export async function getWindField(stormId?: string | null): Promise<WindFieldPa
       reason: error instanceof Error ? error.message : "风场接口暂时不可用。",
       model: "Open-Meteo best match, 10m wind",
       unit: "m/s",
-      points: []
+      points: [],
+      sampling: viewportBounds ? "viewport" : "storm",
+      coverage: sampleBounds
     };
   }
 }
@@ -250,19 +364,230 @@ function chunk<T>(items: T[], size: number) {
   return chunks;
 }
 
-function latestJmaSlot() {
-  const date = new Date(Date.now() - 20 * 60 * 1000);
-  date.setUTCMinutes(Math.floor(date.getUTCMinutes() / 10) * 10, 0, 0);
-  const hh = String(date.getUTCHours()).padStart(2, "0");
-  const mm = String(date.getUTCMinutes()).padStart(2, "0");
+async function getSynchronizedSatelliteFrames() {
+  const refreshSlot = satelliteRefreshSlot();
+  if (satelliteFrameCache?.slotKey === refreshSlot.key) {
+    return satelliteFrameCache.promise;
+  }
+
+  const promise = loadSynchronizedSatelliteFrames(refreshSlot.iso).catch((error) => {
+    if (satelliteFrameCache?.slotKey === refreshSlot.key) satelliteFrameCache = null;
+    throw error;
+  });
+  satelliteFrameCache = {
+    slotKey: refreshSlot.key,
+    promise
+  };
+  return promise;
+}
+
+async function loadSynchronizedSatelliteFrames(refreshSlot: string): Promise<SynchronizedSatelliteFrames> {
+  const [regionalFrames, globalFrames] = await Promise.all([loadRegionalSatelliteFrames(), loadGlobalSatelliteFrames()]);
+  if (regionalFrames.length === 0 || globalFrames.length === 0) {
+    throw new Error("NOAA satellite frame manifests did not contain a usable synchronized pair.");
+  }
+
+  const pair = chooseSynchronizedFramePair(regionalFrames, globalFrames);
+  const regionalAt = new Date(pair.regional.capturedAt).getTime();
+  const globalAt = new Date(pair.global.capturedAt).getTime();
   return {
-    key: `${hh}${mm}`,
-    iso: date.toISOString()
+    regional: pair.regional,
+    global: pair.global,
+    synchronizedAt: new Date(Math.round((regionalAt + globalAt) / 2)).toISOString(),
+    skewMinutes: Math.round(Math.abs(regionalAt - globalAt) / 60_000),
+    refreshSlot
   };
 }
 
-function jmaRemoteImageUrl(time: string, product: string, region: string) {
-  return `${JMA_BASE_URL}/img/${region}/${region}_${product}_${time}.jpg`;
+async function loadRegionalSatelliteFrames() {
+  const text = await fetchRemoteTextWithPowershell(NOAA_HIMAWARI_FRAME_LIST_URL);
+  const frames: SatelliteFrame[] = [];
+  const expression = /img\/(\d{7}_\d{4}rgb)\.jpg/g;
+  for (const match of text.matchAll(expression)) {
+    const id = match[1];
+    const capturedAt = regionalFrameTime(id);
+    if (!capturedAt) continue;
+    frames.push({
+      id,
+      capturedAt,
+      remoteUrl: `${NOAA_HIMAWARI_BASE_URL}/img/${id}.jpg`
+    });
+  }
+  return uniqueFrames(frames);
+}
+
+async function loadGlobalSatelliteFrames() {
+  const frames: SatelliteFrame[] = [];
+  const now = new Date();
+  for (let dayOffset = 0; dayOffset < 3; dayOffset += 1) {
+    const day = new Date(now.getTime() - dayOffset * 24 * 60 * 60 * 1000);
+    const dateKey = day.toISOString().slice(0, 10).replaceAll("-", "");
+    const manifestUrl = `${NOAA_GMGSI_BASE_URL}/assets/${dateKey}_GMGSI_filelist.js`;
+    let text: string;
+    try {
+      text = await fetchRemoteTextWithPowershell(manifestUrl);
+    } catch {
+      continue;
+    }
+    const block = text.match(/var\s+GMGSI_LW_GIF_C\s*=\s*\[\s*\{([\s\S]*?)\}\s*\];/);
+    if (!block) continue;
+    for (const match of block[1].matchAll(/"\d{2}"\s*:\s*"([^"]+)"/g)) {
+      const id = match[1];
+      const capturedAt = globalFrameTime(id);
+      if (!capturedAt) continue;
+      frames.push({
+        id,
+        capturedAt,
+        remoteUrl: `${NOAA_GMGSI_BASE_URL}/${NOAA_GMGSI_PRODUCT}/${id}.gif`
+      });
+    }
+  }
+  return uniqueFrames(frames);
+}
+
+function chooseSynchronizedFramePair(regionalFrames: SatelliteFrame[], globalFrames: SatelliteFrame[]) {
+  const now = Date.now() + 5 * 60 * 1000;
+  const regional = regionalFrames.filter((frame) => new Date(frame.capturedAt).getTime() <= now);
+  const global = globalFrames.filter((frame) => new Date(frame.capturedAt).getTime() <= now);
+  let best: { regional: SatelliteFrame; global: SatelliteFrame; freshness: number; skew: number } | null = null;
+
+  for (const regionalFrame of regional) {
+    const regionalAt = new Date(regionalFrame.capturedAt).getTime();
+    for (const globalFrame of global) {
+      const globalAt = new Date(globalFrame.capturedAt).getTime();
+      const skew = Math.abs(regionalAt - globalAt);
+      if (skew > SATELLITE_REFRESH_INTERVAL_MS) continue;
+      const freshness = Math.min(regionalAt, globalAt);
+      if (!best || freshness > best.freshness || (freshness === best.freshness && skew < best.skew)) {
+        best = { regional: regionalFrame, global: globalFrame, freshness, skew };
+      }
+    }
+  }
+
+  if (best) return best;
+  return {
+    regional: [...regionalFrames].sort(compareFrameNewestFirst)[0],
+    global: [...globalFrames].sort(compareFrameNewestFirst)[0]
+  };
+}
+
+function uniqueFrames(frames: SatelliteFrame[]) {
+  return [...new Map(frames.map((frame) => [frame.id, frame])).values()].sort(compareFrameNewestFirst);
+}
+
+function compareFrameNewestFirst(left: SatelliteFrame, right: SatelliteFrame) {
+  return new Date(right.capturedAt).getTime() - new Date(left.capturedAt).getTime();
+}
+
+function regionalFrameTime(id: string) {
+  const match = id.match(/^(\d{4})(\d{3})_(\d{2})(\d{2})rgb$/);
+  if (!match) return null;
+  const date = new Date(Date.UTC(Number(match[1]), 0, Number(match[2]), Number(match[3]), Number(match[4])));
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function globalFrameTime(id: string) {
+  const match = id.match(/_s(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})\d{3}_/);
+  if (!match) return null;
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]), Number(match[4]), Number(match[5])));
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+function satelliteRefreshSlot() {
+  const slot = Math.floor(Date.now() / SATELLITE_REFRESH_INTERVAL_MS) * SATELLITE_REFRESH_INTERVAL_MS;
+  return {
+    key: String(slot),
+    iso: new Date(slot).toISOString()
+  };
+}
+
+function parseReferenceTime(value?: string | null) {
+  if (!value) return null;
+  const hasTimezone = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(value);
+  const normalized = hasTimezone ? value : `${value.trim().replace(" ", "T")}+08:00`;
+  const time = Date.parse(normalized);
+  return Number.isNaN(time) ? null : time;
+}
+
+async function fetchRemoteTextWithPowershell(remoteUrl: string) {
+  const script = [
+    "$ProgressPreference='SilentlyContinue'",
+    "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)",
+    `$text=(Invoke-WebRequest -UseBasicParsing '${remoteUrl}').Content`,
+    "[Console]::Out.Write([string]$text)"
+  ].join("; ");
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], {
+        maxBuffer: 4 * 1024 * 1024,
+        windowsHide: true
+      });
+      if (stdout.trim()) return stdout;
+    } catch (error) {
+      lastError = error;
+    }
+    await delay(600 + attempt * 900);
+  }
+  throw lastError instanceof Error ? lastError : new Error(`Remote text request failed for ${remoteUrl}`);
+}
+
+async function prepareRegionalCloudOverlay(bytes: Uint8Array) {
+  const metadata = await sharp(Buffer.from(bytes)).metadata();
+  const width = metadata.width ?? 1120;
+  const height = metadata.height ?? 640;
+  const cropHeight = Math.max(1, Math.min(height, Math.round(height * 0.944)));
+  return renderCloudMask(bytes, { left: 0, top: 0, width, height: cropHeight }, 88, 205);
+}
+
+async function prepareGlobalCloudOverlay(bytes: Uint8Array) {
+  const metadata = await sharp(Buffer.from(bytes)).metadata();
+  const width = metadata.width ?? 835;
+  const height = metadata.height ?? 488;
+  const top = Math.max(0, Math.round(height * 0.154));
+  const bottom = Math.min(height, Math.round(height * 0.868));
+  return renderCloudMask(bytes, { left: 0, top, width, height: Math.max(1, bottom - top) }, 76, 175);
+}
+
+async function renderCloudMask(
+  bytes: Uint8Array,
+  extract: { left: number; top: number; width: number; height: number },
+  luminanceFloor: number,
+  maxAlpha: number
+) {
+  const decoded = await sharp(Buffer.from(bytes), { animated: false })
+    .extract(extract)
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const output = Buffer.alloc(decoded.info.width * decoded.info.height * 4);
+
+  for (let sourceIndex = 0, targetIndex = 0; sourceIndex < decoded.data.length; sourceIndex += 3, targetIndex += 4) {
+    const red = decoded.data[sourceIndex];
+    const green = decoded.data[sourceIndex + 1];
+    const blue = decoded.data[sourceIndex + 2];
+    const maximum = Math.max(red, green, blue);
+    const minimum = Math.min(red, green, blue);
+    const overlayInk = maximum > 95 && maximum - minimum > 54;
+    const luminance = red * 0.2126 + green * 0.7152 + blue * 0.0722;
+    const signal = clamp((luminance - luminanceFloor) / Math.max(1, 255 - luminanceFloor), 0, 1);
+    const alpha = overlayInk ? 0 : Math.round(Math.pow(signal, 1.24) * maxAlpha);
+    const shade = Math.round(188 + signal * 67);
+    output[targetIndex] = shade;
+    output[targetIndex + 1] = Math.min(255, shade + 5);
+    output[targetIndex + 2] = 255;
+    output[targetIndex + 3] = alpha;
+  }
+
+  return sharp(output, {
+    raw: {
+      width: decoded.info.width,
+      height: decoded.info.height,
+      channels: 4
+    }
+  })
+    .png({ compressionLevel: 9, adaptiveFiltering: true })
+    .toBuffer();
 }
 
 function impactFeature(storm: Storm, level: "r7" | "r10" | "r12", radiusKm: number) {
@@ -295,14 +620,20 @@ function emptyImpact(reason: string): ImpactAreaPayload {
   };
 }
 
-function buildWindSampleGrid(storm: Storm | null) {
-  const center = storm?.position ?? { lon: 122.5, lat: 22.5 };
-  const west = clamp(center.lon - 9, 105, 132);
-  const east = clamp(center.lon + 9, 113, 140);
-  const south = clamp(center.lat - 7, 0, 23);
-  const north = clamp(center.lat + 7, 7, 30);
-  const columns = 11;
-  const rows = 8;
+function buildStormWindBounds(storm: Storm): WindFieldBounds {
+  const center = storm.position;
+  return {
+    west: clamp(center.lon - 9, -180, 180),
+    east: clamp(center.lon + 9, -180, 180),
+    south: clamp(center.lat - 7, -80, 80),
+    north: clamp(center.lat + 7, -80, 80)
+  };
+}
+
+function buildWindSampleGrid(bounds: WindFieldBounds) {
+  const { west, east, south, north } = bounds;
+  const columns = 9;
+  const rows = 6;
   const points: Array<{ lon: number; lat: number }> = [];
 
   for (let row = 0; row < rows; row += 1) {
@@ -314,6 +645,27 @@ function buildWindSampleGrid(storm: Storm | null) {
   }
 
   return points;
+}
+
+function normalizeWindFieldBounds(bounds: WindFieldBounds): WindFieldBounds {
+  const west = clamp(Math.min(bounds.west, bounds.east), -180, 180);
+  const east = clamp(Math.max(bounds.west, bounds.east), -180, 180);
+  const south = clamp(Math.min(bounds.south, bounds.north), -80, 80);
+  const north = clamp(Math.max(bounds.south, bounds.north), -80, 80);
+  return {
+    west: quantize(west, 0.5),
+    east: quantize(Math.max(west + 1, east), 0.5),
+    south: quantize(south, 0.5),
+    north: quantize(Math.max(south + 1, north), 0.5)
+  };
+}
+
+function windBoundsCacheKey(bounds: WindFieldBounds) {
+  return [bounds.west, bounds.south, bounds.east, bounds.north].map((value) => value.toFixed(1)).join(":");
+}
+
+function quantize(value: number, step: number) {
+  return Math.round(value / step) * step;
 }
 
 function convertWindPoint(location: OpenMeteoLocation): WindFieldPoint | null {

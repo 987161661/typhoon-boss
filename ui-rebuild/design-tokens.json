@@ -74,6 +74,48 @@
     "systemLive": "alertRed",
     "systemSupport": "radarCyan"
   },
+  "bossDex": {
+    "colors": {
+      "archiveInk": "#081116",
+      "archiveSurface": "rgba(7, 17, 22, 0.92)",
+      "archiveSurfaceRaised": "rgba(11, 27, 34, 0.96)",
+      "archiveLine": "rgba(119, 205, 226, 0.20)",
+      "archiveLineActive": "#35d8ff",
+      "rankS": "#ff5c45",
+      "rankA": "#ffb000",
+      "rankB": "#35d8ff",
+      "rankC": "#7b9aa3",
+      "verified": "#55df9a"
+    },
+    "layout": {
+      "desktopSidebar": "clamp(252px, 20vw, 320px)",
+      "detailMaxWidth": "1480px",
+      "detailGap": "clamp(16px, 2vw, 28px)",
+      "heroMediaAspect": "16 / 8.25",
+      "yearRowHeight": "48px",
+      "stormRowHeight": "64px",
+      "statCardMinHeight": "96px",
+      "mobileBreakpoint": "960px"
+    },
+    "typography": {
+      "pageLabel": { "size": "11px", "tracking": "0.16em", "weight": 800 },
+      "stormName": { "size": "clamp(42px, 5vw, 82px)", "weight": 900, "lineHeight": 0.92 },
+      "stormEnglish": { "size": "clamp(13px, 1.35vw, 18px)", "tracking": "0.12em", "weight": 800 },
+      "metricValue": { "size": "clamp(24px, 2.3vw, 42px)", "weight": 900 },
+      "recordBody": { "size": "14px", "lineHeight": 1.75, "weight": 500 }
+    },
+    "motion": {
+      "selection": "160ms ease-out",
+      "detailSwap": "220ms ease-out",
+      "mediaShimmer": "1.8s ease-in-out infinite"
+    },
+    "rules": [
+      "The selected storm owns the right detail surface; list rows never duplicate the full dossier.",
+      "Rank and intensity colors are semantic and must not be used as decoration only.",
+      "Satellite/media is the primary right-side visual, with a clearly labelled fallback when unavailable.",
+      "Game language interprets public facts but must not invent damage, casualties, or unverified events."
+    ]
+  },
   "themes": {
     "nightRadar": {
       "dataTheme": "night-radar",
@@ -86,6 +128,12 @@
       "surface": "live paper dossier interface with CSS-generated sheets, tabs, ledgers, stamps, and desk props",
       "texture": "CSS-generated aged paper and brass controls; no source-reference crops",
       "accents": ["stampRed", "agedBrass", "fadedBlueGray"]
+    },
+    "bossDex": {
+      "dataTheme": "boss-dex",
+      "surface": "dark archival command interface with a persistent storm index and immersive media dossier",
+      "texture": "existing low-contrast HUD noise only; satellite imagery stays live and fact-linked",
+      "accents": ["rankS", "rankA", "rankB", "verified"]
     }
   }
 }

@@ -1,18 +1,19 @@
 import { NextResponse } from "next/server";
-import { getCurrentStorms, getDataSourceLabel } from "@/lib/realTyphoonData";
+import { getRadarSnapshot } from "@/lib/radarSnapshot";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export async function GET() {
   try {
-    const storms = await getCurrentStorms();
+    const snapshot = await getRadarSnapshot();
     return NextResponse.json(
       {
-        source: getDataSourceLabel(),
-        updatedAt: new Date().toISOString(),
-        count: storms.length,
-        storms
+        source: snapshot.source,
+        updatedAt: snapshot.updatedAt,
+        count: snapshot.storms.length,
+        storms: snapshot.storms,
+        cache: snapshot.cache
       },
       {
         headers: {
@@ -23,11 +24,11 @@ export async function GET() {
   } catch (error) {
     return NextResponse.json(
       {
-        source: getDataSourceLabel(),
+        source: "Typhoon Boss Radar",
         updatedAt: new Date().toISOString(),
         count: 0,
         storms: [],
-        error: error instanceof Error ? error.message : "台风接口暂时不可用"
+        error: error instanceof Error ? error.message : "Typhoon API temporarily unavailable."
       },
       {
         status: 502,

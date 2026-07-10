@@ -12,7 +12,10 @@ dist
 .codex-*/
 tmp/
 .codex-*.json
+.runtime/
 
 # Heavy local QA/reference captures
 ref-pic.png
+ui-rebuild/concepts/
+ui-rebuild/reference-paper-clean.png
 ui-rebuild/screenshots/

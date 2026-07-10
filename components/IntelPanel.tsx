@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import type { CSSProperties } from "react";
+import { useEffect, useState, type CSSProperties } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -16,7 +16,7 @@ import {
   Wind
 } from "lucide-react";
 import { BossEmblem } from "./BossEmblem";
-import { HudPanel, MetricRow, MiniReadout } from "./HudPrimitives";
+import { FlipValue, HudPanel, MetricRow, MiniReadout } from "./HudPrimitives";
 import type { BossProfile, BossSkill } from "@/lib/bossEngine/types";
 import type { Storm } from "@/lib/types";
 
@@ -25,12 +25,12 @@ const UI = {
   linkError: "\u94fe\u8def\u5f02\u5e38",
   standby: "\u5f85\u673a\u5de1\u822a",
   noActiveStorm: "\u5f53\u524d\u65e0\u6d3b\u52a8\u53f0\u98ce",
-  noActiveDesc: "\u4e3b\u96f7\u8fbe\u4fdd\u6301\u626b\u63cf\uff0c\u5c1a\u672a\u52a0\u8f7d\u6f14\u793a Boss\u3002\u5386\u53f2\u6863\u6848\u4ecd\u53ef\u67e5\u770b\uff0c\u5b9e\u65f6\u94fe\u8def\u6bcf 60 \u79d2\u5237\u65b0\u4e00\u6b21\u3002",
+  noActiveDesc: "\u4e3b\u96f7\u8fbe\u4fdd\u6301\u626b\u63cf\uff0c\u5c1a\u672a\u52a0\u8f7d\u6f14\u793a Boss\u3002\u5386\u53f2\u6863\u6848\u4ecd\u53ef\u67e5\u770b\uff0c\u5b9e\u65f6\u94fe\u8def\u6bcf 10 \u79d2\u5237\u65b0\u4e00\u6b21\u3002",
   dataErrorPrefix: "\u6570\u636e\u63a5\u53e3\u8fd4\u56de\u5f02\u5e38\uff1a",
   dataSourcePrefix: "\u6570\u636e\u6765\u6e90\uff1a",
   waitingSource: "\u7b49\u5f85\u6570\u636e\u6e90",
   viewDex: "\u67e5\u770b\u5386\u53f2 Boss \u56fe\u9274",
-  targetIntel: "BOSS INTEL \u76ee\u6807\u60c5\u62a5",
+  targetIntel: "BOSS \u76ee\u6807\u60c5\u62a5",
   code: "\u7f16\u53f7",
   internationalName: "\u56fd\u9645\u540d",
   typhoon: "\u53f0\u98ce",
@@ -52,7 +52,7 @@ const UI = {
   tabForecast: "\u8def\u5f84\u9884\u62a5",
   tabHistory: "\u5386\u53f2\u8bb0\u5f55",
   targetInfo: "\u76ee\u6807\u60c5\u62a5",
-  bossTargetFile: "BOSS INTEL \u76ee\u6807\u6863\u6848",
+  bossTargetFile: "BOSS \u76ee\u6807\u6863\u6848",
   noArchive: "\u6682\u65e0\u6d3b\u52a8\u6863\u6848",
   noArchiveDesc: "\u96f7\u8fbe\u4fdd\u6301\u5de1\u822a\uff0c\u7b49\u5f85\u4e0b\u4e00\u4efd\u516c\u5f00\u53f0\u98ce\u8d44\u6599\u3002",
   liveLinkError: "\u5b9e\u65f6\u94fe\u8def\u5f02\u5e38\uff1a",
@@ -72,12 +72,18 @@ export function IntelPanel({
   bossProfile,
   source,
   dataError,
+  lastSyncedAt,
+  refreshSequence = 0,
+  pollIntervalMs = 10_000,
   theme = "night-radar"
 }: {
   storm: Storm | null;
   bossProfile?: BossProfile | null;
   source?: string;
   dataError?: string | null;
+  lastSyncedAt?: number | null;
+  refreshSequence?: number;
+  pollIntervalMs?: number;
   theme?: "night-radar" | "archive-command";
 }) {
   if (theme === "archive-command") {
@@ -88,7 +94,7 @@ export function IntelPanel({
     return (
       <aside className="intel-panel" aria-label={UI.currentIntel}>
         <div className="panel-topline">
-          <span>BOSS INTEL</span>
+          <span>BOSS 情报</span>
           <strong>{dataError ? UI.linkError : UI.standby}</strong>
         </div>
         <HudPanel className="no-boss-panel">
@@ -111,8 +117,16 @@ export function IntelPanel({
   return (
     <aside className="intel-panel" aria-label={UI.currentIntel}>
       <div className="panel-topline">
-        <span>{bossProfile ? "BOSS PROFILE 气象事实生成" : UI.targetIntel}</span>
-        <strong>{bossProfile?.phaseLabel ?? storm.updatedAt}</strong>
+        <div className="panel-title-copy">
+          <span>{bossProfile ? "BOSS \u6863\u6848 \u00b7 \u6c14\u8c61\u4e8b\u5b9e\u751f\u6210" : UI.targetIntel}</span>
+          <strong>{bossProfile?.phaseLabel ?? storm.updatedAt}</strong>
+        </div>
+        <RealtimeSyncStatus
+          lastSyncedAt={lastSyncedAt}
+          refreshSequence={refreshSequence}
+          pollIntervalMs={pollIntervalMs}
+          hasError={Boolean(dataError)}
+        />
       </div>
 
       <HudPanel className="boss-card">
@@ -127,45 +141,57 @@ export function IntelPanel({
       </HudPanel>
 
       <div className="rating-strip">
-        <span>{storm.rating}</span>
-        <b>{bossProfile?.phaseLabel ?? storm.stage}</b>
+        <div className="wind-force-summary">
+          <span><FlipValue value={windForceFromSpeed(storm.maxWind).level} /><small>级风</small></span>
+          <em>当前中心风力</em>
+        </div>
+        <div className="storm-level-summary">
+          <strong>{storm.rating}</strong>
+          <b>{bossProfile && bossProfile.structure.state !== "unknown" ? bossProfile.structure.stateLabel : bossProfile?.phaseLabel ?? storm.stage}</b>
+        </div>
       </div>
 
       {bossProfile ? (
         <HudPanel as="section" className="boss-profile-brief">
           <div>
-            <span>FACT DRIVEN BOSS</span>
+            <span>事实驱动 BOSS</span>
             <strong>{bossProfile.title}</strong>
           </div>
           <p>{bossProfile.riskSummary}</p>
         </HudPanel>
       ) : null}
 
-      {bossProfile ? <SatelliteEvidenceBrief bossProfile={bossProfile} /> : null}
+      {bossProfile ? (
+        bossProfile.structure.state !== "unknown" ? (
+          <StructureEvidenceBrief bossProfile={bossProfile} />
+        ) : (
+          <SatelliteEvidenceBrief bossProfile={bossProfile} />
+        )
+      ) : null}
 
       <BossEnergyGauge storm={storm} bossProfile={bossProfile} />
 
       <HudPanel className="mini-readout-grid">
-        <MiniReadout label="LAT" value={storm.position.lat.toFixed(2)} />
-        <MiniReadout label="LON" value={storm.position.lon.toFixed(2)} />
-        <MiniReadout label="TRACK" value={storm.track.length} />
-        <MiniReadout label="FCST" value={storm.forecast.length} />
+        <MiniReadout label="纬度" value={<FlipValue value={storm.position.lat.toFixed(2)} />} />
+        <MiniReadout label="经度" value={<FlipValue value={storm.position.lon.toFixed(2)} />} />
+        <MiniReadout label="路径点" value={<FlipValue value={storm.track.length} />} />
+        <MiniReadout label="预报点" value={<FlipValue value={storm.forecast.length} />} />
       </HudPanel>
 
       <HudPanel className="metric-table">
-        <MetricRow icon={<Wind size={17} />} label={UI.maxWind} value={storm.maxWind || UI.pending} unit="m/s" hot />
-        <MetricRow icon={<Gauge size={17} />} label={UI.pressure} value={storm.minPressure || UI.pending} unit="hPa" />
-        <MetricRow icon={<Crosshair size={17} />} label={UI.r7} value={storm.windRadiiKm.r7 || UI.pending} unit="km" />
-        <MetricRow icon={<Crosshair size={17} />} label={UI.r10} value={storm.windRadiiKm.r10 || UI.pending} unit="km" hot={storm.windRadiiKm.r10 > 0} />
-        <MetricRow icon={<Crosshair size={17} />} label={UI.r12} value={storm.windRadiiKm.r12 || UI.pending} unit="km" hot={storm.windRadiiKm.r12 > 0} />
+        <MetricRow icon={<Wind size={17} />} label={UI.maxWind} value={<FlipValue value={storm.maxWind || UI.pending} />} unit="m/s" hot />
+        <MetricRow icon={<Gauge size={17} />} label={UI.pressure} value={<FlipValue value={storm.minPressure || UI.pending} />} unit="hPa" />
+        <MetricRow icon={<Crosshair size={17} />} label={UI.r7} value={<FlipValue value={storm.windRadiiKm.r7 || UI.pending} />} unit="km" />
+        <MetricRow icon={<Crosshair size={17} />} label={UI.r10} value={<FlipValue value={storm.windRadiiKm.r10 || UI.pending} />} unit="km" hot={storm.windRadiiKm.r10 > 0} />
+        <MetricRow icon={<Crosshair size={17} />} label={UI.r12} value={<FlipValue value={storm.windRadiiKm.r12 || UI.pending} />} unit="km" hot={storm.windRadiiKm.r12 > 0} />
         <MetricRow icon={<MapPin size={17} />} label={UI.moveDirection} value={storm.moveDirection} />
-        <MetricRow icon={<RotateCw size={17} />} label={UI.moveSpeed} value={storm.moveSpeed || UI.pending} unit="km/h" />
+        <MetricRow icon={<RotateCw size={17} />} label={UI.moveSpeed} value={<FlipValue value={storm.moveSpeed || UI.pending} />} unit="km/h" />
       </HudPanel>
 
       <HudPanel className="data-source-panel">
         <Satellite size={17} />
         <div>
-          <span>{bossProfile ? "AUTHORITY / TRACK SOURCE" : "DATA SOURCE"}</span>
+          <span>{bossProfile ? "\u6743\u5a01 / \u8def\u5f84\u6765\u6e90" : "\u6570\u636e\u6765\u6e90"}</span>
           <p>
             {bossProfile
               ? `${bossProfile.sourcePolicy.canonicalAuthority} / 路径源：${bossProfile.sourcePolicy.machineReadableTrackSource}`
@@ -219,6 +245,53 @@ export function BossSkillSlotPanel({
       ))}
     </HudPanel>
   );
+}
+
+function RealtimeSyncStatus({
+  lastSyncedAt,
+  refreshSequence,
+  pollIntervalMs,
+  hasError
+}: {
+  lastSyncedAt?: number | null;
+  refreshSequence: number;
+  pollIntervalMs: number;
+  hasError: boolean;
+}) {
+  // Keep the server and first client render deterministic. The live clock starts
+  // only after hydration, otherwise Date.now() can make the initial text differ.
+  const [now, setNow] = useState(0);
+
+  useEffect(() => {
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const elapsed = lastSyncedAt ? Math.max(0, now - lastSyncedAt) : 0;
+  const secondsLeft = lastSyncedAt ? Math.max(0, Math.ceil((pollIntervalMs - elapsed) / 1000)) : Math.ceil(pollIntervalMs / 1000);
+
+  return (
+    <div
+      className={`realtime-sync ${hasError ? "has-error" : ""}`}
+      data-refresh-sequence={refreshSequence}
+      title="公开实况接口每 10 秒自动请求一次"
+    >
+      <i key={refreshSequence} aria-hidden="true" />
+      <div>
+        <span>{hasError ? "同步重试中" : "实况自动同步"}</span>
+        <small>{lastSyncedAt ? "最近同步成功" : "正在建立链路"}</small>
+      </div>
+      <strong><FlipValue value={secondsLeft} /><em>秒</em></strong>
+    </div>
+  );
+}
+
+function windForceFromSpeed(speed: number) {
+  const thresholds = [0.3, 1.6, 3.4, 5.5, 8, 10.8, 13.9, 17.2, 20.8, 24.5, 28.5, 32.7, 37, 41.5, 46.2, 51, 56.1, 61.3];
+  if (!Number.isFinite(speed) || speed < 0) return { level: "--" };
+  const level = thresholds.findIndex((threshold) => speed < threshold);
+  return { level: level === -1 ? "17+" : String(level) };
 }
 
 function DossierIntelPanel({
@@ -297,7 +370,7 @@ function DossierIntelPanel({
 
           <section className="dossier-sheet dossier-energy">
             <div className="dossier-section-head">
-              <span>PUBLIC DATA ENERGY</span>
+              <span>公开数据能量</span>
               <strong>{energy}%</strong>
             </div>
             <div className="dossier-meter" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={energy}>
@@ -307,10 +380,10 @@ function DossierIntelPanel({
           </section>
 
           <section className="dossier-sheet dossier-coordinate-grid">
-            <DossierField label="LAT" value={storm.position.lat.toFixed(2)} />
-            <DossierField label="LON" value={storm.position.lon.toFixed(2)} />
-            <DossierField label="TRACK" value={storm.track.length} />
-            <DossierField label="FCST" value={storm.forecast.length} />
+            <DossierField label="纬度" value={storm.position.lat.toFixed(2)} />
+            <DossierField label="经度" value={storm.position.lon.toFixed(2)} />
+            <DossierField label="路径点" value={storm.track.length} />
+            <DossierField label="预报点" value={storm.forecast.length} />
           </section>
 
           <section className="dossier-sheet dossier-metric-ledger">
@@ -331,7 +404,7 @@ function DossierIntelPanel({
         <section className="dossier-sheet dossier-source">
           <Satellite size={16} />
           <div>
-            <span>DATA SOURCE</span>
+            <span>数据来源</span>
             <p>{source ?? UI.publicApi}</p>
           </div>
         </section>
@@ -547,10 +620,10 @@ function BossEnergyGauge({ storm, bossProfile }: { storm: Storm; bossProfile?: B
     <HudPanel as="section" className="energy-panel" aria-label={UI.energy}>
       <div className="energy-head">
         <div>
-          <span>PUBLIC DATA ENERGY</span>
+          <span>公开数据能量</span>
           <strong>{bossProfile ? bossProfile.phaseLabel : UI.energy}</strong>
         </div>
-        <b>{energy.value}%</b>
+        <b><FlipValue value={energy.value} />%</b>
       </div>
       <div className="energy-track" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={energy.value}>
         <i className="energy-fill" style={{ width: `${energy.value}%` }} />
@@ -613,6 +686,21 @@ function chooseVisibleBossSkills(skills: BossSkill[]) {
   return visible.slice(0, 3);
 }
 
+function StructureEvidenceBrief({ bossProfile }: { bossProfile: BossProfile }) {
+  const structure = bossProfile.structure;
+  return (
+    <HudPanel as="section" className={`structure-evidence-brief structure-${structure.state}`}>
+      <div>
+        <RotateCw size={16} />
+        <span>核心蜕变</span>
+        <strong>{structure.stateLabel}</strong>
+      </div>
+      <p>{structure.cycleLabel} / {structure.detail}</p>
+      <small>{structure.sourceLabel} · 置信度 {Math.round(structure.confidence * 100)}%</small>
+    </HudPanel>
+  );
+}
+
 function SatelliteEvidenceBrief({ bossProfile }: { bossProfile: BossProfile }) {
   const satellite = bossProfile.satellite;
   const available = satellite.products.filter((product) => product.status === "available");
@@ -623,7 +711,7 @@ function SatelliteEvidenceBrief({ bossProfile }: { bossProfile: BossProfile }) {
     <HudPanel as="section" className="satellite-evidence-brief">
       <div>
         <Satellite size={16} />
-        <span>HIMAWARI VISUAL HINT</span>
+        <span>卫星视觉提示</span>
         <strong>{statusLabel}</strong>
       </div>
       <p>

@@ -1,27 +1,27 @@
 import { NextResponse } from "next/server";
-import { buildBossProfiles } from "@/lib/bossEngine";
-import { getCurrentStorms, getDataSourceLabel } from "@/lib/realTyphoonData";
+import { getRadarSnapshot } from "@/lib/radarSnapshot";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export async function GET() {
   try {
-    const storms = await getCurrentStorms();
-    const bosses = await buildBossProfiles(storms);
+    const snapshot = await getRadarSnapshot();
+    const firstBoss = snapshot.bosses[0] ?? null;
     return NextResponse.json(
       {
         source: {
-          primary: "中央气象台 / 国家气象中心台风产品",
-          machineReadableTrackSource: getDataSourceLabel(),
-          updatedAt: new Date().toISOString()
+          primary:
+            firstBoss?.sourcePolicy.canonicalAuthority ??
+            "Official warnings remain the source of truth; this API only provides machine-readable radar analysis.",
+          machineReadableTrackSource: snapshot.source,
+          updatedAt: snapshot.updatedAt
         },
-        count: bosses.length,
-        bosses,
-        degraded: false,
-        warnings: bosses.length
-          ? ["当前 Boss 技能由机器可读路径源生成；全国权威口径以中央气象台/国家气象中心和属地气象应急部门为准。"]
-          : []
+        count: snapshot.bosses.length,
+        bosses: snapshot.bosses,
+        degraded: snapshot.warnings.length > 0,
+        warnings: snapshot.warnings,
+        cache: snapshot.cache
       },
       {
         headers: {
@@ -33,14 +33,14 @@ export async function GET() {
     return NextResponse.json(
       {
         source: {
-          primary: "中央气象台 / 国家气象中心台风产品",
-          machineReadableTrackSource: getDataSourceLabel(),
+          primary: "Official warnings remain the source of truth.",
+          machineReadableTrackSource: "Typhoon Boss Radar",
           updatedAt: new Date().toISOString()
         },
         count: 0,
         bosses: [],
         degraded: true,
-        warnings: [error instanceof Error ? error.message : "Boss 引擎暂时不可用"]
+        warnings: [error instanceof Error ? error.message : "Boss engine temporarily unavailable."]
       },
       {
         status: 502,

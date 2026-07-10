@@ -7,6 +7,6 @@ export const revalidate = 0;
 export async function GET(request: NextRequest) {
   const region = request.nextUrl.searchParams.get("region") ?? "";
   const product = request.nextUrl.searchParams.get("product") ?? "";
-  const time = request.nextUrl.searchParams.get("time") ?? "";
-  return fetchJmaImage(region, product, time);
+  const frame = request.nextUrl.searchParams.get("frame") ?? "";
+  return fetchJmaImage(region, product, frame);
 }

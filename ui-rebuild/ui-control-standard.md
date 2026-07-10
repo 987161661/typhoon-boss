@@ -3,7 +3,7 @@
 ## Sources
 
 - Night-radar reference image: `D:\typhoon boss radar\ref-pic.png`
-- Dossier style reference image: `D:\typhoon boss radar\ui-rebuild\reference-paper-clean.png`
+- Dossier style reference was removed from the repo after implementation; current dossier visuals must use live React/CSS and generated neutral materials only.
 - Generated radar HUD atlas: `public/ui-rebuild/hud-control-atlas.png`
 - Radar storm marker assets:
   - `public/ui-rebuild/storm-core-super-red.png`

@@ -1,15 +1,18 @@
 import type {
   BossRating,
   DexEntry,
-  ForecastPoint,
+  ForecastScenario,
   ProvinceDefenseStatus,
   Storm,
   StormSkill,
   StormStage,
   TrackPoint
 } from "@/lib/types";
+import { findProvinceReferencePoint, normalizeProvinceName } from "@/lib/provinceGeo";
 
 const ZJ_API = "https://typhoon.slt.zj.gov.cn/Api";
+const GDACS_SEARCH_API = "https://gdacs.org/gdacsapi/api/events/geteventlist/SEARCH";
+const CURRENT_STORMS_CACHE_TTL_MS = 20 * 1000;
 const DATA_SOURCE = "浙江省水利厅台风路径公开接口";
 const NOTICE =
   "本系统用于台风路径可视化与创意大屏演示，真实预警以中央气象台、海洋预报台和属地应急部门发布为准。";
@@ -59,9 +62,37 @@ interface ZjForecastPoint {
 interface ZjTyphoonInfo extends ZjTyphoonListItem {
   centerlng?: string;
   centerlat?: string;
-  land?: string;
+  land?: ZjLandfall[];
   points?: ZjPoint[];
 }
+
+interface ZjLandfall {
+  landaddress?: string;
+  landtime?: string;
+  lng?: string;
+  lat?: string;
+  info?: string;
+}
+
+interface GdacsEventFeature {
+  properties?: {
+    eventtype?: string;
+    eventname?: string;
+    alertlevel?: string;
+    country?: string;
+    fromdate?: string;
+    todate?: string;
+    severitydata?: { severitytext?: string };
+    url?: { report?: string };
+    affectedcountries?: Array<{ countryname?: string }>;
+  };
+}
+
+interface GdacsEventCollection {
+  features?: GdacsEventFeature[];
+}
+
+const gdacsEvidenceCache = new Map<string, Promise<NonNullable<DexEntry["impactData"]["gdacs"]> | null>>();
 
 const retiredNameMap: Record<string, string> = {
   BILIS: "马力斯",
@@ -104,44 +135,37 @@ const retiredNameMap: Record<string, string> = {
   SAOLA: "待公布"
 };
 
-const provinceCenters: Record<string, [number, number]> = {
-  北京: [116.4, 39.9],
-  天津: [117.2, 39.1],
-  河北: [114.5, 38.0],
-  山西: [112.5, 37.9],
-  内蒙古: [111.7, 40.8],
-  辽宁: [123.4, 41.8],
-  吉林: [125.3, 43.9],
-  黑龙江: [126.6, 45.8],
-  上海: [121.5, 31.2],
-  江苏: [118.8, 32.1],
-  浙江: [120.2, 30.3],
-  安徽: [117.3, 31.9],
-  福建: [119.3, 26.1],
-  江西: [115.9, 28.7],
-  山东: [117.0, 36.7],
-  河南: [113.6, 34.8],
-  湖北: [114.3, 30.6],
-  湖南: [112.9, 28.2],
-  广东: [113.3, 23.1],
-  广西: [108.3, 22.8],
-  海南: [110.3, 20.0],
-  重庆: [106.5, 29.6],
-  四川: [104.1, 30.7],
-  贵州: [106.7, 26.6],
-  云南: [102.7, 25.0],
-  西藏: [91.1, 29.7],
-  陕西: [108.9, 34.3],
-  甘肃: [103.8, 36.1],
-  青海: [101.8, 36.6],
-  宁夏: [106.2, 38.5],
-  新疆: [87.6, 43.8],
-  台湾: [121.0, 23.7],
-  香港: [114.2, 22.3],
-  澳门: [113.5, 22.2]
-};
+let currentStormsCache: { expiresAt: number; storms: Storm[] } | null = null;
+let currentStormsInFlight: Promise<Storm[]> | null = null;
 
 export async function getCurrentStorms(): Promise<Storm[]> {
+  const now = Date.now();
+  if (currentStormsCache && currentStormsCache.expiresAt > now) {
+    return currentStormsCache.storms;
+  }
+  if (currentStormsInFlight) {
+    return currentStormsInFlight;
+  }
+
+  currentStormsInFlight = loadCurrentStorms().then(
+    (storms) => {
+      currentStormsCache = {
+        expiresAt: Date.now() + CURRENT_STORMS_CACHE_TTL_MS,
+        storms
+      };
+      currentStormsInFlight = null;
+      return storms;
+    },
+    (error) => {
+      currentStormsInFlight = null;
+      throw error;
+    }
+  );
+
+  return currentStormsInFlight;
+}
+
+async function loadCurrentStorms(): Promise<Storm[]> {
   const year = new Date().getFullYear();
   const list = await getTyphoonList(year);
   const activeItems = list.filter((item) => item.isactive === "1");
@@ -187,7 +211,11 @@ export async function getProvinceDefenseStatus(provinceName: string, stormId?: s
     };
   }
 
-  const center = provinceCenters[province] ?? provinceCenters.浙江;
+  const provincePoint = findProvinceReferencePoint(province) ?? findProvinceReferencePoint("浙江");
+  if (!provincePoint) {
+    throw new Error(`Province center unavailable: ${province}`);
+  }
+  const center = provincePoint.center;
   const distanceKm = Math.round(distanceBetweenKm(storm.position, { lon: center[0], lat: center[1] }));
   const coreRange = Math.max(storm.windRadiiKm.r12, 40);
   const rainBandRange = Math.max(storm.windRadiiKm.r7, storm.windRadiiKm.r10, 160);
@@ -272,6 +300,51 @@ async function fetchJson<T>(url: string): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+export async function getGdacsEvidence(name: string, startedAt: string | null, endedAt: string | null): Promise<NonNullable<DexEntry["impactData"]["gdacs"]> | null> {
+  if (!name || !startedAt) return null;
+  const start = new Date(startedAt.replace(" ", "T"));
+  const end = endedAt ? new Date(endedAt.replace(" ", "T")) : new Date(start.getTime() + 5 * 24 * 60 * 60 * 1000);
+  if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) return null;
+  const fromdate = formatDate(start);
+  const todate = formatDate(new Date(end.getTime() + 4 * 24 * 60 * 60 * 1000));
+  const cacheKey = `${name.toUpperCase()}-${fromdate}-${todate}`;
+  const cached = gdacsEvidenceCache.get(cacheKey);
+  if (cached) return cached;
+  const request = (async () => {
+    try {
+      const response = await fetch(`${GDACS_SEARCH_API}?eventlist=TC&fromdate=${fromdate}&todate=${todate}`, { cache: "no-store" });
+      if (!response.ok) return null;
+      const payload = (await response.json()) as GdacsEventCollection;
+      const canonicalName = name.trim().toUpperCase();
+      const match = (payload.features ?? []).find((feature) => {
+        const eventName = feature.properties?.eventname?.toUpperCase() ?? "";
+        return feature.properties?.eventtype === "TC" && (eventName === canonicalName || eventName.startsWith(`${canonicalName}-`));
+      });
+      if (!match?.properties) return null;
+      const props = match.properties;
+      const countries = (props.affectedcountries ?? []).map((country) => country.countryname).filter((country): country is string => Boolean(country));
+      return {
+        alertLevel: props.alertlevel ?? "Unknown",
+        countries: countries.length ? countries : (props.country ? props.country.split(",").map((item) => item.trim()).filter(Boolean) : []),
+        severity: props.severitydata?.severitytext ?? "未提供强度文本",
+        sourceUrl: props.url?.report ?? "https://www.gdacs.org/",
+        from: props.fromdate ?? "",
+        to: props.todate ?? ""
+      };
+    } catch {
+      return null;
+    }
+  })();
+  const cachedRequest = request.then((evidence) => {
+    if (!evidence) gdacsEvidenceCache.delete(cacheKey);
+    return evidence;
+  });
+  gdacsEvidenceCache.set(cacheKey, cachedRequest);
+  return cachedRequest;
+}
+
+function formatDate(value: Date) { return value.toISOString().slice(0, 10); }
+
 function convertStorm(info: ZjTyphoonInfo | ZjTyphoonListItem): Storm | null {
   const points = "points" in info ? info.points ?? [] : [];
   const validPoints = points.filter(isUsablePoint);
@@ -281,7 +354,8 @@ function convertStorm(info: ZjTyphoonInfo | ZjTyphoonListItem): Storm | null {
   const track = validPoints.map(convertTrackPoint);
   const stage = normalizeStage(latest.strong);
   const rating = ratingFromWind(toNumber(latest.speed), stage);
-  const forecast = convertForecast(latest);
+  const forecastScenarios = convertForecastScenarios(latest);
+  const forecast = forecastScenarios.find((scenario) => scenario.isPrimary)?.points ?? forecastScenarios[0]?.points ?? [];
   const windRadiiKm = {
     r7: parseRadius(latest.radius7),
     r10: parseRadius(latest.radius10),
@@ -308,6 +382,7 @@ function convertStorm(info: ZjTyphoonInfo | ZjTyphoonListItem): Storm | null {
     windRadiiKm,
     track,
     forecast,
+    forecastScenarios,
     skills: buildSkills(latest, windRadiiKm),
     notice: NOTICE
   };
@@ -331,6 +406,25 @@ function convertDexEntry(info: ZjTyphoonInfo | ZjTyphoonListItem): DexEntry {
   const minPressure = toNumber(minPressurePoint?.pressure);
   const retiredKey = info.enname.toUpperCase();
   const retired = retiredKey in retiredNameMap;
+  const track = usablePoints.map((point) => ({
+    time: point.time,
+    lat: toNumber(point.lat),
+    lon: toNumber(point.lng),
+    wind: toNumber(point.speed),
+    pressure: toNumber(point.pressure),
+    windRadiusKm: parseRadius(point.radius7)
+  }));
+  const startedAt = info.starttime || track[0]?.time || null;
+  const endedAt = info.endtime || null;
+  const durationHours = startedAt && endedAt ? durationBetweenHours(startedAt, endedAt) : null;
+  const rawLandfalls = "land" in info && Array.isArray(info.land) ? info.land : [];
+  const landfalls = rawLandfalls.map((land) => ({
+    time: land.landtime ?? "",
+    place: land.landaddress ?? "公开路径档案未注明地点",
+    lat: toNumber(land.lat),
+    lon: toNumber(land.lng),
+    note: land.info
+  }));
 
   return {
     id: info.tfid,
@@ -348,8 +442,30 @@ function convertDexEntry(info: ZjTyphoonInfo | ZjTyphoonListItem): DexEntry {
       info.isactive === "1" ? "当前活跃" : "历史个体",
       retired ? "已除名" : "未除名",
       info.warnlevel ? `${info.warnlevel}预警` : "路径档案"
-    ]
+    ],
+    lifecycle: {
+      startedAt,
+      endedAt,
+      durationHours,
+      origin: track[0] ?? null,
+      finalPosition: track.at(-1) ?? null
+    },
+    track,
+    landfalls,
+    impactData: {
+      formationCause: null,
+      affectedWindow: landfalls.length ? `${landfalls[0].time} 起有公开登陆记录` : null,
+      directEconomicLoss: null,
+      sourceNote: "出生、终止、路径、风圈与登陆记录：浙江省水利厅台风路径公开接口。成因与直接经济损失仅在接入逐台风、可核验的官方灾情报告后显示。"
+    }
   };
+}
+
+function durationBetweenHours(start: string, end: string) {
+  const startAt = new Date(start.replace(" ", "T")).getTime();
+  const endAt = new Date(end.replace(" ", "T")).getTime();
+  if (!Number.isFinite(startAt) || !Number.isFinite(endAt) || endAt < startAt) return null;
+  return Math.round((endAt - startAt) / (60 * 60 * 1000));
 }
 
 function convertTrackPoint(point: ZjPoint | ZjForecastPoint): TrackPoint {
@@ -362,15 +478,33 @@ function convertTrackPoint(point: ZjPoint | ZjForecastPoint): TrackPoint {
   };
 }
 
-function convertForecast(point: ZjPoint): ForecastPoint[] {
-  const groups = point.forecast ?? [];
-  const group = groups.find((item) => item.tm === "中国") ?? groups[0];
-  const forecastPoints = group?.forecastpoints ?? [];
+function convertForecastScenarios(point: ZjPoint): ForecastScenario[] {
+  const preferredOrder = ["中国", "日本", "美国", "中国台湾", "中国香港"];
+  const agencyCodes: Record<string, string> = {
+    中国: "CMA",
+    日本: "JMA",
+    美国: "JTWC",
+    中国台湾: "CWA",
+    中国香港: "HKO"
+  };
 
-  return forecastPoints.filter(isUsableForecastPoint).map((item, index) => ({
-    ...convertTrackPoint(item),
-    probability: Math.max(42, 92 - index * 8)
-  }));
+  return (point.forecast ?? [])
+    .map((group) => ({
+      id: `${agencyCodes[group.tm] ?? group.tm}-${point.time}`,
+      agency: group.tm,
+      agencyCode: agencyCodes[group.tm] ?? group.tm.slice(0, 4).toUpperCase(),
+      points: group.forecastpoints.filter(isUsableForecastPoint).map((item, index) => ({
+        ...convertTrackPoint(item),
+        probability: Math.max(42, 92 - index * 8)
+      })),
+      isPrimary: group.tm === "中国"
+    }))
+    .filter((scenario) => scenario.points.length >= 2)
+    .sort((a, b) => {
+      const aRank = preferredOrder.indexOf(a.agency);
+      const bRank = preferredOrder.indexOf(b.agency);
+      return (aRank < 0 ? 99 : aRank) - (bRank < 0 ? 99 : bRank);
+    });
 }
 
 function normalizeStage(strong?: string): StormStage {
@@ -477,12 +611,6 @@ function toNumber(value: string | number | undefined): number {
 
 function clampSeverity(value: number) {
   return Math.max(1, Math.min(9, value));
-}
-
-function normalizeProvinceName(name: string) {
-  return name
-    .replace(/特别行政区|壮族自治区|回族自治区|维吾尔自治区|自治区|省|市/g, "")
-    .trim();
 }
 
 function distanceBetweenKm(a: { lon: number; lat: number }, b: { lon: number; lat: number }) {

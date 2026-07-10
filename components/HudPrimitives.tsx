@@ -1,4 +1,6 @@
-import type { HTMLAttributes, ReactNode } from "react";
+"use client";
+
+import { useEffect, useState, type HTMLAttributes, type ReactNode } from "react";
 
 export function HudPanel({
   as: Component = "div",
@@ -55,6 +57,32 @@ export function MiniReadout({ label, value }: { label: string; value: ReactNode 
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
+  );
+}
+
+export function FlipValue({ value, className = "" }: { value: string | number; className?: string }) {
+  const nextValue = String(value);
+  const [frame, setFrame] = useState({ previous: nextValue, current: nextValue, version: 0 });
+
+  useEffect(() => {
+    setFrame((current) =>
+      current.current === nextValue
+        ? current
+        : { previous: current.current, current: nextValue, version: current.version + 1 }
+    );
+  }, [nextValue]);
+
+  return (
+    <span className={`flip-value ${className}`.trim()} aria-label={frame.current}>
+      {frame.version === 0 ? (
+        <span className="flip-value-static">{frame.current}</span>
+      ) : (
+        <span className="flip-value-stage" key={frame.version} aria-hidden="true">
+          <span className="flip-value-old">{frame.previous}</span>
+          <span className="flip-value-new">{frame.current}</span>
+        </span>
+      )}
+    </span>
   );
 }
 
