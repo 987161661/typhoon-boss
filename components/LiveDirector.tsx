@@ -141,7 +141,9 @@ export function LiveDirector() {
       <LiveOperatorControls
         hostVisible={hostVisible}
         onToggleHost={() => setHostVisible((current) => !current)}
-        onSendChat={(text) => setChatRequest({ id: Date.now(), text })}
+        onSendChat={(text) =>
+          setChatRequest({ id: `${Date.now()}-${crypto.randomUUID()}`, text })
+        }
         settings={controlSettings}
         settingsStatus={settingsStatus}
         onSaveSettings={saveControlSettings}

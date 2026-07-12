@@ -12,7 +12,7 @@ import {
 type DirectorScene = "briefing" | "analysis";
 
 export type HostChatRequest = {
-  id: number;
+  id: string;
   text: string;
 };
 
@@ -35,6 +35,8 @@ const HOST_WINDOW_STORAGE_KEY = "typhoon-boss-radar:linglan-window";
 const HOST_WINDOW_MIN_WIDTH = 200;
 const HOST_WINDOW_MIN_HEIGHT = 220;
 const HOST_WINDOW_PADDING = 8;
+const CHAT_RETRY_INTERVAL_MS = 750;
+const CHAT_MAX_ATTEMPTS = 8;
 
 type HostWindowBounds = {
   left: number;
@@ -81,7 +83,17 @@ export function DigitalHostWindow({
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const sceneRef = useRef(scene);
   const lastNarrationAtRef = useRef(0);
+  const chatDeliveryTimerRef = useRef<number | null>(null);
+  const pendingChatRef = useRef<{
+    id: string;
+    text: string;
+    attempts: number;
+    acknowledged: boolean;
+  } | null>(null);
   const [frameLoaded, setFrameLoaded] = useState(false);
+  const frameLoadedRef = useRef(false);
+  const [hostFrameReady, setHostFrameReady] = useState(false);
+  const hostFrameReadyRef = useRef(false);
   const [health, setHealth] = useState<HostHealth | null>(null);
   const [healthFailed, setHealthFailed] = useState(false);
   const [windowBounds, setWindowBounds] = useState<HostWindowBounds | null>(null);
@@ -99,6 +111,14 @@ export function DigitalHostWindow({
   useEffect(() => {
     sceneRef.current = scene;
   }, [scene]);
+
+  useEffect(() => {
+    frameLoadedRef.current = frameLoaded;
+  }, [frameLoaded]);
+
+  useEffect(() => {
+    hostFrameReadyRef.current = hostFrameReady;
+  }, [hostFrameReady]);
 
   useEffect(() => {
     try {
@@ -157,17 +177,102 @@ export function DigitalHostWindow({
   }, [interaction]);
 
   useEffect(() => {
-    if (!frameLoaded || !chatRequest?.text.trim()) return;
-    iframeRef.current?.contentWindow?.postMessage(
-      {
-        type: "linglan:chat",
-        requestId: chatRequest.id,
-        text: chatRequest.text.trim(),
-        requestedAt: Date.now()
-      },
-      hostOrigin
-    );
-  }, [chatRequest, frameLoaded, hostOrigin]);
+    const handleHostMessage = (event: MessageEvent<unknown>) => {
+      if (event.origin !== hostOrigin || event.source !== iframeRef.current?.contentWindow) return;
+      const data = event.data as { type?: unknown; requestId?: unknown };
+      if (data?.type === "linglan:ready") {
+        setHostFrameReady(true);
+        return;
+      }
+      if (data?.type !== "linglan:chat-ack") return;
+      const requestId = String(data.requestId ?? "");
+      if (!requestId || requestId !== pendingChatRef.current?.id) return;
+      pendingChatRef.current.acknowledged = true;
+      void fetch("/api/digital-host/events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event: "delivery_postmessage_ack", requestId, channel: "postmessage" })
+      }).catch(() => undefined);
+      if (chatDeliveryTimerRef.current !== null) {
+        window.clearInterval(chatDeliveryTimerRef.current);
+        chatDeliveryTimerRef.current = null;
+      }
+    };
+    window.addEventListener("message", handleHostMessage);
+    return () => window.removeEventListener("message", handleHostMessage);
+  }, [hostOrigin]);
+
+  useEffect(() => {
+    if (!chatRequest?.text.trim()) return;
+    if (chatDeliveryTimerRef.current !== null) window.clearInterval(chatDeliveryTimerRef.current);
+    pendingChatRef.current = {
+      id: chatRequest.id,
+      text: chatRequest.text.trim(),
+      attempts: 0,
+      acknowledged: false
+    };
+
+    const deliver = () => {
+      const pending = pendingChatRef.current;
+      if (!pending || pending.acknowledged) return;
+      if (pending.attempts >= CHAT_MAX_ATTEMPTS) {
+        if (chatDeliveryTimerRef.current !== null) {
+          window.clearInterval(chatDeliveryTimerRef.current);
+          chatDeliveryTimerRef.current = null;
+        }
+        return;
+      }
+      pending.attempts += 1;
+      // Restore the original in-frame delivery path first. It keeps the chat
+      // execution in the same browser runtime that historically handled both
+      // speech and avatar animation. The HTTP bridge remains a fallback only
+      // for an iframe that has not installed its message listener yet.
+      iframeRef.current?.contentWindow?.postMessage(
+        {
+          type: "linglan:chat",
+          requestId: pending.id,
+          text: pending.text,
+          requestedAt: Date.now()
+        },
+        hostOrigin
+      );
+      if (pending.attempts === 1) {
+        void fetch("/api/digital-host/events", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            event: "delivery_postmessage_sent",
+            requestId: pending.id,
+            channel: "postmessage"
+          })
+        }).catch(() => undefined);
+      }
+      if (pending.attempts < 3) return;
+      void fetch("/api/digital-host/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requestId: pending.id, text: pending.text })
+      })
+        .then((response) => {
+          if (!response.ok || pending.acknowledged) return;
+          pending.acknowledged = true;
+          if (chatDeliveryTimerRef.current !== null) {
+            window.clearInterval(chatDeliveryTimerRef.current);
+            chatDeliveryTimerRef.current = null;
+          }
+        })
+        .catch(() => undefined);
+    };
+
+    deliver();
+    chatDeliveryTimerRef.current = window.setInterval(deliver, CHAT_RETRY_INTERVAL_MS);
+    return () => {
+      if (chatDeliveryTimerRef.current !== null) {
+        window.clearInterval(chatDeliveryTimerRef.current);
+        chatDeliveryTimerRef.current = null;
+      }
+    };
+  }, [chatRequest, hostOrigin]);
 
   useEffect(() => {
     let cancelled = false;
