@@ -226,6 +226,133 @@ export interface WindFieldPayload extends EnvironmentLayerMeta {
   };
 }
 
+export interface RadarMosaicLayerPayload extends EnvironmentLayerMeta {
+  imageUrl: string | null;
+  product: string;
+  isStale: boolean;
+  refreshIntervalMinutes: number;
+  bounds: {
+    west: number;
+    south: number;
+    east: number;
+    north: number;
+  };
+}
+
+export type GfsScalarLayerId = "pressure" | "precipitation" | "gust" | "reflectivity" | "precipitable-water";
+
+export interface GfsScalarPoint {
+  lon: number;
+  lat: number;
+  value: number;
+}
+
+export interface GfsScalarLayerPayload extends EnvironmentLayerMeta {
+  layer: GfsScalarLayerId;
+  label: string;
+  model: string;
+  unit: "hPa" | "mm/h" | "m/s" | "dBZ" | "mm";
+  points: GfsScalarPoint[];
+  nativeResolutionDegrees: number;
+  displayResolutionDegrees: number;
+  cycle: string;
+  isStale?: boolean;
+  lastSuccessfulAt?: string;
+  sampling: "viewport";
+  coverage: {
+    west: number;
+    south: number;
+    east: number;
+    north: number;
+  };
+}
+
+export interface GfsWavePoint {
+  lon: number;
+  lat: number;
+  heightM: number;
+  directionDeg: number;
+  periodS?: number;
+}
+
+export interface GfsWaveLayerPayload extends EnvironmentLayerMeta {
+  model: string;
+  unit: "m";
+  points: GfsWavePoint[];
+  nativeResolutionDegrees: number;
+  displayResolutionDegrees: number;
+  cycle: string;
+  sampling: "viewport";
+  coverage: { west: number; south: number; east: number; north: number };
+  isStale?: boolean;
+}
+
+export interface EcmwfTrackPoint {
+  stepHours: number;
+  time: string;
+  lat: number;
+  lon: number;
+  pressurePa: number | null;
+}
+
+export interface EcmwfTrackMember {
+  member: number;
+  points: EcmwfTrackPoint[];
+}
+
+export interface EcmwfStormTrack {
+  stormIdentifier: string;
+  baseTime: string;
+  members: EcmwfTrackMember[];
+}
+
+export interface EcmwfTrackPayload extends EnvironmentLayerMeta {
+  cycle: string;
+  deterministic: EcmwfStormTrack[];
+  ensemble: EcmwfStormTrack[];
+  isStale?: boolean;
+}
+
+export interface OfficialWeatherAlert {
+  id: string;
+  source: "CWA" | "HKO";
+  title: string;
+  description?: string;
+  issuedAt: string;
+  expiresAt?: string;
+  code?: string;
+}
+
+export interface OfficialAlertPayload extends EnvironmentLayerMeta {
+  alerts: OfficialWeatherAlert[];
+  tide?: {
+    station: string;
+    date: string;
+    unit: "m";
+    hourly: Array<{ hour: number; heightM: number }>;
+    note: string;
+  };
+}
+
+export interface RegionalObservationPoint {
+  id: string;
+  kind: "station" | "buoy" | "lightning";
+  name: string;
+  lon: number;
+  lat: number;
+  observedAt?: string;
+  windSpeed?: number;
+  gustSpeed?: number;
+  pressureHpa?: number;
+  rainMm?: number;
+  temperatureC?: number;
+  intensityKa?: number;
+}
+
+export interface RegionalObservationPayload extends EnvironmentLayerMeta {
+  points: RegionalObservationPoint[];
+}
+
 export interface ImpactAreaPayload extends EnvironmentLayerMeta {
   stormId: string | null;
   stormName: string | null;

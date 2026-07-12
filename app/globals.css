@@ -152,6 +152,10 @@ a:focus-visible {
 }
 
 .storm-intensity-canvas,
+.gfs-scalar-canvas,
+.gfs-wave-canvas,
+.ecmwf-track-canvas,
+.regional-observation-canvas,
 .wind-color-canvas,
 .wind-particle-canvas,
 .forecast-route-canvas {
@@ -170,6 +174,48 @@ a:focus-visible {
   mix-blend-mode: normal;
   filter: saturate(1.28) contrast(1.12);
 }
+
+.official-alert-strip {
+  position: absolute;
+  z-index: 18;
+  top: 86px;
+  left: 50%;
+  display: flex;
+  max-width: min(720px, calc(100vw - 560px));
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 184, 60, 0.46);
+  background: rgba(18, 12, 4, 0.82);
+  color: #ffe7a0;
+  font-size: 10px;
+  transform: translateX(-50%);
+  backdrop-filter: blur(8px);
+}
+
+.official-alert-strip > div { display: flex; gap: 10px; overflow: hidden; }
+.official-alert-strip span { white-space: nowrap; }
+.official-alert-strip i { margin-right: 4px; color: #ff8d4c; font-style: normal; }
+
+.gfs-scalar-canvas {
+  z-index: 3;
+  opacity: 0.92;
+  mix-blend-mode: multiply;
+  image-rendering: auto;
+}
+
+.gfs-wave-canvas {
+  z-index: 3;
+  opacity: 0.92;
+  mix-blend-mode: normal;
+}
+
+.ecmwf-track-canvas {
+  z-index: 6;
+  opacity: 1;
+}
+
+.regional-observation-canvas { z-index: 7; opacity: 1; }
 
 .wind-color-canvas {
   z-index: 4;
@@ -2995,6 +3041,11 @@ a:focus-visible {
   white-space: nowrap;
 }
 
+.gfs-scalar-control,
+.cwa-radar-control,
+.gfs-wave-control,
+.ecmwf-track-control,
+.observation-control,
 .wind-render-mode {
   display: grid;
   gap: 5px;
@@ -3004,6 +3055,11 @@ a:focus-visible {
   background: rgba(5, 22, 28, 0.6);
 }
 
+.gfs-scalar-control > span,
+.cwa-radar-control > span,
+.gfs-wave-control > span,
+.ecmwf-track-control > span,
+.observation-control > span,
 .wind-render-mode > span {
   color: rgba(213, 246, 250, 0.82);
   font: 800 10px/1 "Bahnschrift", "Microsoft YaHei", sans-serif;
@@ -3016,6 +3072,17 @@ a:focus-visible {
   gap: 4px;
 }
 
+.gfs-scalar-control > div {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.gfs-scalar-control button,
+.cwa-radar-control button,
+.gfs-wave-control button,
+.ecmwf-track-control button,
+.observation-control button,
 .wind-render-mode button {
   min-height: 25px;
   border: 1px solid rgba(187, 232, 238, 0.2);
@@ -3026,16 +3093,59 @@ a:focus-visible {
   cursor: pointer;
 }
 
+.gfs-scalar-control button.active,
+.cwa-radar-control button.active,
+.gfs-wave-control button.active,
+.ecmwf-track-control button.active,
+.observation-control button.active,
 .wind-render-mode button.active {
   border-color: rgba(103, 222, 240, 0.72);
   background: rgba(19, 104, 119, 0.38);
   color: #e9fdff;
 }
 
+.gfs-scalar-control small,
+.cwa-radar-control small,
+.gfs-wave-control small,
+.ecmwf-track-control small,
+.observation-control small,
 .wind-render-mode small {
   color: rgba(191, 218, 222, 0.68);
   font-size: 9px;
   line-height: 1.35;
+}
+
+.cwa-radar-control button,
+.gfs-wave-control button {
+  width: 100%;
+}
+
+.ecmwf-track-control button { width: 100%; }
+.ecmwf-track-control button:disabled { cursor: wait; opacity: 0.48; }
+.observation-control button { width: 100%; }
+.observation-control button:disabled { cursor: wait; opacity: 0.48; }
+
+.supplemental-layer-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.supplemental-layer-grid > div {
+  min-width: 0;
+  gap: 3px;
+  margin-top: 0;
+  padding: 5px;
+}
+
+.supplemental-layer-grid > div > span { display: none; }
+.supplemental-layer-grid button { min-height: 27px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.supplemental-layer-grid small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.cwa-radar-control button:disabled {
+  cursor: wait;
+  opacity: 0.48;
 }
 
 .gfs-wind-key {

@@ -8,8 +8,14 @@ import { makeQuadrantWindPolygon } from "@/lib/meteorology";
 import { getCurrentStorms } from "@/lib/realTyphoonData";
 import type {
   ImpactAreaPayload,
+  RadarMosaicLayerPayload,
   SatelliteLayerPayload,
   Storm,
+  GfsScalarLayerId,
+  GfsScalarLayerPayload,
+  GfsScalarPoint,
+  GfsWaveLayerPayload,
+  GfsWavePoint,
   WindFieldPayload,
   WindFieldPoint
 } from "@/lib/types";
@@ -43,8 +49,10 @@ const MET_NORWAY_ATTRIBUTION = "MET Norway Locationforecast 2.0 global forecast"
 const NCEP_GFS_SOURCE = "NOAA/NCEP NOMADS Grib Filter";
 const NCEP_GFS_ATTRIBUTION = "NOAA NCEP GFS 0.25 degree analysis";
 const NCEP_GFS_FILTER_URL = "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl";
+const NCEP_GFS_WAVE_FILTER_URL = "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfswave.pl";
 const NCEP_GFS_NATIVE_RESOLUTION_DEGREES = 0.25;
 const NCEP_GFS_MAX_DISPLAY_POINTS = 18_000;
+const NCEP_GFS_WAVE_MAX_DISPLAY_POINTS = 6_000;
 const WGRIB2_PATH = process.env.WGRIB2_PATH ?? join(process.cwd(), ".runtime", "tools", "wgrib2", "wgrib2.exe");
 const SATELLITE_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const SATELLITE_IMAGE_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
@@ -61,6 +69,13 @@ const SATELLITE_IMAGE_CACHE_DIR = join(process.cwd(), ".runtime", "satellite-ima
 // but allow enough time for the background image proxy to complete.
 const SATELLITE_FETCH_TIMEOUT_MS = 20_000;
 const SATELLITE_CIRCUIT_COOLDOWN_MS = 5 * 60 * 1000;
+const CWA_RADAR_SOURCE = "Taiwan CWA radar composite";
+const CWA_RADAR_ATTRIBUTION = "台湾中央气象署雷达整合回波透明图层";
+const CWA_RADAR_PRODUCT = "O-A0058-005";
+const CWA_RADAR_REMOTE_URL = `https://cwaopendata.s3.ap-northeast-1.amazonaws.com/Observation/${CWA_RADAR_PRODUCT}.png`;
+const CWA_RADAR_BOUNDS = { west: 115, south: 17.75, east: 126.5, north: 29.25 };
+const CWA_RADAR_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+const CWA_RADAR_METADATA_TTL_MS = 5 * 60 * 1000;
 const IMPACT_SOURCE = "浙江省水利厅台风路径公开接口风圈半径";
 const NO_STORE_HEADERS = {
   "Cache-Control": "no-store, max-age=0"
@@ -80,6 +95,15 @@ const satelliteSourceFailures = new Map<string, { count: number; blockedUntil: n
 const windFieldCache = new Map<string, { expiresAt: number; payload: WindFieldPayload }>();
 const windFieldInFlight = new Map<string, Promise<WindFieldPayload>>();
 const windFieldLastSuccess = new Map<string, WindFieldPayload>();
+const gfsScalarCache = new Map<string, { expiresAt: number; payload: GfsScalarLayerPayload }>();
+const gfsScalarInFlight = new Map<string, Promise<GfsScalarLayerPayload>>();
+const gfsScalarLastSuccess = new Map<string, GfsScalarLayerPayload>();
+const gfsWaveCache = new Map<string, { expiresAt: number; payload: GfsWaveLayerPayload }>();
+const gfsWaveInFlight = new Map<string, Promise<GfsWaveLayerPayload>>();
+const gfsWaveLastSuccess = new Map<string, GfsWaveLayerPayload>();
+let cwaRadarLayerCache: { expiresAt: number; payload: RadarMosaicLayerPayload } | null = null;
+let cwaRadarLayerInFlight: Promise<RadarMosaicLayerPayload> | null = null;
+let cwaRadarLastSuccess: RadarMosaicLayerPayload | null = null;
 let openMeteoBlockedUntil = 0;
 let openMeteoLastRequestAt = 0;
 let openMeteoRequestChain: Promise<unknown> = Promise.resolve();
@@ -217,11 +241,101 @@ export async function fetchGlobalSatelliteImage(frame: string): Promise<Response
   });
 }
 
+export async function getCwaRadarLayer(): Promise<RadarMosaicLayerPayload> {
+  if (cwaRadarLayerCache && cwaRadarLayerCache.expiresAt > Date.now()) return cwaRadarLayerCache.payload;
+  if (cwaRadarLayerInFlight) return cwaRadarLayerInFlight;
+
+  cwaRadarLayerInFlight = loadCwaRadarLayer()
+    .then((payload) => {
+      cwaRadarLayerCache = { expiresAt: Date.now() + CWA_RADAR_METADATA_TTL_MS, payload };
+      if (payload.status === "available" && !payload.isStale) cwaRadarLastSuccess = payload;
+      return payload;
+    })
+    .finally(() => {
+      cwaRadarLayerInFlight = null;
+    });
+  return cwaRadarLayerInFlight;
+}
+
+async function loadCwaRadarLayer(): Promise<RadarMosaicLayerPayload> {
+  try {
+    const response = await fetch(CWA_RADAR_REMOTE_URL, {
+      method: "HEAD",
+      cache: "no-store",
+      signal: AbortSignal.timeout(5_000)
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const contentLength = Number(response.headers.get("content-length") ?? 0);
+    if (contentLength <= 0 || contentLength > 8 * 1024 * 1024) throw new Error("invalid radar image size");
+    const updatedAt = parseHttpDate(response.headers.get("last-modified")) ?? new Date().toISOString();
+    const isStale = Date.now() - new Date(updatedAt).getTime() > 40 * 60 * 1000;
+    return {
+      source: CWA_RADAR_SOURCE,
+      updatedAt,
+      status: "available",
+      attribution: CWA_RADAR_ATTRIBUTION,
+      imageUrl: `/api/environment/cwa-radar-image?v=${encodeURIComponent(updatedAt)}`,
+      product: CWA_RADAR_PRODUCT,
+      isStale,
+      refreshIntervalMinutes: CWA_RADAR_REFRESH_INTERVAL_MS / 60_000,
+      bounds: CWA_RADAR_BOUNDS,
+      reason: isStale ? "实况雷达图已超过 40 分钟未更新。" : undefined
+    };
+  } catch (error) {
+    if (cwaRadarLastSuccess) {
+      return {
+        ...cwaRadarLastSuccess,
+        isStale: true,
+        reason: `上游暂不可用，保留最后有效图：${errorMessage(error)}`
+      };
+    }
+    return {
+      source: CWA_RADAR_SOURCE,
+      updatedAt: new Date().toISOString(),
+      status: "unavailable",
+      attribution: CWA_RADAR_ATTRIBUTION,
+      imageUrl: null,
+      product: CWA_RADAR_PRODUCT,
+      isStale: false,
+      refreshIntervalMinutes: CWA_RADAR_REFRESH_INTERVAL_MS / 60_000,
+      bounds: CWA_RADAR_BOUNDS,
+      reason: `实况雷达图暂不可用：${errorMessage(error)}`
+    };
+  }
+}
+
+export async function fetchCwaRadarImage(): Promise<Response> {
+  const layer = await getCwaRadarLayer();
+  const version = layer.status === "available" ? layer.updatedAt : "last-good";
+  try {
+    const image = await getCachedSatelliteImage(
+      `cwa-radar:${version}`,
+      "cwa-radar",
+      CWA_RADAR_REMOTE_URL,
+      validatePngImage,
+      true
+    );
+    return new Response(Buffer.from(image.bytes), {
+      status: 200,
+      headers: {
+        "Content-Type": "image/png",
+        "Cache-Control": "public, max-age=300, stale-while-revalidate=1800",
+        "X-Remote-Source": CWA_RADAR_REMOTE_URL,
+        "X-Data-Status": image.status,
+        "X-Data-Fetched-At": image.fetchedAt
+      }
+    });
+  } catch (error) {
+    return satelliteUnavailableResponse("cwa-radar", error);
+  }
+}
+
 async function getCachedSatelliteImage(
   key: string,
-  sourceKey: "regional" | "global",
+  sourceKey: "regional" | "global" | "cwa-radar",
   remoteUrl: string,
-  transform: (bytes: Uint8Array) => Promise<Uint8Array>
+  transform: (bytes: Uint8Array) => Promise<Uint8Array>,
+  allowBinaryImage = false
 ): Promise<CachedSatelliteImage> {
   const cached = satelliteImageCache.get(key);
   if (cached && cached.expiresAt > Date.now()) {
@@ -230,7 +344,7 @@ async function getCachedSatelliteImage(
   const inFlight = satelliteImageInFlight.get(key);
   if (inFlight) return inFlight;
 
-  const request = loadSatelliteImage(sourceKey, remoteUrl, transform).finally(() => satelliteImageInFlight.delete(key));
+  const request = loadSatelliteImage(sourceKey, remoteUrl, transform, allowBinaryImage).finally(() => satelliteImageInFlight.delete(key));
   satelliteImageInFlight.set(key, request);
   const entry = await request;
   if (satelliteImageCache.size > 12) satelliteImageCache.clear();
@@ -239,14 +353,15 @@ async function getCachedSatelliteImage(
 }
 
 async function loadSatelliteImage(
-  sourceKey: "regional" | "global",
+  sourceKey: "regional" | "global" | "cwa-radar",
   remoteUrl: string,
-  transform: (bytes: Uint8Array) => Promise<Uint8Array>
+  transform: (bytes: Uint8Array) => Promise<Uint8Array>,
+  allowBinaryImage = false
 ): Promise<CachedSatelliteImage> {
   const failure = satelliteSourceFailures.get(sourceKey);
   if (!failure || failure.blockedUntil <= Date.now()) {
     try {
-      const source = await fetchRemoteBytes(remoteUrl);
+      const source = await fetchRemoteBytes(remoteUrl, allowBinaryImage);
       const bytes = await transform(source);
       const fetchedAt = new Date().toISOString();
       await persistLastGoodSatelliteImage(sourceKey, bytes, fetchedAt);
@@ -267,14 +382,16 @@ async function loadSatelliteImage(
   throw new Error(`${sourceKey} satellite image unavailable and no last-good image has been stored.`);
 }
 
-async function fetchRemoteBytes(remoteUrl: string) {
+async function fetchRemoteBytes(remoteUrl: string, allowBinaryImage = false) {
   let lastError: unknown;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const response = await fetch(remoteUrl, { signal: AbortSignal.timeout(SATELLITE_FETCH_TIMEOUT_MS), cache: "no-store" });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const contentType = response.headers.get("content-type") ?? "";
-      if (!contentType.startsWith("image/")) throw new Error(`unexpected content type ${contentType || "unknown"}`);
+      if (!contentType.startsWith("image/") && !(allowBinaryImage && contentType === "binary/octet-stream")) {
+        throw new Error(`unexpected content type ${contentType || "unknown"}`);
+      }
       return new Uint8Array(await response.arrayBuffer());
     } catch (error) {
       lastError = error;
@@ -326,6 +443,18 @@ function satelliteUnavailableResponse(sourceKey: string, error: unknown) {
       "X-Data-Status": "unavailable"
     }
   });
+}
+
+async function validatePngImage(bytes: Uint8Array) {
+  const metadata = await sharp(bytes).metadata();
+  if (metadata.format !== "png" || !metadata.width || !metadata.height) throw new Error("invalid radar PNG");
+  return bytes;
+}
+
+function parseHttpDate(value: string | null) {
+  if (!value) return null;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
 }
 
 export async function getImpactArea(stormId?: string | null): Promise<ImpactAreaPayload> {
@@ -495,6 +624,185 @@ async function loadWindField(stormId?: string | null, viewportBounds?: WindField
   }
 }
 
+const GFS_SCALAR_LAYERS: Record<GfsScalarLayerId, {
+  label: string;
+  variable: string;
+  level: string;
+  unit: GfsScalarLayerPayload["unit"];
+  convert: (value: number) => number;
+}> = {
+  pressure: { label: "海平面气压", variable: "PRMSL", level: "mean_sea_level", unit: "hPa", convert: (value) => value / 100 },
+  precipitation: { label: "模型降水率", variable: "PRATE", level: "surface", unit: "mm/h", convert: (value) => value * 3_600 },
+  gust: { label: "地面阵风", variable: "GUST", level: "surface", unit: "m/s", convert: (value) => value },
+  reflectivity: { label: "模型合成反射率", variable: "REFC", level: "entire_atmosphere", unit: "dBZ", convert: (value) => value },
+  "precipitable-water": { label: "整层可降水量", variable: "PWAT", level: "entire_atmosphere_(considered_as_a_single_layer)", unit: "mm", convert: (value) => value }
+};
+
+export function isGfsScalarLayerId(value: string | null): value is GfsScalarLayerId {
+  return Boolean(value && value in GFS_SCALAR_LAYERS);
+}
+
+export async function getGfsScalarLayer(layer: GfsScalarLayerId, requestedBounds: WindFieldBounds): Promise<GfsScalarLayerPayload> {
+  const bounds = snapNcepBounds(normalizeWindFieldBounds(requestedBounds));
+  const cacheKey = `${layer}:${windBoundsCacheKey(bounds)}`;
+  const cached = gfsScalarCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.payload;
+  const inFlight = gfsScalarInFlight.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const request = loadNcepGfsScalarLayer(layer, bounds).then(
+    (payload) => {
+      gfsScalarLastSuccess.set(cacheKey, payload);
+      gfsScalarCache.set(cacheKey, { expiresAt: Date.now() + WIND_FIELD_CACHE_TTL_MS, payload });
+      gfsScalarInFlight.delete(cacheKey);
+      return payload;
+    },
+    (error) => {
+      gfsScalarInFlight.delete(cacheKey);
+      const last = gfsScalarLastSuccess.get(cacheKey);
+      if (last) {
+        const stale = {
+          ...last,
+          status: "available" as const,
+          isStale: true,
+          reason: `NCEP GFS refresh failed; using last valid layer: ${errorMessage(error)}`
+        };
+        gfsScalarCache.set(cacheKey, { expiresAt: Date.now() + DEGRADED_WIND_FIELD_RETRY_MS, payload: stale });
+        return stale;
+      }
+      throw error;
+    }
+  );
+  gfsScalarInFlight.set(cacheKey, request);
+  return request;
+}
+
+async function loadNcepGfsScalarLayer(layer: GfsScalarLayerId, bounds: WindFieldBounds): Promise<GfsScalarLayerPayload> {
+  const config = GFS_SCALAR_LAYERS[layer];
+  const errors: string[] = [];
+  for (const cycle of ncepCycleCandidates()) {
+    const query = new URLSearchParams({
+      file: `gfs.t${cycle.hour}z.pgrb2.0p25.f000`,
+      [`lev_${config.level}`]: "on",
+      [`var_${config.variable}`]: "on",
+      subregion: "",
+      leftlon: String(bounds.west),
+      rightlon: String(bounds.east),
+      toplat: String(bounds.north),
+      bottomlat: String(bounds.south),
+      dir: `/gfs.${cycle.date}/${cycle.hour}/atmos`
+    });
+    try {
+      const response = await fetch(`${NCEP_GFS_FILTER_URL}?${query.toString()}`, {
+        cache: "no-store",
+        headers: {
+          Accept: "application/octet-stream",
+          "User-Agent": process.env.WEATHER_API_USER_AGENT ?? "TyphoonBossRadar/1.0 local-deployment"
+        },
+        signal: AbortSignal.timeout(35_000)
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.length < 16 || String.fromCharCode(...bytes.slice(0, 4)) !== "GRIB") throw new Error("response was not GRIB2");
+      const decoded = await decodeNcepGfsScalar(bytes, cycle, bounds, config.variable, config.convert);
+      return {
+        source: NCEP_GFS_SOURCE,
+        updatedAt: decoded.updatedAt,
+        status: "available",
+        attribution: NCEP_GFS_ATTRIBUTION,
+        layer,
+        label: config.label,
+        model: `NCEP GFS 0.25 degree analysis, ${config.variable}`,
+        unit: config.unit,
+        points: decoded.points,
+        nativeResolutionDegrees: NCEP_GFS_NATIVE_RESOLUTION_DEGREES,
+        displayResolutionDegrees: decoded.displayResolutionDegrees,
+        cycle: `${cycle.date} ${cycle.hour}Z`,
+        lastSuccessfulAt: decoded.updatedAt,
+        sampling: "viewport",
+        coverage: bounds
+      };
+    } catch (error) {
+      errors.push(`${cycle.date}${cycle.hour}: ${errorMessage(error)}`);
+    }
+  }
+  throw new Error(`NCEP GFS ${layer} unavailable (${errors.join(" | ")})`);
+}
+
+export async function getGfsWaveLayer(requestedBounds: WindFieldBounds): Promise<GfsWaveLayerPayload> {
+  const bounds = snapNcepBounds(normalizeWindFieldBounds(requestedBounds));
+  const cacheKey = windBoundsCacheKey(bounds);
+  const cached = gfsWaveCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.payload;
+  const inFlight = gfsWaveInFlight.get(cacheKey);
+  if (inFlight) return inFlight;
+  const request = loadNcepGfsWaveLayer(bounds).then(
+    (payload) => {
+      gfsWaveLastSuccess.set(cacheKey, payload);
+      gfsWaveCache.set(cacheKey, { expiresAt: Date.now() + WIND_FIELD_CACHE_TTL_MS, payload });
+      gfsWaveInFlight.delete(cacheKey);
+      return payload;
+    },
+    (error) => {
+      gfsWaveInFlight.delete(cacheKey);
+      const last = gfsWaveLastSuccess.get(cacheKey);
+      if (!last) throw error;
+      const stale = { ...last, isStale: true, reason: `GFS Wave refresh failed; using last valid layer: ${errorMessage(error)}` };
+      gfsWaveCache.set(cacheKey, { expiresAt: Date.now() + DEGRADED_WIND_FIELD_RETRY_MS, payload: stale });
+      return stale;
+    }
+  );
+  gfsWaveInFlight.set(cacheKey, request);
+  return request;
+}
+
+async function loadNcepGfsWaveLayer(bounds: WindFieldBounds): Promise<GfsWaveLayerPayload> {
+  const errors: string[] = [];
+  for (const cycle of ncepCycleCandidates()) {
+    const query = new URLSearchParams({
+      file: `gfswave.t${cycle.hour}z.global.0p25.f000.grib2`,
+      lev_surface: "on",
+      var_HTSGW: "on",
+      var_DIRPW: "on",
+      var_PERPW: "on",
+      subregion: "",
+      leftlon: String(bounds.west),
+      rightlon: String(bounds.east),
+      toplat: String(bounds.north),
+      bottomlat: String(bounds.south),
+      dir: `/gfs.${cycle.date}/${cycle.hour}/wave/gridded`
+    });
+    try {
+      const response = await fetch(`${NCEP_GFS_WAVE_FILTER_URL}?${query}`, {
+        cache: "no-store",
+        headers: { Accept: "application/octet-stream", "User-Agent": process.env.WEATHER_API_USER_AGENT ?? "TyphoonBossRadar/1.0 local-deployment" },
+        signal: AbortSignal.timeout(35_000)
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.length < 16 || String.fromCharCode(...bytes.slice(0, 4)) !== "GRIB") throw new Error("response was not GRIB2");
+      const decoded = await decodeNcepGfsWave(bytes, cycle, bounds);
+      return {
+        source: NCEP_GFS_SOURCE,
+        updatedAt: decoded.updatedAt,
+        status: "available",
+        attribution: "NOAA NCEP GFS Wave 0.25 degree analysis",
+        model: "NCEP GFS Wave 0.25 degree analysis, HTSGW/DIRPW/PERPW",
+        unit: "m",
+        points: decoded.points,
+        nativeResolutionDegrees: NCEP_GFS_NATIVE_RESOLUTION_DEGREES,
+        displayResolutionDegrees: decoded.displayResolutionDegrees,
+        cycle: `${cycle.date} ${cycle.hour}Z`,
+        sampling: "viewport",
+        coverage: bounds
+      };
+    } catch (error) {
+      errors.push(`${cycle.date}${cycle.hour}: ${errorMessage(error)}`);
+    }
+  }
+  throw new Error(`NCEP GFS Wave unavailable (${errors.join(" | ")})`);
+}
+
 async function loadNcepGfsWindField(sampleBounds: WindFieldBounds, viewportSampling: boolean): Promise<WindFieldPayload> {
   const bounds = snapNcepBounds(sampleBounds);
   const errors: string[] = [];
@@ -575,6 +883,122 @@ async function decodeNcepGfsWind(
       rm(csvPath, { force: true }).catch(() => undefined)
     ]);
   }
+}
+
+async function decodeNcepGfsScalar(
+  bytes: Uint8Array,
+  cycle: { date: string; hour: string },
+  bounds: WindFieldBounds,
+  variable: string,
+  convert: (value: number) => number
+) {
+  await mkdir(WIND_FIELD_CACHE_DIR, { recursive: true });
+  const token = createHash("sha1")
+    .update(`scalar:${variable}:${cycle.date}${cycle.hour}:${bounds.west}:${bounds.south}:${bounds.east}:${bounds.north}:${Date.now()}`)
+    .digest("hex")
+    .slice(0, 16);
+  const gribPath = join(WIND_FIELD_CACHE_DIR, `ncep-${token}.grib2`);
+  const csvPath = join(WIND_FIELD_CACHE_DIR, `ncep-${token}.csv`);
+  try {
+    await writeFile(gribPath, bytes);
+    await execFileAsync(WGRIB2_PATH, [gribPath, "-csv", csvPath], {
+      cwd: join(process.cwd(), ".runtime", "tools", "wgrib2"),
+      windowsHide: true,
+      timeout: 45_000,
+      maxBuffer: 4 * 1024 * 1024
+    });
+    return parseNcepScalarCsv(await readFile(csvPath, "utf8"), variable, convert);
+  } finally {
+    await Promise.all([
+      rm(gribPath, { force: true }).catch(() => undefined),
+      rm(csvPath, { force: true }).catch(() => undefined)
+    ]);
+  }
+}
+
+async function decodeNcepGfsWave(
+  bytes: Uint8Array,
+  cycle: { date: string; hour: string },
+  bounds: WindFieldBounds
+) {
+  await mkdir(WIND_FIELD_CACHE_DIR, { recursive: true });
+  const token = createHash("sha1")
+    .update(`wave:${cycle.date}${cycle.hour}:${bounds.west}:${bounds.south}:${bounds.east}:${bounds.north}:${Date.now()}`)
+    .digest("hex")
+    .slice(0, 16);
+  const gribPath = join(WIND_FIELD_CACHE_DIR, `ncep-${token}.grib2`);
+  const csvPath = join(WIND_FIELD_CACHE_DIR, `ncep-${token}.csv`);
+  try {
+    await writeFile(gribPath, bytes);
+    await execFileAsync(WGRIB2_PATH, [gribPath, "-csv", csvPath], {
+      cwd: join(process.cwd(), ".runtime", "tools", "wgrib2"),
+      windowsHide: true,
+      timeout: 45_000,
+      maxBuffer: 6 * 1024 * 1024
+    });
+    return parseNcepWaveCsv(await readFile(csvPath, "utf8"));
+  } finally {
+    await Promise.all([rm(gribPath, { force: true }).catch(() => undefined), rm(csvPath, { force: true }).catch(() => undefined)]);
+  }
+}
+
+function parseNcepWaveCsv(csv: string) {
+  const grid = new Map<string, GfsWavePoint>();
+  let updatedAt = "";
+  for (const line of csv.split(/\r?\n/)) {
+    if (!line) continue;
+    const fields = line.split(",");
+    if (fields.length < 7) continue;
+    const validTime = fields[1].replaceAll('"', "");
+    const variable = fields[2].replaceAll('"', "");
+    if (variable !== "HTSGW" && variable !== "DIRPW" && variable !== "PERPW") continue;
+    const lon = Number(fields[4]);
+    const lat = Number(fields[5]);
+    const value = Number(fields[6]);
+    if (!Number.isFinite(lon) || !Number.isFinite(lat) || !Number.isFinite(value)) continue;
+    if (!updatedAt && validTime) updatedAt = `${validTime.replace(" ", "T")}Z`;
+    const key = windSampleKey(lon, lat);
+    const point = grid.get(key) ?? { lon, lat, heightM: Number.NaN, directionDeg: Number.NaN };
+    if (variable === "HTSGW") point.heightM = value;
+    if (variable === "DIRPW") point.directionDeg = value;
+    if (variable === "PERPW") point.periodS = value;
+    grid.set(key, point);
+  }
+  const complete = [...grid.values()].filter((point) => Number.isFinite(point.heightM) && Number.isFinite(point.directionDeg));
+  if (complete.length < 80) throw new Error(`wgrib2 decoded only ${complete.length} complete wave cells`);
+  const stride = Math.max(1, Math.ceil(complete.length / NCEP_GFS_WAVE_MAX_DISPLAY_POINTS));
+  return {
+    updatedAt: updatedAt || new Date().toISOString(),
+    displayResolutionDegrees: NCEP_GFS_NATIVE_RESOLUTION_DEGREES * stride,
+    points: complete.filter((_, index) => index % stride === 0)
+  };
+}
+
+function parseNcepScalarCsv(csv: string, variable: string, convert: (value: number) => number) {
+  const rawPoints: GfsScalarPoint[] = [];
+  let updatedAt = "";
+  for (const line of csv.split(/\r?\n/)) {
+    if (!line) continue;
+    const fields = line.split(",");
+    if (fields.length < 7) continue;
+    const validTime = fields[1].replaceAll('"', "");
+    const rowVariable = fields[2].replaceAll('"', "");
+    if (rowVariable !== variable) continue;
+    const lon = Number(fields[4]);
+    const lat = Number(fields[5]);
+    const rawValue = Number(fields[6]);
+    if (!Number.isFinite(lon) || !Number.isFinite(lat) || !Number.isFinite(rawValue)) continue;
+    if (!updatedAt && validTime) updatedAt = `${validTime.replace(" ", "T")}Z`;
+    rawPoints.push({ lon, lat, value: convert(rawValue) });
+  }
+  if (rawPoints.length < 100) throw new Error(`wgrib2 decoded only ${rawPoints.length} ${variable} cells`);
+  const stride = Math.max(1, Math.ceil(Math.sqrt(rawPoints.length / NCEP_GFS_MAX_DISPLAY_POINTS)));
+  const points = rawPoints.filter((_, index) => index % stride === 0);
+  return {
+    updatedAt: updatedAt || new Date().toISOString(),
+    displayResolutionDegrees: NCEP_GFS_NATIVE_RESOLUTION_DEGREES * stride,
+    points
+  };
 }
 
 function parseNcepWindCsv(csv: string) {

@@ -22,9 +22,17 @@ import { cycloneTangentialSign, cycloneVisualKinematics } from "@/lib/stormKinem
 import type { BossProfile } from "@/lib/bossEngine/types";
 import { useRadarSnapshot } from "./useRadarSnapshot";
 import type {
+  GfsScalarLayerId,
+  GfsScalarLayerPayload,
+  GfsWaveLayerPayload,
+  EcmwfStormTrack,
+  EcmwfTrackPayload,
+  OfficialAlertPayload,
+  RegionalObservationPayload,
   ImpactAreaPayload,
   ForecastScenario,
   ProvinceDefenseStatus,
+  RadarMosaicLayerPayload,
   SatelliteLayerPayload,
   Storm,
   WindFieldPayload,
@@ -32,6 +40,8 @@ import type {
 } from "@/lib/types";
 import { DefenseDrawer } from "./DefenseDrawer";
 import { useViewportWindField } from "./map/useViewportWindField";
+import { useViewportGfsLayer, useViewportGridLayer } from "./map/useViewportGfsLayer";
+import { usePollingEnvironmentLayer } from "./map/usePollingEnvironmentLayer";
 import { HudPanel, StatusPill } from "./HudPrimitives";
 import { BossSkillSlotPanel, IntelPanel } from "./IntelPanel";
 import {
@@ -126,8 +136,11 @@ const MAX_TERRAIN_TILES_PER_RENDER = 40;
 const CANVAS_DPR_CAP = 1.5;
 const GLOBAL_SATELLITE_SOURCE_ID = "global-satellite-source";
 const GLOBAL_SATELLITE_LAYER_ID = "global-satellite-layer";
+const CWA_RADAR_SOURCE_ID = "cwa-radar-source";
+const CWA_RADAR_LAYER_ID = "cwa-radar-layer";
 const terrainTileCache = new Map<string, Promise<HTMLCanvasElement | null>>();
 const globalSatelliteImageUrls = new WeakMap<MapLibreMap, string>();
+const cwaRadarImageUrls = new WeakMap<MapLibreMap, string>();
 let windFlowRendererSequence = 0;
 
 const DEFENSE_REGION_SHORT_NAMES = ["浙江", "福建", "广东", "上海", "江苏"] as const;
@@ -233,6 +246,11 @@ export function TyphoonMap({
   const [windRenderMode, setWindRenderMode] = useState<WindRenderMode>("streamlines");
   const [satelliteLayer, setSatelliteLayer] = useState<SatelliteLayerPayload | null>(null);
   const [windField, setWindField] = useState<WindFieldPayload | null>(null);
+  const [gfsScalarLayer, setGfsScalarLayer] = useState<GfsScalarLayerId | null>(null);
+  const [gfsWaveVisible, setGfsWaveVisible] = useState(false);
+  const [ecmwfTracksVisible, setEcmwfTracksVisible] = useState(false);
+  const [observationsVisible, setObservationsVisible] = useState(false);
+  const [cwaRadarVisible, setCwaRadarVisible] = useState(false);
   const [impactArea, setImpactArea] = useState<ImpactAreaPayload | null>(null);
   const [satelliteScreenBox, setSatelliteScreenBox] = useState<ScreenBox | null>(null);
   const [watchRegions, setWatchRegions] = useState<ProvinceAlertPoint[]>([]);
@@ -257,6 +275,10 @@ export function TyphoonMap({
   const mapNode = useRef<HTMLDivElement | null>(null);
   const terrainCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const windColorCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const gfsScalarCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const gfsWaveCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const ecmwfTrackCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const observationCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const windCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const forecastCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const markerRef = useRef<maplibregl.Marker | null>(null);
@@ -282,6 +304,38 @@ export function TyphoonMap({
     stormId: storm?.id,
     boundsForMap: viewportBoundsForMap
   });
+  const viewportGfsLayer = useViewportGfsLayer({
+    map: mapReady ? mapRef.current : null,
+    layer: gfsScalarLayer,
+    boundsForMap: viewportBoundsForMap
+  });
+  const viewportGfsWave = useViewportGridLayer<GfsWaveLayerPayload>({
+    map: mapReady ? mapRef.current : null,
+    endpoint: "/api/environment/gfs-wave",
+    enabled: gfsWaveVisible,
+    boundsForMap: viewportBoundsForMap
+  });
+  const cwaRadarLayer = usePollingEnvironmentLayer<RadarMosaicLayerPayload>({
+    url: "/api/environment/cwa-radar",
+    intervalMs: 5 * 60 * 1000,
+    enabled: !isLiveView
+  });
+  const ecmwfTrackLayer = usePollingEnvironmentLayer<EcmwfTrackPayload>({
+    url: "/api/environment/ecmwf-tracks",
+    intervalMs: 30 * 60 * 1000,
+    enabled: !isLiveView
+  });
+  const officialAlerts = usePollingEnvironmentLayer<OfficialAlertPayload>({
+    url: "/api/environment/official-alerts",
+    intervalMs: 5 * 60 * 1000,
+    enabled: !isLiveView
+  });
+  const regionalObservations = usePollingEnvironmentLayer<RegionalObservationPayload>({
+    url: "/api/environment/regional-observations",
+    intervalMs: 5 * 60 * 1000,
+    enabled: !isLiveView
+  });
+  const matchedEcmwfTracks = useMemo(() => matchEcmwfTracks(storm, ecmwfTrackLayer), [ecmwfTrackLayer, storm]);
   const regionLabelsRef = useRef<MapRegionLabel[]>(DEFAULT_REGION_LABELS);
   const activeWindField = viewportWindField ?? windField;
   const windFieldSignature = useMemo(() => {
@@ -602,6 +656,12 @@ export function TyphoonMap({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
+    syncCwaRadarLayer(map, cwaRadarLayer, cwaRadarVisible);
+  }, [cwaRadarLayer, cwaRadarVisible, mapReady]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
     const syncSatellite = () => {
       const nextBox =
         satelliteLayer?.status === "available" && environmentLayers.satellite
@@ -636,6 +696,34 @@ export function TyphoonMap({
 
   useEffect(() => {
     const map = mapRef.current;
+    const canvas = gfsScalarCanvasRef.current;
+    if (!map || !canvas || !mapReady) return;
+    return startGfsScalarLayerRenderer(map, canvas, viewportGfsLayer);
+  }, [mapReady, theme, viewportGfsLayer]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const canvas = gfsWaveCanvasRef.current;
+    if (!map || !canvas || !mapReady) return;
+    return startGfsWaveRenderer(map, canvas, viewportGfsWave);
+  }, [mapReady, theme, viewportGfsWave]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const canvas = ecmwfTrackCanvasRef.current;
+    if (!map || !canvas || !mapReady) return;
+    return startEcmwfTrackRenderer(map, canvas, matchedEcmwfTracks, ecmwfTracksVisible);
+  }, [ecmwfTracksVisible, mapReady, matchedEcmwfTracks, theme]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const canvas = observationCanvasRef.current;
+    if (!map || !canvas || !mapReady) return;
+    return startRegionalObservationRenderer(map, canvas, regionalObservations, observationsVisible);
+  }, [mapReady, observationsVisible, regionalObservations, theme]);
+
+  useEffect(() => {
+    const map = mapRef.current;
     const canvas = windCanvasRef.current;
     if (!map || !canvas || !mapReady) return;
     return startWindFieldRenderer(
@@ -663,6 +751,10 @@ export function TyphoonMap({
         {mapFailed ? <FallbackMap storm={storm} /> : <div className="map-canvas" ref={mapNode} />}
         {!mapFailed ? <canvas className="terrain-elevation-canvas" ref={terrainCanvasRef} aria-hidden="true" /> : null}
         <SatelliteCloudOverlay layer={satelliteLayer} box={satelliteScreenBox} />
+        {!mapFailed ? <canvas className="gfs-scalar-canvas" ref={gfsScalarCanvasRef} aria-hidden="true" /> : null}
+        {!mapFailed ? <canvas className="gfs-wave-canvas" ref={gfsWaveCanvasRef} aria-hidden="true" /> : null}
+        {!mapFailed ? <canvas className="ecmwf-track-canvas" ref={ecmwfTrackCanvasRef} aria-hidden="true" /> : null}
+        {!mapFailed ? <canvas className="regional-observation-canvas" ref={observationCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed ? <canvas className="wind-color-canvas" ref={windColorCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed ? <canvas className="wind-particle-canvas" ref={windCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed ? <canvas className="forecast-route-canvas" ref={forecastCanvasRef} aria-hidden="true" /> : null}
@@ -714,6 +806,7 @@ export function TyphoonMap({
         {!isLiveView && theme === "night-radar" && storms.length > 1 ? (
           <MultiStormTargetQueue storms={storms} activeIndex={activeIndex} onSelect={selectStorm} />
         ) : null}
+        {!isLiveView && theme === "night-radar" ? <OfficialAlertStrip payload={officialAlerts} /> : null}
 
         {!isLiveView && theme === "night-radar" ? (
           <div className="left-tactical-stack">
@@ -725,8 +818,24 @@ export function TyphoonMap({
               windField={activeWindField}
               impactArea={impactArea}
               cycloneCore={cycloneCoreAnalysis}
+              gfsScalarLayer={gfsScalarLayer}
+              gfsScalarPayload={viewportGfsLayer}
+              cwaRadar={cwaRadarLayer}
+              cwaRadarVisible={cwaRadarVisible}
+              gfsWave={viewportGfsWave}
+              gfsWaveVisible={gfsWaveVisible}
+              ecmwfTracks={ecmwfTrackLayer}
+              ecmwfTracksVisible={ecmwfTracksVisible}
+              ecmwfMemberCount={matchedEcmwfTracks.ensemble?.members.length ?? 0}
+              observations={regionalObservations}
+              observationsVisible={observationsVisible}
               windRenderMode={windRenderMode}
               onToggle={toggleEnvironmentLayer}
+              onGfsScalarLayerChange={setGfsScalarLayer}
+              onCwaRadarToggle={() => setCwaRadarVisible((current) => !current)}
+              onGfsWaveToggle={() => setGfsWaveVisible((current) => !current)}
+              onEcmwfTracksToggle={() => setEcmwfTracksVisible((current) => !current)}
+              onObservationsToggle={() => setObservationsVisible((current) => !current)}
               onWindRenderModeChange={setWindRenderMode}
             />
           </div>
@@ -739,8 +848,24 @@ export function TyphoonMap({
               windField={activeWindField}
               impactArea={impactArea}
               cycloneCore={cycloneCoreAnalysis}
+              gfsScalarLayer={gfsScalarLayer}
+              gfsScalarPayload={viewportGfsLayer}
+              cwaRadar={cwaRadarLayer}
+              cwaRadarVisible={cwaRadarVisible}
+              gfsWave={viewportGfsWave}
+              gfsWaveVisible={gfsWaveVisible}
+              ecmwfTracks={ecmwfTrackLayer}
+              ecmwfTracksVisible={ecmwfTracksVisible}
+              ecmwfMemberCount={matchedEcmwfTracks.ensemble?.members.length ?? 0}
+              observations={regionalObservations}
+              observationsVisible={observationsVisible}
               windRenderMode={windRenderMode}
               onToggle={toggleEnvironmentLayer}
+              onGfsScalarLayerChange={setGfsScalarLayer}
+              onCwaRadarToggle={() => setCwaRadarVisible((current) => !current)}
+              onGfsWaveToggle={() => setGfsWaveVisible((current) => !current)}
+              onEcmwfTracksToggle={() => setEcmwfTracksVisible((current) => !current)}
+              onObservationsToggle={() => setObservationsVisible((current) => !current)}
               onWindRenderModeChange={setWindRenderMode}
             />
           </>
@@ -1056,6 +1181,68 @@ function syncGlobalSatelliteLayer(map: MapLibreMap, layer: SatelliteLayerPayload
     );
   }
   map.setLayoutProperty(GLOBAL_SATELLITE_LAYER_ID, "visibility", visible ? "visible" : "none");
+}
+
+function syncCwaRadarLayer(map: MapLibreMap, layer: RadarMosaicLayerPayload | null, visible: boolean) {
+  const imageUrl = layer?.status === "available" ? layer.imageUrl : null;
+  if (!imageUrl || !layer) {
+    if (map.getLayer(CWA_RADAR_LAYER_ID)) map.removeLayer(CWA_RADAR_LAYER_ID);
+    if (map.getSource(CWA_RADAR_SOURCE_ID)) map.removeSource(CWA_RADAR_SOURCE_ID);
+    cwaRadarImageUrls.delete(map);
+    return;
+  }
+
+  const { bounds } = layer;
+  const coordinates: [[number, number], [number, number], [number, number], [number, number]] = [
+    [bounds.west, bounds.north],
+    [bounds.east, bounds.north],
+    [bounds.east, bounds.south],
+    [bounds.west, bounds.south]
+  ];
+  const existingSource = map.getSource(CWA_RADAR_SOURCE_ID) as ImageSource | undefined;
+  const previousImageUrl = cwaRadarImageUrls.get(map);
+  if (!existingSource) {
+    map.addSource(CWA_RADAR_SOURCE_ID, { type: "image", url: imageUrl, coordinates });
+  } else if (previousImageUrl !== imageUrl) {
+    existingSource.updateImage({ url: imageUrl, coordinates });
+  }
+  cwaRadarImageUrls.set(map, imageUrl);
+
+  if (!map.getLayer(CWA_RADAR_LAYER_ID)) {
+    const beforeLayer = map.getLayer("province-fill") ? "province-fill" : undefined;
+    map.addLayer(
+      {
+        id: CWA_RADAR_LAYER_ID,
+        type: "raster",
+        source: CWA_RADAR_SOURCE_ID,
+        paint: {
+          "raster-opacity": 0.72,
+          "raster-saturation": 0.15,
+          "raster-contrast": 0.08,
+          "raster-fade-duration": 300,
+          "raster-resampling": "linear"
+        }
+      },
+      beforeLayer
+    );
+  }
+  map.setLayoutProperty(CWA_RADAR_LAYER_ID, "visibility", visible ? "visible" : "none");
+}
+
+function OfficialAlertStrip({ payload }: { payload: OfficialAlertPayload | null }) {
+  if (!payload || (!payload.alerts.length && !payload.tide)) return null;
+  const hongKongHour = new Date(Date.now() + 8 * 60 * 60 * 1000).getUTCHours() + 1;
+  const tide = payload.tide?.hourly.find((point) => point.hour === hongKongHour) ?? payload.tide?.hourly[0];
+  return (
+    <aside className="official-alert-strip" aria-label="官方气象警特报">
+      <AlertTriangle size={14} />
+      <b>官方警特报</b>
+      <div>
+        {payload.alerts.slice(0, 3).map((alert) => <span key={alert.id}><i>{alert.source}</i>{alert.title}</span>)}
+        {tide ? <span title={payload.tide?.note}><i>HKO 天文潮</i>横澜岛 {tide.heightM.toFixed(2)}m</span> : null}
+      </div>
+    </aside>
+  );
 }
 
 function ForecastBadge({ storm }: { storm: Storm | null }) {
@@ -1394,8 +1581,24 @@ function EnvironmentLayerPanel({
   windField,
   impactArea,
   cycloneCore,
+  gfsScalarLayer,
+  gfsScalarPayload,
+  cwaRadar,
+  cwaRadarVisible,
+  gfsWave,
+  gfsWaveVisible,
+  ecmwfTracks,
+  ecmwfTracksVisible,
+  ecmwfMemberCount,
+  observations,
+  observationsVisible,
   windRenderMode,
   onToggle,
+  onGfsScalarLayerChange,
+  onCwaRadarToggle,
+  onGfsWaveToggle,
+  onEcmwfTracksToggle,
+  onObservationsToggle,
   onWindRenderModeChange
 }: {
   layers: EnvironmentLayerToggles;
@@ -1403,8 +1606,24 @@ function EnvironmentLayerPanel({
   windField: WindFieldPayload | null;
   impactArea: ImpactAreaPayload | null;
   cycloneCore: CycloneCoreAnalysis | null;
+  gfsScalarLayer: GfsScalarLayerId | null;
+  gfsScalarPayload: GfsScalarLayerPayload | null;
+  cwaRadar: RadarMosaicLayerPayload | null;
+  cwaRadarVisible: boolean;
+  gfsWave: GfsWaveLayerPayload | null;
+  gfsWaveVisible: boolean;
+  ecmwfTracks: EcmwfTrackPayload | null;
+  ecmwfTracksVisible: boolean;
+  ecmwfMemberCount: number;
+  observations: RegionalObservationPayload | null;
+  observationsVisible: boolean;
   windRenderMode: WindRenderMode;
   onToggle: (layer: EnvironmentLayerKey) => void;
+  onGfsScalarLayerChange: (layer: GfsScalarLayerId | null) => void;
+  onCwaRadarToggle: () => void;
+  onGfsWaveToggle: () => void;
+  onEcmwfTracksToggle: () => void;
+  onObservationsToggle: () => void;
   onWindRenderModeChange: (mode: WindRenderMode) => void;
 }) {
   const hasDirectNcepGfs = windField?.source === "NOAA/NCEP NOMADS Grib Filter";
@@ -1468,6 +1687,79 @@ function EnvironmentLayerPanel({
             </button>
           );
         })}
+      </div>
+      <div className="gfs-scalar-control" aria-label="GFS 气象格点图层">
+        <span>GFS 格点分析</span>
+        <div role="group" aria-label="选择 GFS 气象图层">
+          {([
+            ["pressure", "气压"],
+            ["precipitation", "降水"],
+            ["gust", "阵风"],
+            ["reflectivity", "模式回波"],
+            ["precipitable-water", "水汽"]
+          ] as Array<[GfsScalarLayerId, string]>).map(([id, label]) => (
+            <button
+              className={gfsScalarLayer === id ? "active" : ""}
+              key={id}
+              onClick={() => onGfsScalarLayerChange(gfsScalarLayer === id ? null : id)}
+              type="button"
+              aria-pressed={gfsScalarLayer === id}
+            >{label}</button>
+          ))}
+        </div>
+        <small>{gfsScalarPayload
+          ? `${gfsScalarPayload.label} · ${gfsScalarPayload.points.length} 格点 · ${gfsScalarPayload.cycle} · ${gfsScalarPayload.unit}`
+          : "按当前视口请求；模式回波不是实况雷达。"}</small>
+      </div>
+      <div className="supplemental-layer-grid">
+      <div className="cwa-radar-control" aria-label="CWA 实况雷达图层">
+        <span>降水实况</span>
+        <button
+          className={cwaRadarVisible ? "active" : ""}
+          disabled={cwaRadar?.status !== "available"}
+          onClick={onCwaRadarToggle}
+          type="button"
+          aria-pressed={cwaRadarVisible}
+        >CWA 实况雷达</button>
+        <small>{cwaRadar?.status === "available"
+          ? `${formatClock(cwaRadar.updatedAt)} · 10 分钟更新${cwaRadar.isStale ? " · 资料偏旧" : ""}`
+          : cwaRadar?.reason ?? "正在连接台湾中央气象署实况雷达…"}</small>
+      </div>
+      <div className="gfs-wave-control" aria-label="GFS Wave 海况图层">
+        <span>海况模式</span>
+        <button className={gfsWaveVisible ? "active" : ""} onClick={onGfsWaveToggle} type="button" aria-pressed={gfsWaveVisible}>
+          GFS Wave 波高 / 波向
+        </button>
+        <small>{gfsWave
+          ? `${gfsWave.points.length} 格点 · ${gfsWave.cycle} · 有效波高 m`
+          : "按当前视口请求；箭头表示主波向。"}</small>
+      </div>
+      <div className="ecmwf-track-control" aria-label="ECMWF 集合路径图层">
+        <span>补充路径资料</span>
+        <button
+          className={ecmwfTracksVisible ? "active" : ""}
+          disabled={ecmwfTracks?.status !== "available" || ecmwfMemberCount === 0}
+          onClick={onEcmwfTracksToggle}
+          type="button"
+          aria-pressed={ecmwfTracksVisible}
+        >ECMWF 集合路径</button>
+        <small>{ecmwfTracks?.status === "available"
+          ? ecmwfMemberCount > 0 ? `${ecmwfTracks.cycle} · 匹配 ${ecmwfMemberCount} 个集合成员` : `${ecmwfTracks.cycle} · 当前目标未匹配到成员`
+          : ecmwfTracks?.reason ?? "正在获取 ECMWF BUFR 路径…"}</small>
+      </div>
+      <div className="observation-control" aria-label="区域实况观测图层">
+        <span>区域观测</span>
+        <button
+          className={observationsVisible ? "active" : ""}
+          disabled={observations?.status !== "available"}
+          onClick={onObservationsToggle}
+          type="button"
+          aria-pressed={observationsVisible}
+        >测站 / 浮标 / 闪电</button>
+        <small>{observations?.status === "available"
+          ? `${observations.points.filter((point) => point.kind === "station").length} 站 · ${observations.points.filter((point) => point.kind === "buoy").length} 浮标 · ${observations.points.filter((point) => point.kind === "lightning").length} 闪电`
+          : observations?.reason ?? "正在获取区域实况观测…"}</small>
+      </div>
       </div>
       <div className="wind-render-mode" aria-label="10 米风显示方式">
         <span>10m 风显示</span>
@@ -1961,6 +2253,212 @@ function terrainBandColor(elevation: number): [number, number, number, number] {
   if (elevation < 1400) return [213, 116, 50, 164];
   if (elevation < 2600) return [181, 67, 55, 178];
   return [238, 220, 184, 192];
+}
+
+function startGfsScalarLayerRenderer(
+  map: MapLibreMap,
+  canvas: HTMLCanvasElement,
+  payload: GfsScalarLayerPayload | null
+) {
+  const context = canvas.getContext("2d", { alpha: true });
+  if (!context) return undefined;
+
+  const render = () => {
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    const width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
+    const height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+    if (!payload?.points.length) return;
+
+    const halfCell = Math.max(payload.displayResolutionDegrees, 0.25) * 0.56;
+    context.save();
+    context.globalCompositeOperation = "source-over";
+    for (const point of payload.points) {
+      const northwest = map.project([point.lon - halfCell, point.lat + halfCell]);
+      const southeast = map.project([point.lon + halfCell, point.lat - halfCell]);
+      const cellWidth = Math.max(2, southeast.x - northwest.x + 1);
+      const cellHeight = Math.max(2, southeast.y - northwest.y + 1);
+      const color = gfsScalarColor(payload.layer, point.value);
+      if (!color) continue;
+      context.fillStyle = color;
+      context.fillRect(northwest.x, northwest.y, cellWidth, cellHeight);
+    }
+    context.restore();
+  };
+
+  render();
+  map.on("move", render);
+  map.on("zoom", render);
+  map.on("resize", render);
+  return () => {
+    map.off("move", render);
+    map.off("zoom", render);
+    map.off("resize", render);
+    context.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+  };
+}
+
+function gfsScalarColor(layer: GfsScalarLayerId, value: number) {
+  if (layer === "pressure") {
+    const t = Math.max(0, Math.min(1, (value - 960) / 80));
+    return `rgba(${Math.round(220 - t * 175)},${Math.round(62 + t * 145)},${Math.round(92 + t * 138)},0.2)`;
+  }
+  if (layer === "precipitation") {
+    if (value < 0.05) return null;
+    if (value < 1) return "rgba(56,216,151,0.24)";
+    if (value < 5) return "rgba(247,210,72,0.32)";
+    if (value < 15) return "rgba(255,126,42,0.4)";
+    return "rgba(238,43,68,0.5)";
+  }
+  if (layer === "gust") {
+    if (value < 5) return null;
+    if (value < 15) return "rgba(37,211,177,0.2)";
+    if (value < 25) return "rgba(255,202,61,0.32)";
+    if (value < 35) return "rgba(255,101,38,0.42)";
+    return "rgba(235,38,72,0.52)";
+  }
+  if (layer === "reflectivity") {
+    if (value < 5) return null;
+    if (value < 20) return "rgba(49,203,111,0.24)";
+    if (value < 35) return "rgba(242,220,55,0.34)";
+    if (value < 50) return "rgba(246,103,38,0.44)";
+    return "rgba(210,40,165,0.54)";
+  }
+  if (value < 20) return "rgba(56,120,216,0.12)";
+  if (value < 40) return "rgba(31,205,220,0.2)";
+  if (value < 60) return "rgba(45,224,146,0.28)";
+  return "rgba(255,205,66,0.36)";
+}
+
+function startGfsWaveRenderer(map: MapLibreMap, canvas: HTMLCanvasElement, payload: GfsWaveLayerPayload | null) {
+  const context = canvas.getContext("2d", { alpha: true });
+  if (!context) return undefined;
+  const render = () => {
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    const width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
+    const height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+    if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+    if (!payload?.points.length) return;
+    const halfCell = Math.max(payload.displayResolutionDegrees, 0.25) * 0.56;
+    const arrowStride = Math.max(1, Math.ceil(Math.sqrt(payload.points.length / 420)));
+    payload.points.forEach((point, index) => {
+      if (point.heightM < 0.15) return;
+      const northwest = map.project([point.lon - halfCell, point.lat + halfCell]);
+      const southeast = map.project([point.lon + halfCell, point.lat - halfCell]);
+      context.fillStyle = waveHeightColor(point.heightM);
+      context.fillRect(northwest.x, northwest.y, Math.max(2, southeast.x - northwest.x + 1), Math.max(2, southeast.y - northwest.y + 1));
+      if (index % arrowStride !== 0) return;
+      const center = map.project([point.lon, point.lat]);
+      const radians = (point.directionDeg * Math.PI) / 180;
+      const length = 7 + Math.min(7, point.heightM * 1.4);
+      const dx = Math.sin(radians) * length;
+      const dy = -Math.cos(radians) * length;
+      context.strokeStyle = "rgba(224,252,255,0.72)";
+      context.lineWidth = 1;
+      context.beginPath();
+      context.moveTo(center.x - dx * 0.5, center.y - dy * 0.5);
+      context.lineTo(center.x + dx * 0.5, center.y + dy * 0.5);
+      context.stroke();
+    });
+  };
+  render();
+  map.on("move", render); map.on("zoom", render); map.on("resize", render);
+  return () => { map.off("move", render); map.off("zoom", render); map.off("resize", render); context.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight); };
+}
+
+function waveHeightColor(heightM: number) {
+  if (heightM < 1) return "rgba(32,139,190,0.18)";
+  if (heightM < 2.5) return "rgba(29,190,193,0.25)";
+  if (heightM < 4) return "rgba(239,207,63,0.34)";
+  if (heightM < 6) return "rgba(248,118,44,0.43)";
+  return "rgba(220,40,82,0.52)";
+}
+
+function matchEcmwfTracks(storm: Storm | null, payload: EcmwfTrackPayload | null) {
+  if (!storm || payload?.status !== "available") return { deterministic: null, ensemble: null };
+  const nearest = (tracks: EcmwfStormTrack[]) => {
+    let match: EcmwfStormTrack | null = null;
+    let distance = Number.POSITIVE_INFINITY;
+    for (const candidate of tracks) {
+      const point = candidate.members[0]?.points[0];
+      if (!point) continue;
+      const nextDistance = distanceBetweenKm(storm.position, point);
+      if (nextDistance < distance) { distance = nextDistance; match = candidate; }
+    }
+    return distance <= 800 ? match : null;
+  };
+  return { deterministic: nearest(payload.deterministic), ensemble: nearest(payload.ensemble) };
+}
+
+function startEcmwfTrackRenderer(
+  map: MapLibreMap,
+  canvas: HTMLCanvasElement,
+  tracks: { deterministic: EcmwfStormTrack | null; ensemble: EcmwfStormTrack | null },
+  visible: boolean
+) {
+  const context = canvas.getContext("2d", { alpha: true });
+  if (!context) return undefined;
+  const render = () => {
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    const width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
+    const height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+    if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+    if (!visible) return;
+    for (const member of tracks.ensemble?.members ?? []) drawModelTrack(context, map, member.points, "rgba(207,119,255,0.2)", 1);
+    const deterministic = tracks.deterministic?.members[0];
+    if (deterministic) drawModelTrack(context, map, deterministic.points, "rgba(255,181,61,0.92)", 2.4);
+  };
+  render(); map.on("move", render); map.on("zoom", render); map.on("resize", render);
+  return () => { map.off("move", render); map.off("zoom", render); map.off("resize", render); context.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight); };
+}
+
+function drawModelTrack(context: CanvasRenderingContext2D, map: MapLibreMap, points: Array<{ lon: number; lat: number }>, color: string, width: number) {
+  if (points.length < 2) return;
+  context.beginPath();
+  points.forEach((point, index) => {
+    const pixel = map.project([point.lon, point.lat]);
+    if (index === 0) context.moveTo(pixel.x, pixel.y); else context.lineTo(pixel.x, pixel.y);
+  });
+  context.strokeStyle = color;
+  context.lineWidth = width;
+  context.setLineDash(width > 2 ? [8, 5] : []);
+  context.stroke();
+  context.setLineDash([]);
+}
+
+function startRegionalObservationRenderer(map: MapLibreMap, canvas: HTMLCanvasElement, payload: RegionalObservationPayload | null, visible: boolean) {
+  const context = canvas.getContext("2d", { alpha: true });
+  if (!context) return undefined;
+  const render = () => {
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    const width = Math.max(1, Math.floor(canvas.clientWidth * dpr)); const height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+    if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+    context.setTransform(dpr, 0, 0, dpr, 0, 0); context.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+    if (!visible || payload?.status !== "available") return;
+    for (const point of payload.points) {
+      const pixel = map.project([point.lon, point.lat]);
+      if (pixel.x < -10 || pixel.y < -10 || pixel.x > canvas.clientWidth + 10 || pixel.y > canvas.clientHeight + 10) continue;
+      if (point.kind === "station") {
+        context.beginPath(); context.arc(pixel.x, pixel.y, 2.2, 0, Math.PI * 2);
+        context.fillStyle = point.gustSpeed && point.gustSpeed >= 17 ? "#ff7449" : "rgba(139,246,226,0.88)"; context.fill();
+      } else if (point.kind === "buoy") {
+        context.save(); context.translate(pixel.x, pixel.y); context.rotate(Math.PI / 4); context.fillStyle = "#ffd65b"; context.fillRect(-3, -3, 6, 6); context.restore();
+      } else {
+        context.strokeStyle = "#fff36a"; context.lineWidth = 1.5; context.beginPath(); context.moveTo(pixel.x + 2, pixel.y - 5); context.lineTo(pixel.x - 2, pixel.y); context.lineTo(pixel.x + 1, pixel.y); context.lineTo(pixel.x - 2, pixel.y + 5); context.stroke();
+      }
+    }
+  };
+  render(); map.on("move", render); map.on("zoom", render); map.on("resize", render);
+  return () => { map.off("move", render); map.off("zoom", render); map.off("resize", render); context.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight); };
 }
 
 function startStormIntensityRenderer(
