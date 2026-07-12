@@ -9451,7 +9451,28 @@ a:focus-visible {
 }
 
 .live-director .live-audience-panel {
-  grid-template-rows: 88px 68px 46px 72px minmax(198px, 1.25fr) minmax(80px, 0.75fr) 30px;
+  grid-template-rows: 88px 68px 46px 78px minmax(192px, 1.25fr) minmax(80px, 0.75fr) 30px;
+}
+
+/* The audience rail is deliberately denser than the standalone layout.  Keep
+   metric values in their own grid cell: direction names such as “北北西” used
+   to wrap below the 72px row and visually invade the province broadcast. */
+.live-director .live-situation-metrics > div {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.live-director .live-situation-metrics strong {
+  min-width: 0;
+  font-size: clamp(24px, 1.55vw, 30px);
+  letter-spacing: -0.04em;
+  white-space: nowrap;
+}
+
+.live-director .live-situation-metrics small {
+  align-self: end;
+  font-size: 14px;
+  letter-spacing: -0.03em;
 }
 
 .live-director .live-audience-hero {
@@ -9857,6 +9878,61 @@ a:focus-visible {
   background: var(--amber);
   border-color: rgba(62, 39, 15, 0.42);
 }
+
+.main-console-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 30px;
+  padding: 6px 10px;
+  color: rgba(236, 251, 255, 0.84);
+  border: 1px solid rgba(0, 216, 255, 0.38);
+  background: rgba(0, 216, 255, 0.08);
+  font: 800 11px/1 "Microsoft YaHei UI", sans-serif;
+  letter-spacing: .04em;
+  white-space: nowrap;
+}
+
+.main-console-link:hover { color: #051014; background: var(--cyan); }
+.radar-shell[data-theme="archive-command"] .main-console-link { color: #2d2113; border-color: rgba(62, 39, 15, .42); background: rgba(200, 152, 72, .2); }
+
+.console-shell {
+  --console-line: rgba(132, 223, 244, .18);
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr);
+  grid-template-rows: 88px minmax(0, 1fr) 70px;
+  color: #e6f8fb;
+  background:
+    linear-gradient(90deg, rgba(0, 216, 255, .055) 1px, transparent 1px) 0 0 / 32px 32px,
+    linear-gradient(rgba(0, 216, 255, .04) 1px, transparent 1px) 0 0 / 32px 32px,
+    radial-gradient(circle at 86% 5%, rgba(0, 151, 195, .2), transparent 31%),
+    #071116;
+}
+.console-topbar { grid-column: 1 / -1; display:flex; align-items:center; gap:22px; padding: 0 30px; border-bottom: 1px solid var(--console-line); background: rgba(4, 13, 18, .9); }
+.console-topbar > div { display:grid; gap:3px; }
+.console-topbar span, .console-section-title span { color:#65b5c6; font:700 10px/1 ui-monospace, Consolas, monospace; letter-spacing:.16em; }
+.console-topbar strong { font-size:20px; letter-spacing:.06em; }
+.console-back, .console-quiet { display:inline-flex; align-items:center; gap:7px; border:0; background:transparent; color:#9fbbc2; font-size:12px; cursor:pointer; }
+.console-quiet { margin-left:auto; padding:8px 10px; border:1px solid var(--console-line); }
+.console-nav { grid-row:2; padding:20px 14px; border-right:1px solid var(--console-line); background:rgba(4, 13, 18, .66); display:flex; flex-direction:column; gap:5px; }
+.console-nav button { display:flex; align-items:center; gap:10px; padding:12px; color:#85a8af; background:transparent; border:1px solid transparent; text-align:left; cursor:pointer; font-size:13px; }
+.console-nav button.active { color:#e8fcff; border-color:rgba(0,216,255,.46); background:linear-gradient(90deg, rgba(0,216,255,.16), transparent); }
+.console-nav-note { margin-top:auto; display:flex; gap:8px; padding:14px 8px 4px; color:#688890; font-size:11px; line-height:1.55; }
+.console-workspace { grid-column:2; grid-row:2; overflow:auto; padding:42px clamp(26px, 5vw, 84px); }
+.console-section-title { display:flex; gap:13px; align-items:center; margin-bottom:30px; color:var(--cyan); }
+.console-section-title h1 { margin:3px 0 0; color:#effdff; font-size:26px; letter-spacing:.04em; }
+.console-stack { max-width:960px; display:grid; gap:14px; }
+.route-card { padding:20px; border:1px solid var(--console-line); background:linear-gradient(135deg, rgba(13,34,42,.85), rgba(5,17,22,.74)); box-shadow: inset 3px 0 0 rgba(0,216,255,.35); }
+.route-card header { display:flex; align-items:flex-start; justify-content:space-between; gap:15px; margin-bottom:18px; }
+.route-card header b { display:block; font-size:15px; }.route-card header small { display:block; margin-top:5px; color:#779aa1; font-size:12px; }.route-card header em { padding:5px 7px; color:#78d9a2; border:1px solid rgba(70,214,140,.27); font-style:normal; font-size:11px; white-space:nowrap; }
+.console-grid { display:grid; gap:13px; margin-bottom:13px; }.console-grid.three { grid-template-columns: 2fr 1fr 90px; }.console-grid.two { grid-template-columns:1fr 1fr; }
+.console-field { display:grid; gap:7px; color:#a8c5cb; font-size:11px; }.console-field input, .console-field select { width:100%; height:37px; padding:0 10px; color:#e5f7fa; background:rgba(0,0,0,.25); border:1px solid rgba(132,223,244,.26); border-radius:0; outline:none; }.console-field input:focus, .console-field select:focus { border-color:var(--cyan); }.console-field select option { color:#e5f7fa; background:#0b1b22; }.console-field small { color:#66868e; line-height:1.4; }
+.console-toggle { display:grid; grid-template-columns:minmax(0,1fr) 42px; gap:15px; align-items:center; padding:14px 0; border-top:1px solid rgba(132,223,244,.11); cursor:pointer; }.console-toggle span { display:grid; gap:5px; }.console-toggle b { font-size:13px; }.console-toggle small { color:#779aa1; font-size:11px; }.console-toggle input { position:absolute; opacity:0; }.console-toggle i { position:relative; height:20px; border:1px solid #52717a; background:#0a171c; }.console-toggle i::after { content:""; position:absolute; top:3px; left:3px; width:12px; height:12px; background:#68868d; transition:transform .16s ease, background .16s ease; }.console-toggle input:checked + i { border-color:#00d8ff; }.console-toggle input:checked + i::after { transform:translateX(20px); background:#00d8ff; }
+.console-callout { margin:0; padding:13px 15px; border-left:2px solid var(--amber); color:#a7c2c7; background:rgba(255,176,0,.06); font-size:12px; line-height:1.6; }.console-callout code { color:#ecfbff; }
+.console-footer { grid-column:2; grid-row:3; display:flex; align-items:center; justify-content:space-between; gap:20px; padding:0 clamp(26px, 5vw, 84px); border-top:1px solid var(--console-line); background:rgba(4,13,18,.92); }.console-footer p { margin:0; color:#8cadb4; font-size:12px; }.console-save { display:inline-flex; align-items:center; gap:8px; min-height:37px; padding:0 15px; color:#041014; background:#00d8ff; border:0; cursor:pointer; font-weight:800; }.console-save:disabled { opacity:.6; cursor:wait; }.console-loading { margin:auto; color:#a8c5cb; }
+@media (max-width: 760px) { .console-shell { grid-template-columns:1fr; grid-template-rows:72px auto minmax(0,1fr) 66px; }.console-topbar { padding:0 16px; gap:12px; }.console-topbar strong { font-size:16px; }.console-quiet { padding:0; border:0; font-size:0; }.console-quiet svg { width:18px; }.console-nav { grid-column:1; grid-row:2; flex-direction:row; overflow:auto; padding:8px; border-right:0; border-bottom:1px solid var(--console-line); }.console-nav button { flex:0 0 auto; padding:9px; }.console-nav button span { display:none; }.console-nav-note { display:none; }.console-workspace { grid-column:1; grid-row:3; padding:26px 16px; }.console-footer { grid-column:1; grid-row:4; padding:0 16px; }.console-footer p { max-width:60%; }.console-grid.three, .console-grid.two { grid-template-columns:1fr; }.route-card { padding:15px; }.route-card header { display:grid; }.route-card header em { width:max-content; }.main-console-link { padding:6px; }.main-console-link svg { margin:0; } }
 
 @media (max-width: 980px), (max-height: 700px) {
   .live-director {

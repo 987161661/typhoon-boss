@@ -9,8 +9,8 @@ import type {
   TrackPoint
 } from "@/lib/types";
 import { findProvinceReferencePoint, normalizeProvinceName } from "@/lib/provinceGeo";
+import { readControlConsoleSettings } from "@/lib/controlConsoleSettingsStore";
 
-const ZJ_API = "https://typhoon.slt.zj.gov.cn/Api";
 const GDACS_SEARCH_API = "https://gdacs.org/gdacsapi/api/events/geteventlist/SEARCH";
 // The radar client polls every 10 seconds. Do not keep a second server-side
 // freshness window here: the latest point must come from the upstream source
@@ -276,15 +276,20 @@ export function getDataSourceLabel() {
 }
 
 async function getTyphoonList(year: number): Promise<ZjTyphoonListItem[]> {
-  return fetchJson<ZjTyphoonListItem[]>(`${ZJ_API}/TyphoonList/${year}`);
+  return fetchJson<ZjTyphoonListItem[]>(`${await typhoonApiBase()}/TyphoonList/${year}`);
 }
 
 async function getTyphoonInfo(tfid: string): Promise<ZjTyphoonInfo | null> {
   try {
-    return await fetchJson<ZjTyphoonInfo>(`${ZJ_API}/TyphoonInfo/${tfid}`);
+    return await fetchJson<ZjTyphoonInfo>(`${await typhoonApiBase()}/TyphoonInfo/${tfid}`);
   } catch {
     return null;
   }
+}
+
+async function typhoonApiBase() {
+  const settings = await readControlConsoleSettings();
+  return settings.dataSources.typhoonTrackBaseUrl.replace(/\/$/, "");
 }
 
 async function fetchJson<T>(url: string): Promise<T> {

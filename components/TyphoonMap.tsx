@@ -14,7 +14,7 @@ import {
   type SetStateAction
 } from "react";
 import maplibregl, { type GeoJSONSource, type ImageSource, type Map as MapLibreMap } from "maplibre-gl";
-import { AlertTriangle, ChevronRight, Database, Palette, RadioTower, Satellite, Shield, Wind } from "lucide-react";
+import { AlertTriangle, ChevronRight, Database, Palette, RadioTower, Satellite, Settings2, Shield, Wind } from "lucide-react";
 import Link from "next/link";
 import { makeCircle } from "@/lib/provinceGeo";
 import { createStormVisualCanvas } from "@/lib/stormVisualRenderer";
@@ -232,6 +232,24 @@ export function TyphoonMap({
   const [impactArea, setImpactArea] = useState<ImpactAreaPayload | null>(null);
   const [satelliteScreenBox, setSatelliteScreenBox] = useState<ScreenBox | null>(null);
   const [watchRegions, setWatchRegions] = useState<ProvinceAlertPoint[]>([]);
+  useEffect(() => {
+    if (view === "live" || typeof window === "undefined") return;
+    const requestedTheme = new URLSearchParams(window.location.search).get("theme");
+    void fetch("/api/control-console", { cache: "no-store" })
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload) => {
+        const mapSettings = payload?.settings?.map;
+        if (!mapSettings) return;
+        if (!requestedTheme && (mapSettings.defaultTheme === "night-radar" || mapSettings.defaultTheme === "archive-command")) setTheme(mapSettings.defaultTheme);
+        const layers = mapSettings.defaultLayers;
+        if (layers && typeof layers === "object") setEnvironmentLayers({
+          satellite: layers.satellite !== false,
+          impact: layers.impact !== false,
+          wind: mapSettings.performanceMode === "reduced" ? false : layers.wind !== false
+        });
+      })
+      .catch(() => undefined);
+  }, [view]);
   const mapNode = useRef<HTMLDivElement | null>(null);
   const terrainCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const stormIntensityCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -1179,6 +1197,10 @@ function TopCommandBar({
             <RadioTower size={15} aria-hidden="true" />
             直播版
           </Link>
+          <Link className="main-console-link" href="/console" aria-label="打开台风雷达控制台">
+            <Settings2 size={15} aria-hidden="true" />
+            控制台
+          </Link>
           <ThemeSwitcher theme={theme} onThemeChange={onThemeChange} />
         </div>
       </header>
@@ -1205,6 +1227,10 @@ function TopCommandBar({
         <Link className="main-live-link" href="/live">
           <RadioTower size={15} aria-hidden="true" />
           直播版
+        </Link>
+        <Link className="main-console-link" href="/console">
+          <Settings2 size={15} aria-hidden="true" />
+          控制台
         </Link>
         <ThemeSwitcher theme={theme} onThemeChange={onThemeChange} />
       </div>

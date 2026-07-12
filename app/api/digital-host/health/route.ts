@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { readControlConsoleSettings } from "@/lib/controlConsoleSettingsStore";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -6,7 +7,8 @@ export const revalidate = 0;
 const DEFAULT_HOST_URL = "http://127.0.0.1:5173";
 
 export async function GET() {
-  const hostUrl = process.env.LINGLAN_HOST_URL || DEFAULT_HOST_URL;
+  const settings = await readControlConsoleSettings();
+  const hostUrl = settings.digitalHostUrl || process.env.LINGLAN_HOST_URL || DEFAULT_HOST_URL;
   try {
     const response = await fetch(
       `${hostUrl.replace(/\/$/, "")}/api/live-runtime-health`,
