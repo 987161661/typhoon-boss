@@ -8,9 +8,10 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const runtimeDir = path.join(root, ".runtime");
 const statePath = path.join(runtimeDir, "typhoon-evolution-agent.json");
 const reportPath = path.join(root, "台风实时演进分析.md");
-const apiBase = "https://typhoon.slt.zj.gov.cn/Api";
-const miniMaxEndpoint = "https://api.minimaxi.com/v1/chat/completions";
-const miniMaxModel = "MiniMax-M3";
+let apiBase = "https://typhoon.slt.zj.gov.cn/Api";
+let miniMaxEndpoint = "https://api.minimaxi.com/v1/chat/completions";
+let miniMaxModel = "MiniMax-M3";
+let documentAgentApiKey = "";
 const cityWindCacheMs = 50 * 60 * 1000;
 const cityLocations = [
   { region: "北京市", city: "北京", lat: 39.9042, lon: 116.4074 },
@@ -52,7 +53,8 @@ const cityLocations = [
 loadEnvFile(path.join(root, ".env.local"));
 
 async function main() {
-  const apiKey = process.env.MINIMAX_API_KEY;
+  await applyControlConsoleOverrides();
+  const apiKey = documentAgentApiKey || process.env.MINIMAX_API_KEY;
   if (!apiKey) throw new Error("MINIMAX_API_KEY is missing. Add it to the local .env.local file.");
 
   const now = new Date();
@@ -84,6 +86,18 @@ async function main() {
   await writeAtomicJson(statePath, nextState);
   await writeAtomicText(reportPath, renderReport(facts, changeSet, cityWind, analysis, analysisMode, history, now));
   console.log(`Updated ${path.basename(reportPath)} with ${facts.storms.length} active storm(s) and ${cityWind.cities.length} city wind rows.`);
+}
+
+async function applyControlConsoleOverrides() {
+  const settings = await readJson(path.join(runtimeDir, "control-console.json"), null);
+  if (!settings || typeof settings !== "object") return;
+  const sourceBaseUrl = settings.dataSources?.typhoonTrackBaseUrl;
+  if (typeof sourceBaseUrl === "string" && sourceBaseUrl.trim()) apiBase = sourceBaseUrl.trim().replace(/\/$/, "");
+  const route = settings.routes?.documentAgent;
+  if (!route || typeof route !== "object") return;
+  if (typeof route.endpoint === "string" && route.endpoint.trim()) miniMaxEndpoint = route.endpoint.trim();
+  if (typeof route.model === "string" && route.model.trim()) miniMaxModel = route.model.trim();
+  if (typeof route.apiKey === "string" && route.apiKey.trim()) documentAgentApiKey = route.apiKey.trim();
 }
 
 async function collectTyphoonFacts(now) {
