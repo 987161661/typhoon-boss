@@ -1,5 +1,5 @@
 import type { Storm, TrackPoint } from "@/lib/types";
-import { getProvinceReferencePoints } from "@/lib/provinceGeo";
+import { findProvinceAtCoordinate, getProvinceReferencePoints } from "@/lib/provinceGeo";
 import { getAhiEvidenceForStorm, type AhiEvidenceSummary } from "./ahiEvidence";
 import { sampleBossEnvironment, type EnvironmentFeatures } from "./environmentSampler";
 import { getHimawariProductsForStorm, type SatelliteProductsSummary } from "./satelliteProducts";
@@ -59,6 +59,7 @@ export async function buildBossProfile(storm: Storm): Promise<BossProfile> {
   ]);
   const events = buildEvents(storm, intensity, landfall, structure);
   const energy = calculateBossEnergy(storm);
+  const landfallScenarios = buildLandfallScenarios(storm, landfall);
 
   return {
     stormId: storm.id,
@@ -74,6 +75,8 @@ export async function buildBossProfile(storm: Storm): Promise<BossProfile> {
     phaseAxes,
     rating: String(storm.rating),
     energy,
+    landfall: summarizeLandfall(landfall),
+    landfallScenarios,
     riskSummary: buildRiskSummary(storm, archetype, phase, landfall, environment, satellite, structure),
     primarySkillIds: skills.slice(0, 3).map((skill) => skill.id),
     skills,
@@ -113,7 +116,10 @@ function buildIntensityFeatures(storm: Storm) {
 }
 
 function buildLandfallFeatures(storm: Storm) {
-  const path = [storm.position, ...storm.forecast.map((point) => ({ lon: point.lon, lat: point.lat }))];
+  const path = [
+    { ...storm.position, time: storm.updatedAt, isForecast: false },
+    ...storm.forecast.map((point) => ({ lon: point.lon, lat: point.lat, time: point.time, isForecast: true }))
+  ];
   const watchPoints = getProvinceReferencePoints({ coastalOnly: true });
   const distances = watchPoints.map((watch) => ({
     name: watch.shortName,
@@ -121,13 +127,225 @@ function buildLandfallFeatures(storm: Storm) {
   })).sort((a, b) => a.distanceKm - b.distanceKm);
   const nearest = distances[0] ?? null;
   const influenceRadius = Math.max(storm.windRadiiKm.r7 || 0, 260);
+  const currentProvince = findProvinceAtCoordinate(storm.position, { coastalOnly: true });
+  let previousProvince = currentProvince;
+  let forecastLandfall: { province: string; time: string } | null = null;
+
+  for (const point of storm.forecast) {
+    const province = findProvinceAtCoordinate(point, { coastalOnly: true });
+    if (!previousProvince && province) {
+      forecastLandfall = { province: province.shortName, time: point.time };
+      break;
+    }
+    previousProvince = province;
+  }
 
   return {
     nearestProvince: nearest?.name ?? null,
     nearestDistanceKm: nearest?.distanceKm ?? null,
     provincesInCorridor: distances.filter((item) => item.distanceKm <= Math.max(influenceRadius, 360)).map((item) => item.name),
-    isLandfallPressure: Boolean(nearest && nearest.distanceKm <= Math.max(influenceRadius * 1.2, 420))
+    isLandfallPressure: Boolean(nearest && nearest.distanceKm <= Math.max(influenceRadius * 1.2, 420)),
+    currentProvince: currentProvince?.shortName ?? null,
+    forecastLandfallProvince: forecastLandfall?.province ?? null,
+    forecastLandfallAt: forecastLandfall?.time ?? null,
+    provinceDistances: distances
   };
+}
+
+function summarizeLandfall(landfall: ReturnType<typeof buildLandfallFeatures>) {
+  if (landfall.currentProvince) {
+    return {
+      status: "overland" as const,
+      targetProvince: landfall.currentProvince,
+      estimatedAt: null,
+      nearestDistanceKm: 0,
+      evidenceLevel: "inferred" as const,
+      detail: `中心位置已进入${landfall.currentProvince}行政范围，是否正式登陆仍以气象部门通报为准。`
+    };
+  }
+  if (landfall.forecastLandfallProvince && landfall.forecastLandfallAt) {
+    return {
+      status: "forecast-landfall" as const,
+      targetProvince: landfall.forecastLandfallProvince,
+      estimatedAt: landfall.forecastLandfallAt,
+      nearestDistanceKm: landfall.nearestDistanceKm,
+      evidenceLevel: "inferred" as const,
+      detail: `主预报路径首个进入陆地区域的点位于${landfall.forecastLandfallProvince}，时次为${landfall.forecastLandfallAt}。`
+    };
+  }
+  if (landfall.isLandfallPressure && landfall.nearestProvince) {
+    return {
+      status: "approaching" as const,
+      targetProvince: landfall.nearestProvince,
+      estimatedAt: null,
+      nearestDistanceKm: landfall.nearestDistanceKm,
+      evidenceLevel: "inferred" as const,
+      detail: `未来路径走廊靠近${landfall.nearestProvince}，尚无可明确标注的登陆时次。`
+    };
+  }
+  return {
+    status: "open-ocean" as const,
+    targetProvince: null,
+    estimatedAt: null,
+    nearestDistanceKm: landfall.nearestDistanceKm,
+    evidenceLevel: "inferred" as const,
+    detail: "当前主预报路径没有给出明确的沿海登陆点。"
+  };
+}
+
+function buildLandfallScenarios(storm: Storm, landfall: ReturnType<typeof buildLandfallFeatures>) {
+  const sourceScenarios = storm.forecastScenarios.length > 0
+    ? storm.forecastScenarios
+    : storm.forecast.length > 0
+      ? [{ id: `${storm.id}-primary`, agency: "中国", agencyCode: "CMA", points: storm.forecast, isPrimary: true }]
+      : [];
+  const coastalProvinces = getProvinceReferencePoints({ coastalOnly: true });
+  const agencyTotal = Math.max(1, sourceScenarios.length);
+  const aggregates = new Map<string, {
+    province: string;
+    score: number;
+    timeWeightedMs: number;
+    timeWeight: number;
+    windWeighted: number;
+    windWeight: number;
+    directHits: number;
+    agencies: Set<string>;
+  }>();
+
+  const addCandidate = ({
+    province,
+    score,
+    point,
+    agencyCode,
+    direct
+  }: {
+    province: string;
+    score: number;
+    point?: TrackPoint | null;
+    agencyCode?: string | null;
+    direct?: boolean;
+  }) => {
+    if (!Number.isFinite(score) || score <= 0) return;
+    const current = aggregates.get(province) ?? {
+      province,
+      score: 0,
+      timeWeightedMs: 0,
+      timeWeight: 0,
+      windWeighted: 0,
+      windWeight: 0,
+      directHits: 0,
+      agencies: new Set<string>()
+    };
+    current.score += score;
+    if (agencyCode) current.agencies.add(agencyCode);
+    if (direct) current.directHits += 1;
+    if (point) {
+      const pointTime = parseStormTime(point.time);
+      if (pointTime !== null) {
+        current.timeWeightedMs += pointTime * score;
+        current.timeWeight += score;
+      }
+      if (Number.isFinite(point.wind) && point.wind > 0) {
+        current.windWeighted += point.wind * score;
+        current.windWeight += score;
+      }
+    }
+    aggregates.set(province, current);
+  };
+
+  if (landfall.currentProvince) {
+    addCandidate({
+      province: landfall.currentProvince,
+      score: 4,
+      point: { ...storm.position, time: storm.updatedAt, wind: storm.maxWind, pressure: storm.minPressure },
+      agencyCode: "OBS",
+      direct: true
+    });
+  }
+
+  sourceScenarios.forEach((scenario) => {
+    const points = scenario.points.filter((point) => Number.isFinite(point.lon) && Number.isFinite(point.lat));
+    if (points.length === 0) return;
+    const directPoint = points.find((point) => findProvinceAtCoordinate(point, { coastalOnly: true }));
+    const scenarioWeight = scenario.isPrimary ? 1.35 : 1;
+
+    if (directPoint) {
+      const province = findProvinceAtCoordinate(directPoint, { coastalOnly: true });
+      if (!province) return;
+      const pointConfidence = clamp((directPoint.probability || 65) / 100, 0.4, 1);
+      addCandidate({
+        province: province.shortName,
+        score: scenarioWeight * pointConfidence,
+        point: directPoint,
+        agencyCode: scenario.agencyCode,
+        direct: true
+      });
+      return;
+    }
+
+    const nearest = coastalProvinces
+      .map((province) => {
+        const point = points.reduce((best, candidate) => {
+          const candidateDistance = distanceBetweenKm(candidate, { lon: province.center[0], lat: province.center[1] });
+          return candidateDistance < best.distanceKm ? { point: candidate, distanceKm: candidateDistance } : best;
+        }, { point: points[0], distanceKm: Number.POSITIVE_INFINITY });
+        return { province, ...point };
+      })
+      .sort((a, b) => a.distanceKm - b.distanceKm)[0];
+    const corridorLimitKm = Math.max((storm.windRadiiKm.r7 || 0) * 1.3, 520);
+    if (!nearest || nearest.distanceKm > corridorLimitKm) return;
+    addCandidate({
+      province: nearest.province.shortName,
+      score: scenarioWeight * Math.exp(-nearest.distanceKm / 300) * 0.62,
+      point: nearest.point,
+      agencyCode: scenario.agencyCode,
+      direct: false
+    });
+  });
+
+  landfall.provinceDistances.slice(0, 5).forEach((candidate, index) => {
+    if (aggregates.size >= 3 && aggregates.has(candidate.name)) return;
+    const province = coastalProvinces.find((item) => item.shortName === candidate.name);
+    const closestPoint = province && storm.forecast.length > 0
+      ? storm.forecast.reduce((best, point) => {
+          const distanceKm = distanceBetweenKm(point, { lon: province.center[0], lat: province.center[1] });
+          return distanceKm < best.distanceKm ? { point, distanceKm } : best;
+        }, { point: storm.forecast[0], distanceKm: Number.POSITIVE_INFINITY }).point
+      : storm.forecast[0] ?? null;
+    addCandidate({
+      province: candidate.name,
+      score: Math.exp(-candidate.distanceKm / 340) * (0.24 - index * 0.025),
+      point: closestPoint,
+      direct: false
+    });
+  });
+
+  const ranked = [...aggregates.values()]
+    .map((item) => ({ ...item, calibratedScore: Math.pow(item.score, 0.72) }))
+    .sort((a, b) => b.calibratedScore - a.calibratedScore)
+    .slice(0, 3);
+  const totalScore = ranked.reduce((sum, item) => sum + item.calibratedScore, 0);
+  if (ranked.length === 0 || totalScore <= 0) return [];
+  const probabilities = ranked.map((item) => Math.max(1, Math.round((item.calibratedScore / totalScore) * 100)));
+  probabilities[0] += 100 - probabilities.reduce((sum, value) => sum + value, 0);
+
+  return ranked.map((item, index) => {
+    const windSpeedMs = item.windWeight > 0 ? Math.round(item.windWeighted / item.windWeight) : null;
+    const estimatedTimeMs = item.timeWeight > 0 ? item.timeWeightedMs / item.timeWeight : null;
+    return {
+      province: item.province,
+      probability: probabilities[index],
+      estimatedAt: estimatedTimeMs === null ? null : new Date(estimatedTimeMs).toISOString(),
+      windSpeedMs,
+      windForceLevel: windSpeedMs === null ? "--" : windForceFromSpeed(windSpeedMs),
+      agencySupport: item.agencies.size,
+      agencyTotal,
+      evidenceLevel: "inferred" as const,
+      basis: item.directHits > 0
+        ? `${item.agencies.size}/${agencyTotal} 家机构路径直接进入该省行政范围。`
+        : "根据多机构路径走廊与沿海省份邻近度推算。"
+    };
+  });
 }
 
 function chooseArchetype(
@@ -821,6 +1039,17 @@ function distanceBetweenKm(a: { lon: number; lat: number }, b: { lon: number; la
   const lat2 = degToRad(b.lat);
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
   return 2 * earthRadiusKm * Math.asin(Math.sqrt(h));
+}
+
+function parseStormTime(value: string) {
+  const time = new Date(value.includes("T") ? value : value.replace(" ", "T")).getTime();
+  return Number.isFinite(time) ? time : null;
+}
+
+function windForceFromSpeed(speed: number) {
+  const thresholds = [0.3, 1.6, 3.4, 5.5, 8, 10.8, 13.9, 17.2, 20.8, 24.5, 28.5, 32.7, 37, 41.5, 46.2, 51, 56.1, 61.3];
+  const level = thresholds.findIndex((threshold) => speed < threshold);
+  return level === -1 ? "17+" : String(level);
 }
 
 function degToRad(deg: number) {

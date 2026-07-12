@@ -175,6 +175,8 @@ export interface WindFieldPayload extends EnvironmentLayerMeta {
   model: string;
   unit: "m/s";
   points: WindFieldPoint[];
+  isStale?: boolean;
+  lastSuccessfulAt?: string;
   sampling?: "storm" | "viewport";
   coverage?: {
     west: number;

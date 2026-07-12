@@ -12,7 +12,10 @@ import { findProvinceReferencePoint, normalizeProvinceName } from "@/lib/provinc
 
 const ZJ_API = "https://typhoon.slt.zj.gov.cn/Api";
 const GDACS_SEARCH_API = "https://gdacs.org/gdacsapi/api/events/geteventlist/SEARCH";
-const CURRENT_STORMS_CACHE_TTL_MS = 20 * 1000;
+// The radar client polls every 10 seconds. Do not keep a second server-side
+// freshness window here: the latest point must come from the upstream source
+// on every polling cycle, even if that source has not published a new fix yet.
+const CURRENT_STORMS_CACHE_TTL_MS = 0;
 const DATA_SOURCE = "浙江省水利厅台风路径公开接口";
 const NOTICE =
   "本系统用于台风路径可视化与创意大屏演示，真实预警以中央气象台、海洋预报台和属地应急部门发布为准。";

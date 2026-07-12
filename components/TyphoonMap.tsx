@@ -3,6 +3,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -32,6 +33,15 @@ import type {
 import { DefenseDrawer } from "./DefenseDrawer";
 import { HudPanel, StatusPill } from "./HudPrimitives";
 import { BossSkillSlotPanel, IntelPanel } from "./IntelPanel";
+import {
+  buildLiveBroadcastModel,
+  LiveAudiencePanel,
+  LiveBottomBar,
+  LiveForecastOverlay,
+  LiveIntelPanel,
+  LiveTopBar,
+  type LiveDeckView
+} from "./LiveBroadcastView";
 
 const MAP_STYLE = {
   version: 8,
@@ -137,6 +147,7 @@ const REGION_EN_NAMES: Record<string, string> = {
 const DEFAULT_REGION_LABELS: MapRegionLabel[] = [];
 
 type RadarTheme = "night-radar" | "archive-command";
+export type RadarView = "standard" | "live";
 
 type EnvironmentLayerKey = "satellite" | "impact" | "wind";
 
@@ -186,12 +197,23 @@ const DEFAULT_ENVIRONMENT_LAYERS: EnvironmentLayerToggles = {
   wind: true
 };
 
-export function TyphoonMap() {
+export function TyphoonMap({
+  view = "standard",
+  liveDeck = "briefing",
+  onSceneReady
+}: {
+  view?: RadarView;
+  liveDeck?: LiveDeckView;
+  onSceneReady?: () => void;
+}) {
+  const isLiveView = view === "live";
+  const secondsToSwitch = 0;
+  const liveDeckCycle = 0;
   const [storms, setStorms] = useState<Storm[]>([]);
   const [bossProfiles, setBossProfiles] = useState<BossProfile[]>([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [theme, setTheme] = useState<RadarTheme>(() => {
-    if (typeof window === "undefined") return "night-radar";
+    if (typeof window === "undefined" || view === "live") return "night-radar";
     const requestedTheme = new URLSearchParams(window.location.search).get("theme");
     return requestedTheme === "dossier" || requestedTheme === "archive-command" ? "archive-command" : "night-radar";
   });
@@ -218,6 +240,7 @@ export function TyphoonMap() {
   const markerRef = useRef<maplibregl.Marker | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const stormRef = useRef<Storm | null>(null);
+  const focusedStormIdRef = useRef<string | null>(null);
   const regionLabelsRef = useRef<MapRegionLabel[]>(DEFAULT_REGION_LABELS);
   const storm = storms[activeIndex] ?? null;
   const activeWindField = viewportWindField ?? windField;
@@ -237,6 +260,19 @@ export function TyphoonMap() {
   const bossProfile = useMemo(
     () => (storm ? bossProfiles.find((profile) => profile.stormId === storm.id) ?? null : null),
     [bossProfiles, storm]
+  );
+  const liveModel = useMemo(
+    () =>
+      buildLiveBroadcastModel({
+        storm,
+        bossProfile,
+        sourceLabel,
+        lastUpdated,
+        lastSyncedAt,
+        dataError,
+        snapshotStale: snapshot?.cache.stale
+      }),
+    [storm, bossProfile, sourceLabel, lastUpdated, lastSyncedAt, dataError, snapshot?.cache.stale]
   );
 
   const stormGeo = useMemo(() => buildStormGeo(storm), [storm]);
@@ -275,6 +311,10 @@ export function TyphoonMap() {
     stormRef.current = storm;
   }, [storm]);
 
+  useEffect(() => {
+    if (isLiveView && mapReady && snapshotLoaded) onSceneReady?.();
+  }, [isLiveView, mapReady, onSceneReady, snapshotLoaded]);
+
   const fetchDefense = useCallback(async (province: string) => {
     const query = new URLSearchParams({ province });
     if (stormRef.current?.id) query.set("stormId", stormRef.current.id);
@@ -300,6 +340,7 @@ export function TyphoonMap() {
 
   useEffect(() => {
     if (!mapNode.current || mapRef.current) return;
+    let resizeObserver: ResizeObserver | null = null;
 
     try {
       const map = new maplibregl.Map({
@@ -314,11 +355,14 @@ export function TyphoonMap() {
 
       map.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
       mapRef.current = map;
+      // ResizeObserver runs before paint. Resizing immediately keeps the
+      // MapLibre surface and every projected canvas in one coordinate space.
+      resizeObserver = new ResizeObserver(() => map.resize());
+      resizeObserver.observe(mapNode.current);
 
       map.on("load", async () => {
         const initialStorm = stormRef.current;
         renderStormOnMap(map, initialStorm, markerRef);
-        focusMapOnStorm(map, initialStorm, false);
         syncMapOverlays(
           map,
           stormRef.current,
@@ -386,6 +430,7 @@ export function TyphoonMap() {
         updateStormSources(map, buildStormGeo(currentStorm));
         renderStormOnMap(map, stormRef.current, markerRef);
         focusMapOnStorm(map, currentStorm, false);
+        focusedStormIdRef.current = currentStorm?.id ?? null;
         syncMapOverlays(
           map,
           stormRef.current,
@@ -415,14 +460,33 @@ export function TyphoonMap() {
       setMapFailed(true);
     }
 
-    return () => {
+      return () => {
+        resizeObserver?.disconnect();
       disposeStormMarker(markerRef.current);
       markerRef.current = null;
+      focusedStormIdRef.current = null;
       mapRef.current?.remove();
       mapRef.current = null;
       setMapReady(false);
     };
   }, [fetchDefense]);
+
+  useLayoutEffect(() => {
+    if (!isLiveView || !mapReady) return;
+    // Initial live-scene projection sync. Each live route owns one fixed map
+    // for its entire lifetime; the director never resizes this surface.
+    const map = mapRef.current;
+    if (!map) return;
+    map.resize();
+    syncStormMarkerScale(map, stormRef.current, markerRef);
+    syncMapOverlays(
+      map,
+      stormRef.current,
+      setPathScreenLabels,
+      regionLabelsRef.current,
+      setRegionScreenLabels
+    );
+  }, [isLiveView, mapReady]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -431,8 +495,13 @@ export function TyphoonMap() {
     renderStormOnMap(map, storm, markerRef, satelliteLayer, bossProfile);
     syncMapOverlays(map, storm, setPathScreenLabels, regionLabelsRef.current, setRegionScreenLabels);
     if (storm) {
-      map.resize();
-      focusMapOnStorm(map, storm, theme !== "archive-command", theme);
+      // The live deck changes every five seconds. It must not be treated as a
+      // new target: fitBounds/easeTo during the layout swap causes canvas
+      // overlays to be projected twice and leaves a visible afterimage.
+      if (focusedStormIdRef.current !== storm.id) {
+        focusMapOnStorm(map, storm, true, theme, view);
+        focusedStormIdRef.current = storm.id;
+      }
       if (theme === "archive-command") {
         const syncProjectedOverlays = () =>
           syncMapOverlays(
@@ -445,23 +514,14 @@ export function TyphoonMap() {
         syncProjectedOverlays();
         window.requestAnimationFrame(syncProjectedOverlays);
         window.setTimeout(syncProjectedOverlays, 120);
-      } else {
-        map.once("moveend", () =>
-          syncMapOverlays(
-            map,
-            storm,
-            setPathScreenLabels,
-            regionLabelsRef.current,
-            setRegionScreenLabels
-          )
-        );
       }
-    } else {
+    } else if (focusedStormIdRef.current !== null) {
       map.easeTo({ center: [122.5, 27.4], zoom: 4.7, duration: 900 });
+      focusedStormIdRef.current = null;
       setPathScreenLabels([]);
       setRegionScreenLabels(projectRegionLabels(map, regionLabelsRef.current));
     }
-  }, [storm, stormGeo, mapReady, theme, satelliteLayer, bossProfile]);
+  }, [storm, stormGeo, mapReady, theme, satelliteLayer, bossProfile, view]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -582,8 +642,8 @@ export function TyphoonMap() {
   }, [storm, mapReady, theme]);
 
   return (
-    <main className="radar-shell" data-theme={theme}>
-      <div className="boot-scan" />
+    <main className="radar-shell" data-theme={theme} data-view={view} data-live-deck={isLiveView ? liveDeck : undefined}>
+      {!isLiveView ? <div className="boot-scan" /> : null}
       <section className="map-stage" aria-label="台风 Boss 雷达地图">
         {mapFailed ? <FallbackMap storm={storm} /> : <div className="map-canvas" ref={mapNode} />}
         {!mapFailed ? <canvas className="terrain-elevation-canvas" ref={terrainCanvasRef} aria-hidden="true" /> : null}
@@ -591,6 +651,7 @@ export function TyphoonMap() {
         {!mapFailed ? <canvas className="storm-intensity-canvas" ref={stormIntensityCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed ? <canvas className="wind-particle-canvas" ref={windCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed ? <canvas className="forecast-route-canvas" ref={forecastCanvasRef} aria-hidden="true" /> : null}
+        {isLiveView && liveDeck === "briefing" ? <LiveRouteLegend storm={storm} /> : null}
         <PerformanceOverlay
           enabled={showPerfOverlay}
           fetchDurationMs={snapshotFetchDurationMs}
@@ -608,21 +669,34 @@ export function TyphoonMap() {
         {theme === "archive-command" ? <DossierMapFurniture /> : null}
 
         <MapLabelLayer labels={regionScreenLabels} />
-        <PathTimeOverlay labels={pathScreenLabels} />
-        <ForecastBadge storm={storm} />
+        {!isLiveView ? <PathTimeOverlay labels={pathScreenLabels} /> : null}
+        {!isLiveView ? <ForecastBadge storm={storm} /> : null}
 
-        <TopCommandBar
-          storm={storm}
-          bossProfile={bossProfile}
-          count={storms.length}
-          lastUpdated={lastUpdated}
-          dataError={dataError}
-          sourceLabel={sourceLabel}
-          theme={theme}
-          onThemeChange={setTheme}
-        />
+        {isLiveView ? (
+          <>
+            <LiveTopBar
+              model={liveModel}
+              refreshSequence={refreshSequence}
+              deck={liveDeck}
+              secondsToSwitch={secondsToSwitch}
+              cycle={liveDeckCycle}
+            />
+            {liveDeck === "analysis" ? <LiveForecastOverlay model={liveModel} /> : null}
+          </>
+        ) : (
+          <TopCommandBar
+            storm={storm}
+            bossProfile={bossProfile}
+            count={storms.length}
+            lastUpdated={lastUpdated}
+            dataError={dataError}
+            sourceLabel={sourceLabel}
+            theme={theme}
+            onThemeChange={setTheme}
+          />
+        )}
 
-        {theme === "night-radar" ? (
+        {!isLiveView && theme === "night-radar" ? (
           <div className="left-tactical-stack">
             <DefenseStatusPanel alerts={provinceAlerts} onSelect={fetchDefense} />
             <BossSkillSlotPanel storm={storm} bossProfile={bossProfile} className="left-boss-skill-panel" />
@@ -634,7 +708,7 @@ export function TyphoonMap() {
               onToggle={toggleEnvironmentLayer}
             />
           </div>
-        ) : (
+        ) : !isLiveView ? (
           <>
             <DefenseStatusPanel alerts={provinceAlerts} onSelect={fetchDefense} />
             <EnvironmentLayerPanel
@@ -645,24 +719,37 @@ export function TyphoonMap() {
               onToggle={toggleEnvironmentLayer}
             />
           </>
-        )}
-        {theme === "archive-command" ? <MapLegendPanel /> : null}
-        {theme === "archive-command" ? <DossierStormIndex storms={storms} activeIndex={activeIndex} onSelect={setActiveIndex} /> : null}
-        {theme === "archive-command" ? <ImpactLegend /> : null}
-        {theme === "night-radar" ? <BottomAlertBar storm={storm} bossProfile={bossProfile} alerts={provinceAlerts} dataError={dataError} sourceLabel={sourceLabel} /> : null}
-        <DefenseDrawer defense={selectedDefense} onClose={() => setSelectedDefense(null)} />
+        ) : null}
+        {!isLiveView && theme === "archive-command" ? <MapLegendPanel /> : null}
+        {!isLiveView && theme === "archive-command" ? <DossierStormIndex storms={storms} activeIndex={activeIndex} onSelect={setActiveIndex} /> : null}
+        {!isLiveView && theme === "archive-command" ? <ImpactLegend /> : null}
+        {!isLiveView && theme === "night-radar" ? <BottomAlertBar storm={storm} bossProfile={bossProfile} alerts={provinceAlerts} dataError={dataError} sourceLabel={sourceLabel} /> : null}
+        {!isLiveView ? <DefenseDrawer defense={selectedDefense} onClose={() => setSelectedDefense(null)} /> : null}
       </section>
 
-      <IntelPanel
-        storm={storm}
-        bossProfile={bossProfile}
-        source={sourceLabel}
-        dataError={dataError}
-        lastSyncedAt={lastSyncedAt}
-        refreshSequence={refreshSequence}
-        pollIntervalMs={pollIntervalMs}
-        theme={theme}
-      />
+      {isLiveView ? liveDeck === "briefing" ? (
+        <LiveAudiencePanel
+          model={liveModel}
+          storm={storm}
+          satelliteLayer={satelliteLayer}
+          refreshSequence={refreshSequence}
+        />
+      ) : (
+        <LiveIntelPanel model={liveModel} storm={storm} satelliteLayer={satelliteLayer} />
+      ) : (
+        <IntelPanel
+          storm={storm}
+          bossProfile={bossProfile}
+          source={sourceLabel}
+          dataError={dataError}
+          lastSyncedAt={lastSyncedAt}
+          refreshSequence={refreshSequence}
+          pollIntervalMs={pollIntervalMs}
+          theme={theme}
+          satelliteLayer={satelliteLayer}
+        />
+      )}
+      {isLiveView ? <LiveBottomBar model={liveModel} deck={liveDeck} secondsToSwitch={secondsToSwitch} /> : null}
     </main>
   );
 }
@@ -936,19 +1023,58 @@ function ForecastBadge({ storm }: { storm: Storm | null }) {
   );
 }
 
-function focusMapOnStorm(map: MapLibreMap, storm: Storm | null, animated: boolean, theme: RadarTheme = "night-radar") {
-  if (storm && theme === "night-radar" && map.getCanvas().clientWidth > 760) {
+function LiveRouteLegend({ storm }: { storm: Storm | null }) {
+  if (!storm) return null;
+  const scenarios = forecastScenariosForStorm(storm);
+  if (scenarios.length === 0) return null;
+
+  return (
+    <section className="live-route-legend" aria-label="多机构预测路径颜色说明">
+      <strong>路径颜色说明</strong>
+      <span>实线为主预报，其余为机构路径</span>
+      <div>
+        {scenarios.map((scenario, index) => {
+          const style = forecastScenarioStyle(scenario, index);
+          return (
+            <b key={scenario.id} style={{ "--route-color": style.color } as CSSProperties}>
+              <i />
+              <span>{scenario.agencyCode}</span>
+              <small>· {scenario.agency}</small>
+            </b>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function focusMapOnStorm(
+  map: MapLibreMap,
+  storm: Storm | null,
+  animated: boolean,
+  theme: RadarTheme = "night-radar",
+  view: RadarView = "standard"
+) {
+  if (storm && theme === "night-radar" && (map.getCanvas().clientWidth > 760 || view === "live")) {
     const forecastBounds = forecastCorridorBounds(storm);
     if (forecastBounds) {
       const width = map.getCanvas().clientWidth;
       const height = map.getCanvas().clientHeight;
       map.fitBounds(forecastBounds, {
-        padding: {
-          top: height <= 760 ? 126 : 142,
-          bottom: height <= 760 ? 128 : 146,
-          left: width <= 1180 ? 278 : 320,
-          right: width <= 1180 ? 238 : 270
-        },
+        padding:
+          view === "live"
+            ? {
+                top: height <= 760 ? 118 : 132,
+                bottom: height <= 760 ? 140 : 160,
+                left: width <= 900 ? 34 : 48,
+                right: width <= 900 ? 34 : 48
+              }
+            : {
+                top: height <= 760 ? 126 : 142,
+                bottom: height <= 760 ? 128 : 146,
+                left: width <= 1180 ? 278 : 320,
+                right: width <= 1180 ? 238 : 270
+              },
         maxZoom: 4.55,
         duration: animated ? 900 : 0
       });
@@ -1049,6 +1175,10 @@ function TopCommandBar({
             <span>{sourceLabel}</span>
             <b>{count} FILES</b>
           </div>
+          <Link className="main-live-link" href="/live">
+            <RadioTower size={15} aria-hidden="true" />
+            直播版
+          </Link>
           <ThemeSwitcher theme={theme} onThemeChange={onThemeChange} />
         </div>
       </header>
@@ -1072,6 +1202,10 @@ function TopCommandBar({
       <div className="source-chip" title={sourceLabel}>
         <Satellite size={16} />
         <span>{sourceLabel} / {"\u76ee\u6807\u6570"} {count}</span>
+        <Link className="main-live-link" href="/live">
+          <RadioTower size={15} aria-hidden="true" />
+          直播版
+        </Link>
         <ThemeSwitcher theme={theme} onThemeChange={onThemeChange} />
       </div>
     </header>
@@ -1612,8 +1746,6 @@ function startTerrainElevationRenderer(map: MapLibreMap, canvas: HTMLCanvasEleme
       tiles.map((tile) => `${tile.z}/${tile.x}/${tile.y}`).join(",")
     ].join("|");
     if (viewportKey === lastRenderedViewport) return;
-    lastRenderedViewport = viewportKey;
-    clear();
     const renderedTiles = await Promise.all(
       tiles.map(async (tile) => ({
         ...tile,
@@ -1633,6 +1765,7 @@ function startTerrainElevationRenderer(map: MapLibreMap, canvas: HTMLCanvasEleme
       const height = Math.ceil(Math.abs(southeast.y - northwest.y));
       context.drawImage(tile.canvas, x, y, width, height);
     });
+    lastRenderedViewport = viewportKey;
   };
 
   const scheduleRender = () => {
@@ -1649,19 +1782,25 @@ function startTerrainElevationRenderer(map: MapLibreMap, canvas: HTMLCanvasEleme
     debounceTimer = window.setTimeout(scheduleRender, TERRAIN_RENDER_DEBOUNCE_MS);
   };
 
-  const invalidateAndClear = () => {
+  const invalidateRender = () => {
     renderId += 1;
+    lastRenderedViewport = "";
     window.cancelAnimationFrame(frame);
     resizeCanvas();
     clear();
   };
 
+  const invalidateForResize = () => {
+    invalidateRender();
+    scheduleRenderDebounced();
+  };
+
   scheduleRender();
-  map.on("movestart", invalidateAndClear);
-  map.on("zoomstart", invalidateAndClear);
+  map.on("movestart", invalidateRender);
+  map.on("zoomstart", invalidateRender);
   map.on("moveend", scheduleRenderDebounced);
   map.on("zoomend", scheduleRenderDebounced);
-  map.on("resize", scheduleRenderDebounced);
+  map.on("resize", invalidateForResize);
   window.addEventListener("resize", scheduleRenderDebounced);
 
   return () => {
@@ -1670,11 +1809,11 @@ function startTerrainElevationRenderer(map: MapLibreMap, canvas: HTMLCanvasEleme
     if (debounceTimer !== undefined) {
       window.clearTimeout(debounceTimer);
     }
-    map.off("movestart", invalidateAndClear);
-    map.off("zoomstart", invalidateAndClear);
+    map.off("movestart", invalidateRender);
+    map.off("zoomstart", invalidateRender);
     map.off("moveend", scheduleRenderDebounced);
     map.off("zoomend", scheduleRenderDebounced);
-    map.off("resize", scheduleRenderDebounced);
+    map.off("resize", invalidateForResize);
     window.removeEventListener("resize", scheduleRenderDebounced);
     clear();
   };
@@ -1878,12 +2017,16 @@ function startStormIntensityRenderer(
     window.cancelAnimationFrame(frame);
     clear();
   };
+  const clearAndSchedule = () => {
+    clearWhileMoving();
+    schedule();
+  };
 
   render();
   map.on("movestart", clearWhileMoving);
   map.on("moveend", schedule);
   map.on("zoomend", schedule);
-  map.on("resize", schedule);
+  map.on("resize", clearAndSchedule);
   window.addEventListener("resize", schedule);
 
   return () => {
@@ -1891,7 +2034,7 @@ function startStormIntensityRenderer(
     map.off("movestart", clearWhileMoving);
     map.off("moveend", schedule);
     map.off("zoomend", schedule);
-    map.off("resize", schedule);
+    map.off("resize", clearAndSchedule);
     window.removeEventListener("resize", schedule);
     clear();
   };
@@ -2032,15 +2175,19 @@ function startForecastRouteRenderer(map: MapLibreMap, canvas: HTMLCanvasElement,
     if (frame) return;
     frame = window.requestAnimationFrame(draw);
   };
+  const clearAndSchedule = () => {
+    context.clearRect(0, 0, width, height);
+    schedule();
+  };
 
   draw();
   map.on("move", schedule);
-  map.on("resize", schedule);
+  map.on("resize", clearAndSchedule);
   window.addEventListener("resize", schedule);
   return () => {
     window.cancelAnimationFrame(frame);
     map.off("move", schedule);
-    map.off("resize", schedule);
+    map.off("resize", clearAndSchedule);
     window.removeEventListener("resize", schedule);
     context.clearRect(0, 0, width, height);
   };
@@ -2283,18 +2430,22 @@ function startWindFieldRenderer(
     clear();
     lastFrameTime = 0;
   };
+  const resetForResize = () => {
+    resizeCanvas();
+    resumeProjection();
+  };
 
   frame = window.requestAnimationFrame(render);
   map.on("movestart", resetProjection);
   map.on("moveend", resumeProjection);
-  map.on("resize", resizeCanvas);
+  map.on("resize", resetForResize);
   window.addEventListener("resize", resizeCanvas);
 
   return () => {
     window.cancelAnimationFrame(frame);
     map.off("movestart", resetProjection);
     map.off("moveend", resumeProjection);
-    map.off("resize", resizeCanvas);
+    map.off("resize", resetForResize);
     window.removeEventListener("resize", resizeCanvas);
     clear();
   };
