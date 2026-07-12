@@ -1,4 +1,7 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import sharp from "sharp";
 import { makeCircle } from "@/lib/provinceGeo";
@@ -35,9 +38,17 @@ const GLOBAL_SATELLITE_BOUNDS = {
 const JMA_ATTRIBUTION = "NOAA OSPO GMGSI 全球长波红外云图 + JMA/Himawari 东亚 RGB · 30 分钟同步检查";
 const OPEN_METEO_SOURCE = "Open-Meteo Forecast API";
 const OPEN_METEO_ATTRIBUTION = "Open-Meteo weather forecast model blend";
+const MET_NORWAY_SOURCE = "MET Norway Locationforecast API";
+const MET_NORWAY_ATTRIBUTION = "MET Norway Locationforecast 2.0 global forecast";
 const SATELLITE_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const SATELLITE_IMAGE_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
-const WIND_FIELD_CACHE_TTL_MS = 4 * 60 * 1000;
+const WIND_FIELD_CACHE_TTL_MS = 15 * 60 * 1000;
+const NATIONAL_WIND_FIELD_CACHE_TTL_MS = 30 * 60 * 1000;
+const DEGRADED_WIND_FIELD_RETRY_MS = 2 * 60 * 1000;
+const PERSISTED_WIND_FIELD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+const OPEN_METEO_RATE_LIMIT_COOLDOWN_MS = 10 * 60 * 1000;
+const OPEN_METEO_REQUEST_SPACING_MS = 900;
+const WIND_FIELD_CACHE_DIR = join(process.cwd(), ".runtime", "wind-field");
 const IMPACT_SOURCE = "浙江省水利厅台风路径公开接口风圈半径";
 const NO_STORE_HEADERS = {
   "Cache-Control": "no-store, max-age=0"
@@ -46,6 +57,10 @@ const execFileAsync = promisify(execFile);
 const satelliteImageCache = new Map<string, { expiresAt: number; bytes: Uint8Array; contentType: string }>();
 const windFieldCache = new Map<string, { expiresAt: number; payload: WindFieldPayload }>();
 const windFieldInFlight = new Map<string, Promise<WindFieldPayload>>();
+const windFieldLastSuccess = new Map<string, WindFieldPayload>();
+let openMeteoBlockedUntil = 0;
+let openMeteoLastRequestAt = 0;
+let openMeteoRequestChain: Promise<unknown> = Promise.resolve();
 let satelliteFrameCache: { slotKey: string; promise: Promise<SynchronizedSatelliteFrames> } | null = null;
 
 interface SatelliteFrame {
@@ -77,6 +92,23 @@ interface OpenMeteoLocation {
     time?: string[];
     wind_speed_10m?: number[];
     wind_direction_10m?: number[];
+  };
+}
+
+interface MetNorwayResponse {
+  properties?: {
+    meta?: { updated_at?: string };
+    timeseries?: Array<{
+      time?: string;
+      data?: {
+        instant?: {
+          details?: {
+            wind_speed?: number;
+            wind_from_direction?: number;
+          };
+        };
+      };
+    }>;
   };
 }
 
@@ -237,12 +269,41 @@ export async function getWindField(stormId?: string | null, requestedBounds?: Wi
     return inFlight;
   }
 
-  const request = loadWindField(stormId, bounds).then(
-    (payload) => {
+  const request = (async () => {
+    const persisted = shouldPersistWindField(bounds) ? await readPersistedWindField(cacheKey) : null;
+    const lastSuccess = windFieldLastSuccess.get(cacheKey) ?? persisted;
+    if (persisted && !windFieldLastSuccess.has(cacheKey)) {
+      windFieldLastSuccess.set(cacheKey, persisted);
+    }
+
+    const payload = await loadWindField(stormId, bounds);
+    if (payload.status === "available" && payload.points.length > 0) {
+      const freshPayload = {
+        ...payload,
+        isStale: false,
+        lastSuccessfulAt: payload.updatedAt
+      } satisfies WindFieldPayload;
+      windFieldLastSuccess.set(cacheKey, freshPayload);
       windFieldCache.set(cacheKey, {
-        expiresAt: Date.now() + (payload.status === "available" ? WIND_FIELD_CACHE_TTL_MS : 20 * 1000),
-        payload
+        expiresAt: Date.now() + windFieldCacheTtl(bounds),
+        payload: freshPayload
       });
+      if (shouldPersistWindField(bounds)) {
+        void persistWindField(cacheKey, freshPayload);
+      }
+      return freshPayload;
+    }
+
+    const resilientPayload = lastSuccess
+      ? staleWindField(lastSuccess, payload.reason ?? "风场上游暂时不可用。")
+      : payload;
+    windFieldCache.set(cacheKey, {
+      expiresAt: Date.now() + DEGRADED_WIND_FIELD_RETRY_MS,
+      payload: resilientPayload
+    });
+    return resilientPayload;
+  })().then(
+    (payload) => {
       windFieldInFlight.delete(cacheKey);
       return payload;
     },
@@ -306,19 +367,92 @@ async function loadWindField(stormId?: string | null, viewportBounds?: WindField
       coverage: sampleBounds
     };
   } catch (error) {
+    const openMeteoReason = error instanceof Error ? error.message : "风场接口暂时不可用。";
+    if (isNationwideWindBounds(viewportBounds)) {
+      try {
+        return await loadMetNorwayWindField(samplePoints, sampleBounds);
+      } catch (fallbackError) {
+        const fallbackReason = fallbackError instanceof Error ? fallbackError.message : "MET Norway fallback failed.";
+        return unavailableWindField(viewportBounds ?? null, sampleBounds, `${openMeteoReason}；${fallbackReason}`);
+      }
+    }
+    return unavailableWindField(viewportBounds ?? null, sampleBounds, openMeteoReason);
+  }
+}
+
+function unavailableWindField(
+  viewportBounds: WindFieldBounds | null,
+  sampleBounds: WindFieldBounds,
+  reason: string
+): WindFieldPayload {
     return {
       source: OPEN_METEO_SOURCE,
       updatedAt: new Date().toISOString(),
       status: "unavailable",
       attribution: OPEN_METEO_ATTRIBUTION,
-      reason: error instanceof Error ? error.message : "风场接口暂时不可用。",
+      reason,
       model: "Open-Meteo best match, 10m wind",
       unit: "m/s",
       points: [],
       sampling: viewportBounds ? "viewport" : "storm",
       coverage: sampleBounds
     };
+}
+
+async function loadMetNorwayWindField(
+  samplePoints: Array<{ lon: number; lat: number }>,
+  sampleBounds: WindFieldBounds
+): Promise<WindFieldPayload> {
+  const results = await mapWithConcurrency(samplePoints, 4, async (point) => {
+    const query = new URLSearchParams({
+      lat: point.lat.toFixed(3),
+      lon: point.lon.toFixed(3)
+    });
+    const response = await fetch(`https://api.met.no/weatherapi/locationforecast/2.0/compact?${query.toString()}`, {
+      headers: {
+        Accept: "application/json",
+        "User-Agent": process.env.WEATHER_API_USER_AGENT ?? "TyphoonBossRadar/1.0 local-deployment"
+      },
+      cache: "no-store"
+    });
+    if (!response.ok) throw new Error(`MET Norway wind request failed: ${response.status}`);
+    const raw = (await response.json()) as MetNorwayResponse;
+    const timeseries = raw.properties?.timeseries?.[0];
+    const details = timeseries?.data?.instant?.details;
+    const speed = details?.wind_speed;
+    const direction = details?.wind_from_direction;
+    if (!Number.isFinite(speed) || !Number.isFinite(direction)) {
+      throw new Error("MET Norway returned an incomplete wind sample.");
+    }
+    const radians = ((direction as number) * Math.PI) / 180;
+    return {
+      point: {
+        lon: point.lon,
+        lat: point.lat,
+        u: -(speed as number) * Math.sin(radians),
+        v: -(speed as number) * Math.cos(radians),
+        speed: speed as number,
+        direction: direction as number
+      } satisfies WindFieldPoint,
+      updatedAt: timeseries?.time ?? raw.properties?.meta?.updated_at ?? new Date().toISOString()
+    };
+  });
+  const samples = results.filter((result): result is { point: WindFieldPoint; updatedAt: string } => Boolean(result));
+  if (samples.length < 42) {
+    throw new Error(`MET Norway returned only ${samples.length} usable nationwide wind samples.`);
   }
+  return {
+    source: MET_NORWAY_SOURCE,
+    updatedAt: samples[0].updatedAt,
+    status: "available",
+    attribution: MET_NORWAY_ATTRIBUTION,
+    reason: "Open-Meteo 受限时自动切换至独立全球预报源。",
+    model: "MET Norway global location forecast, 10m wind",
+    unit: "m/s",
+    points: samples.map((sample) => sample.point),
+    sampling: "viewport",
+    coverage: sampleBounds
+  };
 }
 
 async function fetchOpenMeteo(query: URLSearchParams) {
@@ -330,26 +464,120 @@ async function fetchOpenMeteo(query: URLSearchParams) {
     },
     cache: "no-store"
   };
-
-  try {
-    return await fetch(`http://api.open-meteo.com${path}`, init);
-  } catch {
-    return fetch(`https://api.open-meteo.com${path}`, init);
-  }
+  return queueOpenMeteoRequest(() => fetch(`https://api.open-meteo.com${path}`, init));
 }
 
 async function fetchOpenMeteoWithRetry(query: URLSearchParams) {
+  if (openMeteoBlockedUntil > Date.now()) {
+    throw new Error(`Open-Meteo rate-limit cooldown active until ${new Date(openMeteoBlockedUntil).toISOString()}.`);
+  }
   let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
       const response = await fetchOpenMeteo(query);
-      if (response.ok || attempt === 2) return response;
+      if (response.status === 429) {
+        openMeteoBlockedUntil = Date.now() + retryAfterMs(response.headers.get("Retry-After"));
+        return response;
+      }
+      if (response.ok || attempt === 1 || response.status < 500) return response;
     } catch (error) {
       lastError = error;
     }
-    await delay(220 + attempt * 360);
+    await delay(500 + attempt * 900);
   }
   throw lastError instanceof Error ? lastError : new Error("Open-Meteo wind request failed.");
+}
+
+function queueOpenMeteoRequest<T>(task: () => Promise<T>): Promise<T> {
+  const run = openMeteoRequestChain.then(async () => {
+    const waitMs = Math.max(0, OPEN_METEO_REQUEST_SPACING_MS - (Date.now() - openMeteoLastRequestAt));
+    if (waitMs > 0) await delay(waitMs);
+    openMeteoLastRequestAt = Date.now();
+    return task();
+  });
+  openMeteoRequestChain = run.then(() => undefined, () => undefined);
+  return run;
+}
+
+function retryAfterMs(value: string | null) {
+  if (!value) return OPEN_METEO_RATE_LIMIT_COOLDOWN_MS;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(60_000, Math.min(seconds * 1000, 30 * 60 * 1000));
+  const timestamp = Date.parse(value);
+  if (Number.isFinite(timestamp)) return Math.max(60_000, Math.min(timestamp - Date.now(), 30 * 60 * 1000));
+  return OPEN_METEO_RATE_LIMIT_COOLDOWN_MS;
+}
+
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, task: (item: T) => Promise<R>): Promise<Array<R | null>> {
+  const results: Array<R | null> = new Array(items.length).fill(null);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (cursor < items.length) {
+      const index = cursor++;
+      try {
+        results[index] = await task(items[index]);
+      } catch {
+        results[index] = null;
+      }
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+function windFieldCacheTtl(bounds: WindFieldBounds | null) {
+  return isNationwideWindBounds(bounds) ? NATIONAL_WIND_FIELD_CACHE_TTL_MS : WIND_FIELD_CACHE_TTL_MS;
+}
+
+function isNationwideWindBounds(bounds: WindFieldBounds | null | undefined) {
+  return Boolean(bounds && bounds.east - bounds.west >= 50 && bounds.north - bounds.south >= 30);
+}
+
+function shouldPersistWindField(bounds: WindFieldBounds | null) {
+  return bounds === null || isNationwideWindBounds(bounds);
+}
+
+function staleWindField(payload: WindFieldPayload, reason: string): WindFieldPayload {
+  return {
+    ...payload,
+    status: "available",
+    isStale: true,
+    lastSuccessfulAt: payload.lastSuccessfulAt ?? payload.updatedAt,
+    reason: `最新风场刷新失败，继续使用最后有效数据：${reason}`
+  };
+}
+
+function persistedWindFieldPath(cacheKey: string) {
+  const digest = createHash("sha1").update(cacheKey).digest("hex");
+  return join(WIND_FIELD_CACHE_DIR, `${digest}.json`);
+}
+
+async function readPersistedWindField(cacheKey: string): Promise<WindFieldPayload | null> {
+  try {
+    const raw = JSON.parse(await readFile(persistedWindFieldPath(cacheKey), "utf8")) as {
+      version?: number;
+      savedAt?: string;
+      payload?: WindFieldPayload;
+    };
+    const savedAt = Date.parse(raw.savedAt ?? "");
+    if (raw.version !== 1 || !raw.payload || raw.payload.status !== "available" || raw.payload.points.length < 42) return null;
+    if (!Number.isFinite(savedAt) || Date.now() - savedAt > PERSISTED_WIND_FIELD_MAX_AGE_MS) return null;
+    return raw.payload;
+  } catch {
+    return null;
+  }
+}
+
+async function persistWindField(cacheKey: string, payload: WindFieldPayload) {
+  try {
+    await mkdir(WIND_FIELD_CACHE_DIR, { recursive: true });
+    const target = persistedWindFieldPath(cacheKey);
+    const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
+    await writeFile(temporary, JSON.stringify({ version: 1, savedAt: new Date().toISOString(), payload }), "utf8");
+    await rename(temporary, target);
+  } catch (error) {
+    console.warn("[wind-field] failed to persist last successful field", error);
+  }
 }
 
 function delay(ms: number) {

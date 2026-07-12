@@ -65,6 +65,55 @@ export interface BossPhaseAxes {
   structure: { value: CoreStructureState; label: string };
 }
 
+export interface BossLandfallSummary {
+  status: "forecast-landfall" | "approaching" | "overland" | "open-ocean";
+  targetProvince: string | null;
+  estimatedAt: string | null;
+  nearestDistanceKm: number | null;
+  evidenceLevel: "inferred";
+  detail: string;
+}
+
+export interface BossProvinceCurrentConditions {
+  averageWindSpeedMs: number | null;
+  windForceLevel: string;
+  windDirection: string | null;
+  windSampleCount: number;
+  windObservedAt: string | null;
+  windDataStale: boolean;
+  windDataReason: string | null;
+  distanceToStormKm: number | null;
+  source: string;
+}
+
+export interface BossProvinceBriefing {
+  province: string;
+  headlineLabel: "预计登陆" | "预计最接近" | "影响判断";
+  impactStatus: "landfall" | "direct" | "watch" | "unaffected" | "unavailable";
+  impactLabel: string;
+  estimatedAt: string | null;
+  stormWindSpeedMs: number | null;
+  stormWindForceLevel: string;
+  closestApproachKm: number | null;
+  agencySupport: number;
+  agencyTotal: number;
+  displayDurationMs: 1500 | 2500;
+  currentConditions: BossProvinceCurrentConditions;
+}
+
+export interface BossLandfallScenario {
+  province: string;
+  probability: number;
+  estimatedAt: string | null;
+  windSpeedMs: number | null;
+  windForceLevel: string;
+  agencySupport: number;
+  agencyTotal: number;
+  evidenceLevel: "inferred";
+  basis: string;
+  currentConditions?: BossProvinceCurrentConditions;
+}
+
 export interface BossSkillEvidence {
   source:
     | "canonical-authority"
@@ -169,6 +218,9 @@ export interface BossProfile {
   phaseAxes: BossPhaseAxes;
   rating: string;
   energy: number;
+  landfall: BossLandfallSummary;
+  landfallScenarios: BossLandfallScenario[];
+  provinceBriefings?: BossProvinceBriefing[];
   riskSummary: string;
   primarySkillIds: string[];
   skills: BossSkill[];

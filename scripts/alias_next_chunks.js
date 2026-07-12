@@ -3,6 +3,7 @@ const path = require("path");
 
 const chunksDir = path.join(process.cwd(), ".next", "static", "chunks");
 const serverDir = path.join(process.cwd(), ".next", "server");
+const serverChunksDir = path.join(serverDir, "chunks");
 const serverVendorDir = path.join(serverDir, "vendor-chunks");
 
 const aliases = [
@@ -23,6 +24,8 @@ for (const { pattern, alias } of aliases) {
 }
 
 if (fs.existsSync(serverDir)) {
+  mirrorServerRuntimeChunks();
+  repairAppPathsManifest();
   fs.mkdirSync(serverVendorDir, { recursive: true });
   for (const chunkName of findReferencedServerVendorChunks(serverDir)) {
     if (chunkName.endsWith("/")) continue;
@@ -33,6 +36,44 @@ if (fs.existsSync(serverDir)) {
       target,
       `exports.id=${JSON.stringify(chunkName)};exports.ids=[${JSON.stringify(chunkName)}];exports.modules={};\n`
     );
+  }
+}
+
+function repairAppPathsManifest() {
+  const appDir = path.join(serverDir, "app");
+  const manifestPath = path.join(serverDir, "app-paths-manifest.json");
+  if (!fs.existsSync(appDir)) return;
+
+  let manifest = {};
+  if (fs.existsSync(manifestPath)) {
+    try {
+      manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    } catch {
+      manifest = {};
+    }
+  }
+
+  for (const file of walkJsFiles(appDir)) {
+    const basename = path.basename(file);
+    if (basename !== "page.js" && basename !== "route.js") continue;
+    const relative = path.relative(serverDir, file).replaceAll(path.sep, "/");
+    const key = `/${relative.slice("app/".length, -".js".length)}`;
+    manifest[key] = relative;
+  }
+
+  const sorted = Object.fromEntries(Object.entries(manifest).sort(([left], [right]) => left.localeCompare(right)));
+  fs.writeFileSync(manifestPath, `${JSON.stringify(sorted, null, 2)}\n`);
+}
+
+function mirrorServerRuntimeChunks() {
+  if (!fs.existsSync(serverChunksDir)) return;
+  for (const file of fs.readdirSync(serverChunksDir)) {
+    if (!file.endsWith(".js")) continue;
+    const source = path.join(serverChunksDir, file);
+    const target = path.join(serverDir, file);
+    if (!fs.existsSync(target)) {
+      fs.copyFileSync(source, target);
+    }
   }
 }
 

@@ -6,10 +6,11 @@
     "dev": "next dev",
     "build": "next build && node scripts/alias_next_chunks.js",
     "start": "next start",
+    "live:with-host": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start_live_with_linglan.ps1",
+    "agent:run": "node scripts/run_typhoon_evolution_agent.mjs",
+    "clean:local": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/clean_local_artifacts.ps1",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit",
-    "render:typhoon:local": "python scripts/generate_typhoon_flipbook.py",
-    "render:typhoon:blender": "blender --background --python scripts/render_typhoon_flipbook_blender.py"
+    "typecheck": "tsc --noEmit --incremental false"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",

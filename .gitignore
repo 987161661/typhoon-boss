@@ -10,8 +10,14 @@ dist
 .agents/
 .codex/
 .codex-*/
+.codex-chrome-profile*/
+.codex-edge-profile*/
 tmp/
 .codex-*.json
+.codex-*.log
+.codex-*.err.log
+next-*.log
+next-*.err.log
 .runtime/
 
 # Heavy local QA/reference captures

@@ -18,7 +18,8 @@ import {
 import { BossEmblem } from "./BossEmblem";
 import { FlipValue, HudPanel, MetricRow, MiniReadout } from "./HudPrimitives";
 import type { BossProfile, BossSkill } from "@/lib/bossEngine/types";
-import type { Storm } from "@/lib/types";
+import { StormSatellitePortrait } from "./StormSatellitePortrait";
+import type { SatelliteLayerPayload, Storm } from "@/lib/types";
 
 const UI = {
   currentIntel: "\u5f53\u524d\u53f0\u98ce Boss \u60c5\u62a5",
@@ -75,7 +76,8 @@ export function IntelPanel({
   lastSyncedAt,
   refreshSequence = 0,
   pollIntervalMs = 10_000,
-  theme = "night-radar"
+  theme = "night-radar",
+  satelliteLayer
 }: {
   storm: Storm | null;
   bossProfile?: BossProfile | null;
@@ -85,6 +87,7 @@ export function IntelPanel({
   refreshSequence?: number;
   pollIntervalMs?: number;
   theme?: "night-radar" | "archive-command";
+  satelliteLayer?: SatelliteLayerPayload | null;
 }) {
   if (theme === "archive-command") {
     return <DossierIntelPanel storm={storm} source={source} dataError={dataError} />;
@@ -130,11 +133,11 @@ export function IntelPanel({
       </div>
 
       <HudPanel className="boss-card">
-        <BossEmblem stage={storm.stage} label={`${storm.nameZh} ${storm.stage}`} />
+        <StormSatellitePortrait storm={storm} satelliteLayer={satelliteLayer} />
         <div className="boss-title">
-          <span>{UI.code} {storm.code} / {UI.internationalName} {storm.nameEn || "UNKNOWN"}</span>
-          <h1>{bossProfile?.archetypeLabel ?? storm.stage}</h1>
-          <p>
+          <span title={`${UI.code} ${storm.code} / ${UI.internationalName} ${storm.nameEn || "UNKNOWN"}`}>{UI.code} {storm.code} / {UI.internationalName} {storm.nameEn || "UNKNOWN"}</span>
+          <h1 title={bossProfile?.archetypeLabel ?? storm.stage}>{bossProfile?.archetypeLabel ?? storm.stage}</h1>
+          <p title={`${UI.typhoon} “${storm.nameZh}” ${bossProfile?.subtitle ?? storm.status}`}>
             {UI.typhoon} &quot;{storm.nameZh}&quot; <b>{bossProfile?.subtitle ?? storm.status}</b>
           </p>
         </div>
@@ -172,13 +175,18 @@ export function IntelPanel({
       <BossEnergyGauge storm={storm} bossProfile={bossProfile} />
 
       <HudPanel className="mini-readout-grid">
-        <MiniReadout label="纬度" value={<FlipValue value={storm.position.lat.toFixed(2)} />} />
-        <MiniReadout label="经度" value={<FlipValue value={storm.position.lon.toFixed(2)} />} />
+        <MiniReadout label="纬度" value={<span className="coordinate-value">{formatCoordinate(storm.position.lat, "lat")}</span>} />
+        <MiniReadout label="经度" value={<span className="coordinate-value">{formatCoordinate(storm.position.lon, "lon")}</span>} />
         <MiniReadout label="路径点" value={<FlipValue value={storm.track.length} />} />
         <MiniReadout label="预报点" value={<FlipValue value={storm.forecast.length} />} />
       </HudPanel>
 
       <HudPanel className="metric-table">
+        <div className="metric-table-asof">
+          <span>公开实况时次</span>
+          <strong>{formatStormTime(storm.updatedAt)}</strong>
+          <small>仅在上游发布新实况点时变动</small>
+        </div>
         <MetricRow icon={<Wind size={17} />} label={UI.maxWind} value={<FlipValue value={storm.maxWind || UI.pending} />} unit="m/s" hot />
         <MetricRow icon={<Gauge size={17} />} label={UI.pressure} value={<FlipValue value={storm.minPressure || UI.pending} />} unit="hPa" />
         <MetricRow icon={<Crosshair size={17} />} label={UI.r7} value={<FlipValue value={storm.windRadiiKm.r7 || UI.pending} />} unit="km" />
@@ -292,6 +300,16 @@ function windForceFromSpeed(speed: number) {
   if (!Number.isFinite(speed) || speed < 0) return { level: "--" };
   const level = thresholds.findIndex((threshold) => speed < threshold);
   return { level: level === -1 ? "17+" : String(level) };
+}
+
+function formatCoordinate(value: number, axis: "lat" | "lon") {
+  const direction = axis === "lat" ? (value >= 0 ? "N" : "S") : value >= 0 ? "E" : "W";
+  return `${Math.abs(value).toFixed(2)}°${direction}`;
+}
+
+function formatStormTime(value: string) {
+  const matched = value.match(/(\d{2})-(\d{2})\s+(\d{2}:\d{2})/);
+  return matched ? `${matched[1]}/${matched[2]} ${matched[3]}` : value || "待发布";
 }
 
 function DossierIntelPanel({
