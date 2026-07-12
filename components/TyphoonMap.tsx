@@ -14,7 +14,7 @@ import {
   type SetStateAction
 } from "react";
 import maplibregl, { type GeoJSONSource, type ImageSource, type Map as MapLibreMap } from "maplibre-gl";
-import { AlertTriangle, ChevronRight, Database, Palette, RadioTower, Satellite, Settings2, Shield, Wind } from "lucide-react";
+import { AlertTriangle, ChevronRight, Crosshair, Database, Palette, RadioTower, Satellite, Settings2, Shield, Wind } from "lucide-react";
 import Link from "next/link";
 import { makeCircle } from "@/lib/provinceGeo";
 import { createStormVisualCanvas } from "@/lib/stormVisualRenderer";
@@ -266,6 +266,15 @@ export function TyphoonMap({
   const focusedStormIdRef = useRef<string | null>(null);
   const requestedStormId = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("stormId");
   const storm = storms[activeIndex] ?? null;
+  const selectStorm = useCallback((index: number) => {
+    setActiveIndex(index);
+    if (typeof window === "undefined" || view === "live") return;
+    const selectedId = storms[index]?.id;
+    if (!selectedId) return;
+    const url = new URL(window.location.href);
+    url.searchParams.set("stormId", selectedId);
+    window.history.replaceState(window.history.state, "", url);
+  }, [storms, view]);
   const viewportBoundsForMap = useCallback((map: MapLibreMap) => visibleWindBounds(map, 0.08), []);
   const viewportWindField = useViewportWindField({
     map: mapReady ? mapRef.current : null,
@@ -353,6 +362,12 @@ export function TyphoonMap({
     setImpactArea(snapshot.environment.impactArea);
     setDataError(snapshotError);
   }, [snapshot, snapshotError, snapshotLoaded]);
+
+  useEffect(() => {
+    if (!requestedStormId || storms.length === 0) return;
+    const requestedIndex = storms.findIndex((item) => item.id === requestedStormId);
+    if (requestedIndex >= 0 && requestedIndex !== activeIndex) setActiveIndex(requestedIndex);
+  }, [activeIndex, requestedStormId, storms]);
 
   useEffect(() => {
     if (activeIndex >= storms.length) {
@@ -696,6 +711,10 @@ export function TyphoonMap({
           />
         )}
 
+        {!isLiveView && theme === "night-radar" && storms.length > 1 ? (
+          <MultiStormTargetQueue storms={storms} activeIndex={activeIndex} onSelect={selectStorm} />
+        ) : null}
+
         {!isLiveView && theme === "night-radar" ? (
           <div className="left-tactical-stack">
             <DefenseStatusPanel alerts={provinceAlerts} onSelect={fetchDefense} />
@@ -727,7 +746,7 @@ export function TyphoonMap({
           </>
         ) : null}
         {!isLiveView && theme === "archive-command" ? <MapLegendPanel /> : null}
-        {!isLiveView && theme === "archive-command" ? <DossierStormIndex storms={storms} activeIndex={activeIndex} onSelect={setActiveIndex} /> : null}
+        {!isLiveView && theme === "archive-command" ? <DossierStormIndex storms={storms} activeIndex={activeIndex} onSelect={selectStorm} /> : null}
         {!isLiveView && theme === "archive-command" ? <ImpactLegend /> : null}
         {!isLiveView && theme === "night-radar" ? <BottomAlertBar storm={storm} bossProfile={bossProfile} alerts={provinceAlerts} dataError={dataError} sourceLabel={sourceLabel} /> : null}
         {!isLiveView ? <DefenseDrawer defense={selectedDefense} onClose={() => setSelectedDefense(null)} /> : null}
@@ -757,6 +776,46 @@ export function TyphoonMap({
       )}
       {isLiveView ? <LiveBottomBar model={liveModel} deck={liveDeck} secondsToSwitch={secondsToSwitch} /> : null}
     </main>
+  );
+}
+
+function MultiStormTargetQueue({
+  storms,
+  activeIndex,
+  onSelect
+}: {
+  storms: Storm[];
+  activeIndex: number;
+  onSelect: (index: number) => void;
+}) {
+  return (
+    <nav className="multi-storm-target-queue" aria-label="活动台风目标切换">
+      <div className="multi-storm-queue-label">
+        <Crosshair aria-hidden="true" />
+        <span>活动目标</span>
+        <strong>{storms.length}</strong>
+      </div>
+      <div className="multi-storm-queue-track">
+        {storms.map((item, index) => {
+          const active = index === activeIndex;
+          return (
+            <button
+              aria-current={active ? "true" : undefined}
+              className={active ? "active" : ""}
+              key={item.id}
+              onClick={() => onSelect(index)}
+              type="button"
+            >
+              <i aria-hidden="true" />
+              <span><b>{item.code}</b><small>{active ? "已锁定" : "待选择"}</small></span>
+              <strong>{item.nameZh}</strong>
+              <em>{item.stage}</em>
+              <span className="multi-storm-vitals"><b>{item.maxWind || "--"} m/s</b><small>{formatClock(item.updatedAt)}</small></span>
+            </button>
+          );
+        })}
+      </div>
+    </nav>
   );
 }
 

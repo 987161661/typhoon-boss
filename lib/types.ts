@@ -76,6 +76,12 @@ export interface Storm {
       r12: WindRadiusLevel;
     };
   };
+  /** Last provider-published radius for each level; historical, not current. */
+  windRadiiReports?: {
+    r7: WindRadiusReport | null;
+    r10: WindRadiusReport | null;
+    r12: WindRadiusReport | null;
+  };
   track: TrackPoint[];
   forecast: ForecastPoint[];
   forecastScenarios: ForecastScenario[];
@@ -83,6 +89,11 @@ export interface Storm {
   landfalls: StormLandfall[];
   skills: StormSkill[];
   notice: string;
+}
+
+export interface WindRadiusReport extends WindRadiusLevel {
+  observedAt: string;
+  position: { lat: number; lon: number };
 }
 
 export interface ProvinceDefenseStatus {

@@ -837,12 +837,13 @@ function calculateFallbackEnergy(storm: Storm) {
 
 function buildMetrics(storm: Storm): LiveMetric[] {
   const radius = selectStrongestRadius(storm);
-  return [
+  const metrics: LiveMetric[] = [
     { label: "中心最大风速", value: storm.maxWind > 0 ? String(Math.round(storm.maxWind)) : "--", unit: "m/s", tone: "hot" },
     { label: "中心气压", value: storm.minPressure > 0 ? String(Math.round(storm.minPressure)) : "--", unit: "hPa", tone: "cool" },
     { label: "移动", value: storm.moveDirection || "待报", unit: storm.moveSpeed > 0 ? `${Math.round(storm.moveSpeed)} km/h` : "速度待报", tone: "neutral" },
-    { label: radius.label, value: radius.value > 0 ? String(Math.round(radius.value)) : "--", unit: "km", tone: "neutral" }
   ];
+  if (radius) metrics.push({ label: radius.label, value: String(Math.round(radius.value)), unit: "km", tone: "neutral" });
+  return metrics;
 }
 
 function emptyMetrics(): LiveMetric[] {
@@ -857,7 +858,8 @@ function emptyMetrics(): LiveMetric[] {
 function selectStrongestRadius(storm: Storm) {
   if (storm.windRadiiKm.r12 > 0) return { label: "12级风圈", value: storm.windRadiiKm.r12 };
   if (storm.windRadiiKm.r10 > 0) return { label: "10级风圈", value: storm.windRadiiKm.r10 };
-  return { label: "7级风圈", value: storm.windRadiiKm.r7 };
+  if (storm.windRadiiKm.r7 > 0) return { label: "7级风圈", value: storm.windRadiiKm.r7 };
+  return null;
 }
 
 function buildStructureBrief(bossProfile?: BossProfile | null): LiveStructureBrief {

@@ -55,12 +55,28 @@ const PERSISTED_WIND_FIELD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const OPEN_METEO_RATE_LIMIT_COOLDOWN_MS = 10 * 60 * 1000;
 const OPEN_METEO_REQUEST_SPACING_MS = 900;
 const WIND_FIELD_CACHE_DIR = join(process.cwd(), ".runtime", "wind-field");
+const SATELLITE_IMAGE_CACHE_DIR = join(process.cwd(), ".runtime", "satellite-images");
+// NOAA imagery occasionally takes several seconds to start transferring even
+// when the product is healthy. Keep this outside the core radar request path,
+// but allow enough time for the background image proxy to complete.
+const SATELLITE_FETCH_TIMEOUT_MS = 20_000;
+const SATELLITE_CIRCUIT_COOLDOWN_MS = 5 * 60 * 1000;
 const IMPACT_SOURCE = "浙江省水利厅台风路径公开接口风圈半径";
 const NO_STORE_HEADERS = {
   "Cache-Control": "no-store, max-age=0"
 };
 const execFileAsync = promisify(execFile);
-const satelliteImageCache = new Map<string, { expiresAt: number; bytes: Uint8Array; contentType: string }>();
+interface CachedSatelliteImage {
+  expiresAt: number;
+  bytes: Uint8Array;
+  contentType: string;
+  status: "fresh" | "stale";
+  fetchedAt: string;
+}
+
+const satelliteImageCache = new Map<string, CachedSatelliteImage>();
+const satelliteImageInFlight = new Map<string, Promise<CachedSatelliteImage>>();
+const satelliteSourceFailures = new Map<string, { count: number; blockedUntil: number }>();
 const windFieldCache = new Map<string, { expiresAt: number; payload: WindFieldPayload }>();
 const windFieldInFlight = new Map<string, Promise<WindFieldPayload>>();
 const windFieldLastSuccess = new Map<string, WindFieldPayload>();
@@ -159,13 +175,20 @@ export async function fetchJmaImage(region: string, product: string, frame: stri
   }
 
   const remoteUrl = `${NOAA_HIMAWARI_BASE_URL}/img/${frame}.jpg`;
-  const image = await getCachedSatelliteImage(`regional:${frame}`, remoteUrl, prepareRegionalCloudOverlay);
+  let image: CachedSatelliteImage;
+  try {
+    image = await getCachedSatelliteImage(`regional:${frame}`, "regional", remoteUrl, prepareRegionalCloudOverlay);
+  } catch (error) {
+    return satelliteUnavailableResponse("regional", error);
+  }
   return new Response(Buffer.from(image.bytes), {
     status: 200,
     headers: {
       "Content-Type": image.contentType,
       "Cache-Control": "public, max-age=1800, stale-while-revalidate=3600, immutable",
-      "X-Remote-Source": remoteUrl
+      "X-Remote-Source": remoteUrl,
+      "X-Data-Status": image.status,
+      "X-Data-Fetched-At": image.fetchedAt
     }
   });
 }
@@ -176,58 +199,133 @@ export async function fetchGlobalSatelliteImage(frame: string): Promise<Response
   }
 
   const remoteUrl = `${NOAA_GMGSI_BASE_URL}/${NOAA_GMGSI_PRODUCT}/${frame}.gif`;
-  const image = await getCachedSatelliteImage(`global:${frame}`, remoteUrl, prepareGlobalCloudOverlay);
+  let image: CachedSatelliteImage;
+  try {
+    image = await getCachedSatelliteImage(`global:${frame}`, "global", remoteUrl, prepareGlobalCloudOverlay);
+  } catch (error) {
+    return satelliteUnavailableResponse("global", error);
+  }
   return new Response(Buffer.from(image.bytes), {
     status: 200,
     headers: {
       "Content-Type": image.contentType,
       "Cache-Control": "public, max-age=1800, stale-while-revalidate=3600, immutable",
-      "X-Remote-Source": remoteUrl
+      "X-Remote-Source": remoteUrl,
+      "X-Data-Status": image.status,
+      "X-Data-Fetched-At": image.fetchedAt
     }
   });
 }
 
 async function getCachedSatelliteImage(
   key: string,
+  sourceKey: "regional" | "global",
   remoteUrl: string,
   transform: (bytes: Uint8Array) => Promise<Uint8Array>
-) {
+): Promise<CachedSatelliteImage> {
   const cached = satelliteImageCache.get(key);
   if (cached && cached.expiresAt > Date.now()) {
     return cached;
   }
-  const source = await fetchRemoteBytesWithPowershell(remoteUrl);
-  const bytes = await transform(source);
+  const inFlight = satelliteImageInFlight.get(key);
+  if (inFlight) return inFlight;
+
+  const request = loadSatelliteImage(sourceKey, remoteUrl, transform).finally(() => satelliteImageInFlight.delete(key));
+  satelliteImageInFlight.set(key, request);
+  const entry = await request;
   if (satelliteImageCache.size > 12) satelliteImageCache.clear();
-  const entry = {
-    expiresAt: Date.now() + SATELLITE_IMAGE_CACHE_TTL_MS,
-    bytes,
-    contentType: "image/png"
-  };
   satelliteImageCache.set(key, entry);
   return entry;
 }
 
-async function fetchRemoteBytesWithPowershell(remoteUrl: string) {
-  const script = [
-    "$ProgressPreference='SilentlyContinue'",
-    `$bytes=(Invoke-WebRequest -UseBasicParsing '${remoteUrl}').Content`,
-    "[Console]::Out.Write([Convert]::ToBase64String($bytes))"
-  ].join("; ");
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+async function loadSatelliteImage(
+  sourceKey: "regional" | "global",
+  remoteUrl: string,
+  transform: (bytes: Uint8Array) => Promise<Uint8Array>
+): Promise<CachedSatelliteImage> {
+  const failure = satelliteSourceFailures.get(sourceKey);
+  if (!failure || failure.blockedUntil <= Date.now()) {
     try {
-      const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], {
-        maxBuffer: 2 * 1024 * 1024,
-        windowsHide: true
-      });
-      return Uint8Array.from(Buffer.from(stdout.trim(), "base64"));
+      const source = await fetchRemoteBytes(remoteUrl);
+      const bytes = await transform(source);
+      const fetchedAt = new Date().toISOString();
+      await persistLastGoodSatelliteImage(sourceKey, bytes, fetchedAt);
+      satelliteSourceFailures.delete(sourceKey);
+      return { expiresAt: Date.now() + SATELLITE_IMAGE_CACHE_TTL_MS, bytes, contentType: "image/png", status: "fresh", fetchedAt };
     } catch (error) {
-      lastError = error;
-      await delay(400 + attempt * 700);
+      const count = (failure?.count ?? 0) + 1;
+      satelliteSourceFailures.set(sourceKey, {
+        count,
+        blockedUntil: count >= 2 ? Date.now() + SATELLITE_CIRCUIT_COOLDOWN_MS : 0
+      });
+      console.warn(`[satellite-image] ${sourceKey} source unavailable; using last good image when present: ${errorMessage(error)}`);
     }
   }
-  throw lastError instanceof Error ? lastError : new Error("NOAA Himawari image request failed.");
+
+  const persisted = await readLastGoodSatelliteImage(sourceKey);
+  if (persisted) return persisted;
+  throw new Error(`${sourceKey} satellite image unavailable and no last-good image has been stored.`);
+}
+
+async function fetchRemoteBytes(remoteUrl: string) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await fetch(remoteUrl, { signal: AbortSignal.timeout(SATELLITE_FETCH_TIMEOUT_MS), cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const contentType = response.headers.get("content-type") ?? "";
+      if (!contentType.startsWith("image/")) throw new Error(`unexpected content type ${contentType || "unknown"}`);
+      return new Uint8Array(await response.arrayBuffer());
+    } catch (error) {
+      lastError = error;
+      if (attempt === 0) await delay(500);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Satellite image request failed.");
+}
+
+async function persistLastGoodSatelliteImage(sourceKey: string, bytes: Uint8Array, fetchedAt: string) {
+  await mkdir(SATELLITE_IMAGE_CACHE_DIR, { recursive: true });
+  const imagePath = join(SATELLITE_IMAGE_CACHE_DIR, `${sourceKey}.png`);
+  const metadataPath = join(SATELLITE_IMAGE_CACHE_DIR, `${sourceKey}.json`);
+  await writeFile(`${imagePath}.tmp`, bytes);
+  await rename(`${imagePath}.tmp`, imagePath);
+  await writeFile(`${metadataPath}.tmp`, JSON.stringify({ fetchedAt }), "utf8");
+  await rename(`${metadataPath}.tmp`, metadataPath);
+}
+
+async function readLastGoodSatelliteImage(sourceKey: string): Promise<CachedSatelliteImage | null> {
+  try {
+    const imagePath = join(SATELLITE_IMAGE_CACHE_DIR, `${sourceKey}.png`);
+    const metadataPath = join(SATELLITE_IMAGE_CACHE_DIR, `${sourceKey}.json`);
+    const [bytes, metadataText] = await Promise.all([readFile(imagePath), readFile(metadataPath, "utf8")]);
+    const metadata = JSON.parse(metadataText) as { fetchedAt?: string };
+    return {
+      expiresAt: Date.now() + 5 * 60 * 1000,
+      bytes,
+      contentType: "image/png",
+      status: "stale",
+      fetchedAt: metadata.fetchedAt ?? new Date(0).toISOString()
+    };
+  } catch {
+    return null;
+  }
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function satelliteUnavailableResponse(sourceKey: string, error: unknown) {
+  console.warn(`[satellite-image] ${sourceKey} unavailable: ${errorMessage(error)}`);
+  return new Response("Satellite image temporarily unavailable", {
+    status: 503,
+    headers: {
+      "Cache-Control": "public, max-age=30",
+      "Retry-After": "60",
+      "X-Data-Status": "unavailable"
+    }
+  });
 }
 
 export async function getImpactArea(stormId?: string | null): Promise<ImpactAreaPayload> {
@@ -849,25 +947,13 @@ function chooseSynchronizedFramePair(regionalFrames: SatelliteFrame[], globalFra
   const now = Date.now() + 5 * 60 * 1000;
   const regional = regionalFrames.filter((frame) => new Date(frame.capturedAt).getTime() <= now);
   const global = globalFrames.filter((frame) => new Date(frame.capturedAt).getTime() <= now);
-  let best: { regional: SatelliteFrame; global: SatelliteFrame; freshness: number; skew: number } | null = null;
-
-  for (const regionalFrame of regional) {
-    const regionalAt = new Date(regionalFrame.capturedAt).getTime();
-    for (const globalFrame of global) {
-      const globalAt = new Date(globalFrame.capturedAt).getTime();
-      const skew = Math.abs(regionalAt - globalAt);
-      if (skew > SATELLITE_REFRESH_INTERVAL_MS) continue;
-      const freshness = Math.min(regionalAt, globalAt);
-      if (!best || freshness > best.freshness || (freshness === best.freshness && skew < best.skew)) {
-        best = { regional: regionalFrame, global: globalFrame, freshness, skew };
-      }
-    }
-  }
-
-  if (best) return best;
+  // These products have different publication delays and retention windows.
+  // Forcing an equal timestamp made the regional layer follow a stale global
+  // frame until NOAA had already removed that regional image. Prefer the newest
+  // independently available frame and expose the actual skew to the UI.
   return {
-    regional: [...regionalFrames].sort(compareFrameNewestFirst)[0],
-    global: [...globalFrames].sort(compareFrameNewestFirst)[0]
+    regional: regional[0] ?? [...regionalFrames].sort(compareFrameNewestFirst)[0],
+    global: global[0] ?? [...globalFrames].sort(compareFrameNewestFirst)[0]
   };
 }
 

@@ -439,6 +439,11 @@ function convertStorm(info: ZjTyphoonInfo | ZjTyphoonListItem): Storm | null {
       r12: { ...r12, max: maxWindRadius(r12) }
     }
   };
+  const windRadiiReports = {
+    r7: latestWindRadiusReport(validPoints, "radius7"),
+    r10: latestWindRadiusReport(validPoints, "radius10"),
+    r12: latestWindRadiusReport(validPoints, "radius12")
+  };
 
   return {
     id: info.tfid,
@@ -458,6 +463,7 @@ function convertStorm(info: ZjTyphoonInfo | ZjTyphoonListItem): Storm | null {
     moveSpeed: toNumber(latest.movespeed),
     updatedAt: toBeijingIso(latest.time) ?? latest.time,
     windRadiiKm,
+    windRadiiReports,
     track,
     forecast,
     forecastScenarios,
@@ -645,17 +651,36 @@ function normalizeDirection(direction?: string) {
 
 function parseRadius(value?: string): number { return maxWindRadius(parseWindRadii(value)); }
 
-function buildSkills(point: ZjPoint, radii: Storm["windRadiiKm"]): StormSkill[] {
+function latestWindRadiusReport(points: ZjPoint[], field: "radius7" | "radius10" | "radius12") {
+  for (let index = points.length - 1; index >= 0; index -= 1) {
+    const point = points[index];
+    const quadrants = parseWindRadii(point[field]);
+    const max = maxWindRadius(quadrants);
+    if (max <= 0) continue;
+    return {
+      ...quadrants,
+      max,
+      observedAt: toBeijingIso(point.time) ?? point.time,
+      position: { lat: toNumber(point.lat), lon: toNumber(point.lng) }
+    };
+  }
+  return null;
+}
+
+function buildSkills(
+  point: ZjPoint,
+  radii: Storm["windRadiiKm"]
+): StormSkill[] {
   const wind = toNumber(point.speed);
   const direction = normalizeDirection(point.movedirection);
   const moveSpeed = toNumber(point.movespeed);
 
   return [
-    {
+    ...(radii.r7 > 0 ? [{
       name: "风圈压制",
-      detail: `七级风圈最大半径约 ${radii.r7 || "暂无"} 公里，核心风圈随路径实时刷新。`,
+      detail: `七级风圈最大半径约 ${radii.r7} 公里，来自当前实况时次。`,
       severity: clampSeverity(Math.round(wind / 8))
-    },
+    }] : []),
     {
       name: "路径读条",
       detail: `当前向${direction}移动，速度约 ${moveSpeed || "暂无"} 公里/小时，预测路径来自公开预报机构数据。`,

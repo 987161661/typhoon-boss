@@ -5519,6 +5519,227 @@ a:focus-visible {
   }
 }
 
+.standby-intel-panel {
+  gap: 10px;
+  background:
+    linear-gradient(180deg, rgba(0, 216, 255, 0.035), transparent 42%),
+    var(--panel);
+}
+
+.standby-topline {
+  border-bottom-color: rgba(0, 216, 255, 0.38);
+}
+
+.standby-radar-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr);
+  gap: 18px;
+  align-items: center;
+  min-height: 188px;
+  overflow: hidden;
+  padding: 18px;
+  border-color: rgba(0, 216, 255, 0.38);
+  background:
+    radial-gradient(circle at 70px 50%, rgba(0, 216, 255, 0.14), transparent 34%),
+    linear-gradient(120deg, rgba(0, 216, 255, 0.08), transparent 58%),
+    rgba(3, 12, 17, 0.88);
+}
+
+.standby-radar-card::after {
+  content: "WATCH AREA 100°E—180° / 0°—50°N";
+  position: absolute;
+  right: 12px;
+  bottom: 8px;
+  color: rgba(142, 225, 239, 0.4);
+  font: 700 9px/1 Consolas, monospace;
+  letter-spacing: 0.08em;
+}
+
+.standby-scope {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 132px;
+  height: 132px;
+  overflow: hidden;
+  border: 1px solid rgba(0, 216, 255, 0.64);
+  border-radius: 50%;
+  background:
+    repeating-radial-gradient(circle, transparent 0 20px, rgba(0, 216, 255, 0.17) 21px 22px),
+    rgba(0, 28, 35, 0.64);
+  box-shadow: inset 0 0 28px rgba(0, 216, 255, 0.12), 0 0 30px rgba(0, 216, 255, 0.1);
+}
+
+.standby-scope svg {
+  z-index: 3;
+  width: 26px;
+  height: 26px;
+  color: var(--cyan);
+  filter: drop-shadow(0 0 8px rgba(0, 216, 255, 0.9));
+}
+
+.standby-sweep {
+  position: absolute;
+  z-index: 2;
+  inset: 50% 50% 0 0;
+  transform-origin: 100% 0;
+  background: linear-gradient(34deg, transparent 34%, rgba(0, 216, 255, 0.04) 35%, rgba(0, 216, 255, 0.38));
+  animation: standby-scan 5.4s linear infinite;
+}
+
+.standby-crosshair {
+  position: absolute;
+  z-index: 1;
+  background: rgba(0, 216, 255, 0.18);
+}
+
+.standby-crosshair.horizontal { left: 5px; right: 5px; height: 1px; }
+.standby-crosshair.vertical { top: 5px; bottom: 5px; width: 1px; }
+
+.standby-radar-copy { min-width: 0; }
+.standby-radar-copy > span { color: var(--cyan); font: 800 10px/1 Consolas, monospace; letter-spacing: 0.14em; }
+.standby-radar-copy h1 { margin: 8px 0; color: #ecfbff; font-size: clamp(23px, 1.55vw, 30px); line-height: 1.05; text-shadow: 0 0 18px rgba(0, 216, 255, 0.16); }
+.standby-radar-copy p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+
+.standby-watch-ledger {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  padding: 1px;
+  background: rgba(0, 216, 255, 0.16);
+}
+
+.standby-watch-ledger > div {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 3px 8px;
+  min-width: 0;
+  padding: 11px;
+  background: #071217;
+}
+
+.standby-watch-ledger svg { grid-row: 1 / 3; align-self: center; width: 18px; color: var(--cyan); }
+.standby-watch-ledger span { color: var(--muted); font-size: 10px; }
+.standby-watch-ledger strong { overflow: hidden; color: var(--paper); font: 800 12px/1.2 Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+
+.standby-source-note {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 13px;
+}
+
+.standby-source-note > svg { width: 20px; color: var(--amber); }
+.standby-source-note span { color: var(--amber); font-size: 10px; font-weight: 900; letter-spacing: 0.1em; }
+.standby-source-note p { margin: 4px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+
+.standby-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.82fr); gap: 8px; }
+.standby-actions a { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 42px; padding: 0 10px; font-size: 12px; font-weight: 900; }
+.standby-actions svg { width: 17px; }
+.standby-primary-action { color: #021014; background: var(--cyan); }
+.standby-secondary-action { color: var(--cyan); border: 1px solid rgba(0, 216, 255, 0.4); background: rgba(0, 216, 255, 0.05); }
+.standby-actions a:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.standby-intel-panel.is-degraded .standby-radar-card { border-color: rgba(255, 59, 50, 0.5); }
+.standby-intel-panel.is-degraded .standby-radar-copy > span,
+.standby-intel-panel.is-degraded .standby-scope svg { color: var(--red); }
+
+@keyframes standby-scan { to { transform: rotate(360deg); } }
+
+@media (max-width: 760px) {
+  .standby-radar-card { grid-template-columns: 92px minmax(0, 1fr); min-height: 138px; padding: 12px; }
+  .standby-scope { width: 84px; height: 84px; }
+  .standby-radar-card::after { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .standby-sweep { animation: none; transform: rotate(42deg); }
+}
+
+.multi-storm-target-queue {
+  position: absolute;
+  z-index: 18;
+  top: 104px;
+  left: clamp(286px, 20vw, 330px);
+  right: 16px;
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  min-width: 0;
+  height: 68px;
+  border: 1px solid rgba(0, 216, 255, 0.32);
+  background: rgba(3, 10, 14, 0.9);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.34);
+  backdrop-filter: blur(8px);
+}
+
+.multi-storm-queue-label {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  grid-template-rows: 1fr 1fr;
+  gap: 0 7px;
+  align-items: center;
+  padding: 9px 10px;
+  border-right: 1px solid rgba(0, 216, 255, 0.28);
+  background: linear-gradient(135deg, rgba(0, 216, 255, 0.14), transparent);
+}
+
+.multi-storm-queue-label svg { grid-row: 1 / 3; width: 20px; color: var(--cyan); }
+.multi-storm-queue-label span { align-self: end; color: var(--muted); font-size: 9px; font-weight: 900; letter-spacing: 0.08em; }
+.multi-storm-queue-label strong { align-self: start; color: #ecfbff; font: 900 18px/1 Consolas, monospace; }
+
+.multi-storm-queue-track {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(210px, 1fr);
+  gap: 1px;
+  min-width: 0;
+  overflow-x: auto;
+  background: rgba(0, 216, 255, 0.12);
+  scrollbar-width: thin;
+}
+
+.multi-storm-queue-track button {
+  position: relative;
+  display: grid;
+  grid-template-columns: 5px minmax(58px, 0.75fr) minmax(54px, 1fr) minmax(62px, 0.9fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 8px 10px;
+  color: var(--paper);
+  border: 0;
+  background: #071217;
+  text-align: left;
+  cursor: pointer;
+}
+
+.multi-storm-queue-track button:hover { background: #0a1b21; }
+.multi-storm-queue-track button > i { align-self: stretch; width: 4px; background: var(--cyan); box-shadow: 0 0 10px rgba(0, 216, 255, 0.48); }
+.multi-storm-queue-track button > span { display: grid; gap: 3px; min-width: 0; }
+.multi-storm-queue-track button b { color: var(--cyan); font: 900 11px/1 Consolas, monospace; white-space: nowrap; }
+.multi-storm-queue-track button small { overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.multi-storm-queue-track button > strong { overflow: hidden; color: #ecfbff; font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }
+.multi-storm-queue-track button > em { overflow: hidden; color: var(--amber); font-size: 10px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
+.multi-storm-queue-track .multi-storm-vitals { justify-items: end; text-align: right; }
+.multi-storm-queue-track .multi-storm-vitals b { color: #ecfbff; }
+
+.multi-storm-queue-track button.active {
+  background: linear-gradient(90deg, rgba(255, 59, 50, 0.18), rgba(7, 18, 23, 0.96) 54%);
+  box-shadow: inset 0 -2px 0 rgba(255, 59, 50, 0.9);
+}
+
+.multi-storm-queue-track button.active > i { background: var(--red); box-shadow: 0 0 12px rgba(255, 59, 50, 0.7); }
+.multi-storm-queue-track button.active b { color: var(--red); }
+.multi-storm-queue-track button:focus-visible { z-index: 2; outline: 2px solid var(--amber); outline-offset: -2px; }
+
+@media (max-width: 980px) {
+  .multi-storm-target-queue { left: 16px; top: 96px; grid-template-columns: 76px minmax(0, 1fr); }
+  .multi-storm-queue-track { grid-auto-columns: minmax(200px, 72vw); }
+  .multi-storm-queue-track button { grid-template-columns: 5px minmax(52px, 0.7fr) minmax(50px, 1fr) auto; }
+  .multi-storm-queue-track button > em { display: none; }
+}
+
 @keyframes stormLockResolve {
   0% {
     transform: rotate(0deg) scale(0.98);
