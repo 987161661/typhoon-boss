@@ -1,27 +1,31 @@
 import { NextResponse } from "next/server";
-import { getRadarSnapshot } from "@/lib/radarSnapshot";
+import { buildBossProfiles } from "@/lib/bossEngine";
+import { getTrackSnapshot } from "@/lib/realTyphoonData";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export async function GET() {
   try {
-    const snapshot = await getRadarSnapshot();
-    const firstBoss = snapshot.bosses[0] ?? null;
+    const track = await getTrackSnapshot();
+    const bosses = await buildBossProfiles(track.storms);
+    const firstBoss = bosses[0] ?? null;
     return NextResponse.json(
       {
         source: {
           primary:
             firstBoss?.sourcePolicy.canonicalAuthority ??
             "Official warnings remain the source of truth; this API only provides machine-readable radar analysis.",
-          machineReadableTrackSource: snapshot.source,
-          updatedAt: snapshot.updatedAt
+          machineReadableTrackSource: track.source,
+          updatedAt: track.fetchedAt
         },
-        count: snapshot.bosses.length,
-        bosses: snapshot.bosses,
-        degraded: snapshot.warnings.length > 0,
-        warnings: snapshot.warnings,
-        cache: snapshot.cache
+        observedAt: track.observedAt,
+        fetchedAt: track.fetchedAt,
+        status: track.status,
+        count: bosses.length,
+        bosses,
+        degraded: track.warnings.length > 0,
+        warnings: track.warnings
       },
       {
         headers: {

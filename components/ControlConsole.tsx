@@ -1,6 +1,4 @@
 "use client";
-/* eslint-disable @typescript-eslint/no-explicit-any -- API response includes redacted route metadata. */
-
 import Link from "next/link";
 import { Activity, ArrowLeft, Bot, Database, Eye, Map, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -21,7 +19,8 @@ export function ControlConsole() {
   useEffect(() => { void load(); }, []);
   async function load() {
     const response = await fetch("/api/control-console", { cache: "no-store" });
-    const payload = await response.json(); setSettings(payload.settings); setMessage(response.ok ? "当前运行配置已载入；未填写的项沿用现有环境变量。" : payload.error);
+    const payload = await response.json();
+    setSettings(payload.settings); setMessage(response.ok ? "当前运行配置已载入；密钥仅由服务端环境变量管理。" : payload.error);
   }
   function patch(path: string, value: unknown) {
     setSettings((current: Settings) => { const next = structuredClone(current); let target = next; const keys = path.split("."); for (const key of keys.slice(0, -1)) target = target[key]; target[keys.at(-1)!] = value; return next; });
@@ -33,7 +32,7 @@ export function ControlConsole() {
     for (const route of Object.values(payload.routes) as any[]) { delete route.apiKeyState; if (!route.apiKey) delete route.apiKey; }
     const response = await fetch("/api/control-console", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     const result = await response.json(); setSaving(false);
-    if (response.ok) { setSettings(result.settings); setSecretDraft({}); setMessage("已保存。未显式覆盖的值仍继承当前环境变量，因此现有链路不会被重置。"); } else setMessage(result.error || "保存失败");
+    if (response.ok) { setSettings(result.settings); setSecretDraft({}); setMessage("已保存。未显式覆盖的值仍继承当前环境变量。"); } else setMessage(result.error || "保存失败");
   }
   if (!settings) return <main className="console-shell"><p className="console-loading">正在连接控制台…</p></main>;
   const title = selected[1];
@@ -42,11 +41,11 @@ export function ControlConsole() {
     <header className="console-topbar"><Link href="/" className="console-back"><ArrowLeft size={16}/> 返回雷达</Link><div><span>TYHOON BOSS / OPS</span><strong>雷达控制台</strong></div><button onClick={() => void load()} className="console-quiet"><RefreshCw size={15}/> 重新读取</button></header>
     <aside className="console-nav">{sections.map(([id, label, SectionIcon]) => <button key={id} className={active === id ? "active" : ""} onClick={() => setActive(id)}><SectionIcon size={17}/><span>{label}</span></button>)}<div className="console-nav-note"><Eye size={15}/><span>密钥从不回传到浏览器；只显示配置状态。</span></div></aside>
     <section className="console-workspace"><header className="console-section-title"><Icon size={21}/><div><span>CONTROL PLANE</span><h1>{title}</h1></div></header>
-      {active === "models" && <ModelRoutes settings={settings} patch={patch} secrets={secretDraft} setSecrets={setSecretDraft}/>} 
-      {active === "sources" && <SourceRoutes settings={settings} patch={patch}/>} 
-      {active === "automation" && <Automation settings={settings} patch={patch}/>} 
-      {active === "map" && <MapSettings settings={settings} patch={patch}/>} 
-      {active === "reliability" && <Reliability settings={settings} patch={patch}/>} 
+      {active === "models" && <ModelRoutes settings={settings} patch={patch} secrets={secretDraft} setSecrets={setSecretDraft}/>}
+      {active === "sources" && <SourceRoutes settings={settings} patch={patch}/>}
+      {active === "automation" && <Automation settings={settings} patch={patch}/>}
+      {active === "map" && <MapSettings settings={settings} patch={patch}/>}
+      {active === "reliability" && <Reliability settings={settings} patch={patch}/>}
     </section>
     <footer className="console-footer"><p>{message}</p><button className="console-save" onClick={() => void save()} disabled={saving}><Save size={16}/>{saving ? "保存中" : "保存并应用"}</button></footer>
   </main>;

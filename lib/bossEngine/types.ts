@@ -103,7 +103,7 @@ export interface BossProvinceBriefing {
 
 export interface BossLandfallScenario {
   province: string;
-  probability: number;
+  relativeWeight: number;
   estimatedAt: string | null;
   windSpeedMs: number | null;
   windForceLevel: string;
@@ -111,6 +111,8 @@ export interface BossLandfallScenario {
   agencyTotal: number;
   evidenceLevel: "inferred";
   basis: string;
+  generatedAt: string;
+  limitations: string;
   currentConditions?: BossProvinceCurrentConditions;
 }
 

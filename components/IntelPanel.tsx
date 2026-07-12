@@ -20,6 +20,7 @@ import { FlipValue, HudPanel, MetricRow, MiniReadout } from "./HudPrimitives";
 import type { BossProfile, BossSkill } from "@/lib/bossEngine/types";
 import { StormSatellitePortrait } from "./StormSatellitePortrait";
 import type { SatelliteLayerPayload, Storm } from "@/lib/types";
+import { windForceFromSpeed as sharedWindForceFromSpeed } from "@/lib/meteorology";
 
 const UI = {
   currentIntel: "\u5f53\u524d\u53f0\u98ce Boss \u60c5\u62a5",
@@ -296,10 +297,8 @@ function RealtimeSyncStatus({
 }
 
 function windForceFromSpeed(speed: number) {
-  const thresholds = [0.3, 1.6, 3.4, 5.5, 8, 10.8, 13.9, 17.2, 20.8, 24.5, 28.5, 32.7, 37, 41.5, 46.2, 51, 56.1, 61.3];
   if (!Number.isFinite(speed) || speed < 0) return { level: "--" };
-  const level = thresholds.findIndex((threshold) => speed < threshold);
-  return { level: level === -1 ? "17+" : String(level) };
+  return { level: sharedWindForceFromSpeed(speed) };
 }
 
 function formatCoordinate(value: number, axis: "lat" | "lon") {

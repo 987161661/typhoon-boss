@@ -26,7 +26,7 @@ export function LiveDirector() {
     "loading"
   );
   const transitionTimerRef = useRef<number | null>(null);
-  const ready = loaded.briefing && loaded.analysis;
+  const ready = loaded.briefing || loaded.analysis;
 
   useEffect(() => {
     let cancelled = false;
@@ -115,25 +115,13 @@ export function LiveDirector() {
       data-switching={switching ? "true" : "false"}
     >
       <section
-        aria-hidden={activeScene !== "briefing"}
-        className={`live-director-scene ${activeScene === "briefing" ? "is-active" : "is-inactive"}`}
-        data-scene="briefing"
+        className="live-director-scene is-active"
+        data-scene={activeScene}
       >
         <TyphoonMap
           view="live"
-          liveDeck="briefing"
-          onSceneReady={() => markLoaded("briefing")}
-        />
-      </section>
-      <section
-        aria-hidden={activeScene !== "analysis"}
-        className={`live-director-scene ${activeScene === "analysis" ? "is-active" : "is-inactive"}`}
-        data-scene="analysis"
-      >
-        <TyphoonMap
-          view="live"
-          liveDeck="analysis"
-          onSceneReady={() => markLoaded("analysis")}
+          liveDeck={activeScene}
+          onSceneReady={() => markLoaded(activeScene)}
         />
       </section>
 
@@ -166,9 +154,9 @@ export function LiveDirector() {
       {switching ? <div className="live-director-sweep" key={`sweep-${cycle}`} aria-hidden="true" /> : null}
       {!ready ? (
         <div className="live-director-preload" role="status">
-          <span>DUAL SCENE PRELOAD</span>
-          <strong>双场景正在预热</strong>
-          <small>{loaded.briefing ? "态势就绪" : "态势加载中"} · {loaded.analysis ? "专业就绪" : "专业加载中"}</small>
+          <span>LIVE MAP STARTUP</span>
+          <strong>直播地图正在就绪</strong>
+          <small>{loaded.briefing || loaded.analysis ? "地图已就绪" : "实时场景加载中"}</small>
         </div>
       ) : null}
     </main>

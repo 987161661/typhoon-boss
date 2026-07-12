@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import type { BossEvidenceLevel, BossProfile } from "@/lib/bossEngine/types";
 import type { SatelliteLayerPayload, Storm } from "@/lib/types";
+import { windForceFromSpeed as sharedWindForceFromSpeed } from "@/lib/meteorology";
 import { StormSatellitePortrait } from "./StormSatellitePortrait";
 
 interface LiveMetric {
@@ -48,7 +49,6 @@ interface LiveForecastPoint {
   time: string;
   wind: string;
   pressure: string;
-  probability: string;
 }
 
 interface LiveEventBrief {
@@ -98,6 +98,21 @@ interface LiveLandfallScenario {
   closestApproach: string;
   support: string;
   durationMs: number;
+  isPriority: boolean;
+  priorityReason: string | null;
+}
+
+interface LiveLandingPriority {
+  province: string | null;
+  place: string;
+  time: string;
+  isConfirmed: boolean;
+  phase: "upcoming" | "just-landed";
+}
+
+interface LiveCityTickerItem {
+  id: string;
+  message: string;
 }
 
 export interface LiveBroadcastModel {
@@ -131,6 +146,7 @@ export interface LiveBroadcastModel {
   tickerTitle: string;
   tickerDetail: string;
   tickerEvidence: string;
+  cityTickerItems: LiveCityTickerItem[];
 }
 
 export function buildLiveBroadcastModel({
@@ -162,11 +178,11 @@ export function buildLiveBroadcastModel({
     id: `${point.time}-${index}`,
     time: formatCompactTime(point.time),
     wind: point.wind > 0 ? `${Math.round(point.wind)} m/s` : "风速待报",
-    pressure: point.pressure > 0 ? `${Math.round(point.pressure)} hPa` : "气压待报",
-    probability: Number.isFinite(point.probability) ? `${Math.round(point.probability)}%` : "--"
+    pressure: point.pressure > 0 ? `${Math.round(point.pressure)} hPa` : "气压待报"
   }));
   const latestEvent =
     bossProfile?.events.find((event) => event.category === "structure") ?? bossProfile?.events[0] ?? null;
+  const landingPriority = buildLandingPriority(storm, bossProfile);
 
   return {
     status,
@@ -179,7 +195,7 @@ export function buildLiveBroadcastModel({
     windForceLevel: storm ? windForceFromSpeed(storm.maxWind) : "--",
     energy: bossProfile?.energy ?? (storm ? calculateFallbackEnergy(storm) : 0),
     landfall: buildLandfallBrief(bossProfile),
-    landfallScenarios: buildLiveLandfallScenarios(bossProfile),
+    landfallScenarios: buildLiveLandfallScenarios(bossProfile, landingPriority),
     stormTime: storm ? formatCompactTime(storm.updatedAt) : "等待上游发布",
     syncTime: lastSyncedAt ? formatSyncTime(lastSyncedAt) : lastUpdated,
     sourceLabel: sourceSummary,
@@ -220,7 +236,8 @@ export function buildLiveBroadcastModel({
         ? `${evidenceLabel(latestEvent.evidenceLevel)} · ${formatCompactTime(latestEvent.time)}`
         : storm
           ? `公开实况 · ${formatCompactTime(storm.updatedAt)}`
-          : "每 10 秒检查一次"
+          : "每 10 秒检查一次",
+    cityTickerItems: buildCityTickerItems(storm)
   };
 }
 
@@ -287,33 +304,34 @@ export function LiveForecastOverlay({ model }: { model: LiveBroadcastModel }) {
 
 function LiveLandfallBroadcast({ scenarios }: { scenarios: LiveLandfallScenario[] }) {
   const [page, setPage] = useState(0);
-  const scenario = scenarios[page % Math.max(1, scenarios.length)];
+  const playback = useMemo(() => buildPriorityPlayback(scenarios), [scenarios]);
+  const scenario = playback[page % Math.max(1, playback.length)];
   const pageDurationMs = scenario?.durationMs ?? 2500;
 
   useEffect(() => {
-    setPage(provincePageAtTimestamp(scenarios, Date.now()));
-  }, [scenarios]);
+    setPage(provincePageAtTimestamp(playback, Date.now()));
+  }, [playback]);
 
   useEffect(() => {
-    if (scenarios.length <= 1) return;
+    if (playback.length <= 1) return;
     const timer = window.setTimeout(() => {
-      setPage((current) => (current + 1) % scenarios.length);
+      setPage((current) => (current + 1) % playback.length);
     }, pageDurationMs);
     return () => window.clearTimeout(timer);
-  }, [page, pageDurationMs, scenarios.length]);
+  }, [page, pageDurationMs, playback.length]);
 
-  const nextScenario = scenarios.length > 1 ? scenarios[(page + 1) % scenarios.length] : null;
+  const nextScenario = playback.length > 1 ? playback[(page + 1) % playback.length] : null;
 
   return (
     <section className="live-landfall-broadcast" aria-label="全国省份播报">
       <header>
         <div><RadioTower aria-hidden="true" /><strong>全国省份播报</strong></div>
-        <b>{scenarios.length ? `${page + 1}/${scenarios.length}` : "0/34"} · {scenario?.impactLabel ?? "全国数据同步中"}</b>
+        <b>{scenario?.isPriority ? "登陆事件优先播报" : scenarios.length ? `${page + 1}/${playback.length}` : "0/34"} · {scenario?.impactLabel ?? "全国数据同步中"}</b>
       </header>
       {scenario ? (
-        <article className={scenario.windDataStale ? "is-wind-stale" : undefined} key={scenario.id}>
+        <article className={`${scenario.windDataStale ? "is-wind-stale" : ""} ${scenario.isPriority ? "is-landing-priority" : ""}`} key={`${scenario.id}-${page}`}>
           <div className="live-landfall-destination">
-            <span>{scenario.headlineLabel}</span>
+            <span>{scenario.isPriority ? scenario.priorityReason : scenario.headlineLabel}</span>
             <strong>{scenario.province}</strong>
           </div>
           <div className="live-landfall-current-wind">
@@ -477,9 +495,9 @@ export function LiveIntelPanel({
         <section className="live-pro-forecast">
           <div className="live-pro-section-head"><Route aria-hidden="true" /><span>主路径逐时次预报</span><b>{model.forecast.length} PTS</b></div>
           <div className="live-pro-forecast-table">
-            <header><span>时次</span><span>风速</span><span>气压</span><span>置信</span></header>
+            <header><span>时次</span><span>风速</span><span>气压</span></header>
             {model.forecast.map((point) => (
-              <div key={point.id}><strong>{point.time}</strong><span>{point.wind}</span><span>{point.pressure}</span><b>{point.probability}</b></div>
+              <div key={point.id}><strong>{point.time}</strong><span>{point.wind}</span><span>{point.pressure}</span></div>
             ))}
           </div>
           <div className="live-agency-chips">
@@ -540,25 +558,64 @@ export function LiveBottomBar({
   deck: LiveDeckView;
   secondsToSwitch: number;
 }) {
+  const [tickerIndex, setTickerIndex] = useState(0);
+  const [showCityTicker, setShowCityTicker] = useState(false);
+  const tickerItems = model.cityTickerItems;
+  const tickerSignature = tickerItems.map((item) => item.id).join("|");
+
+  useEffect(() => {
+    if (tickerItems.length === 0) {
+      setShowCityTicker(false);
+      return;
+    }
+    let disposed = false;
+    let showTimer: number | null = null;
+    let hideTimer: number | null = null;
+    const schedule = (delayMs: number) => {
+      showTimer = window.setTimeout(() => {
+        if (disposed) return;
+        setShowCityTicker(true);
+        hideTimer = window.setTimeout(() => {
+          if (disposed) return;
+          setShowCityTicker(false);
+          setTickerIndex((current) => (current + 1) % tickerItems.length);
+          schedule(22_000);
+        }, 8_000);
+      }, delayMs);
+    };
+    schedule(3_000);
+    return () => {
+      disposed = true;
+      if (showTimer !== null) window.clearTimeout(showTimer);
+      if (hideTimer !== null) window.clearTimeout(hideTimer);
+    };
+  }, [tickerItems.length, tickerSignature]);
+
+  const cityTicker = tickerItems[tickerIndex % Math.max(1, tickerItems.length)] ?? null;
   return (
     <footer className={`live-bottom-bar live-fact-rail status-${model.status}`}>
       <div><Zap aria-hidden="true" /><span>当前强度</span><strong>{model.windForceLevel}级 · {model.stageLabel}</strong></div>
       <div><MapPin aria-hidden="true" /><span>{model.landfall.label}</span><strong>{model.landfall.time} · {model.landfall.place}</strong></div>
+      {showCityTicker && cityTicker && <div className="live-arrival-ticker"><Route aria-hidden="true" /><span>城市台风动态</span><strong>{cityTicker.message}</strong></div>}
       <div><BatteryCharging aria-hidden="true" /><span>BOSS 能量</span><strong>{model.energy}%</strong></div>
       <div><TimerReset aria-hidden="true" /><span>当前：{deck === "briefing" ? "观众态势" : "专业分析"}</span><strong>{secondsToSwitch > 0 ? `${secondsToSwitch} 秒后自动换屏` : "独立场景 · 导播切换"}</strong></div>
     </footer>
   );
 }
 
-function buildLiveLandfallScenarios(bossProfile?: BossProfile | null): LiveLandfallScenario[] {
+function buildLiveLandfallScenarios(bossProfile?: BossProfile | null, priority?: LiveLandingPriority | null): LiveLandfallScenario[] {
   if (bossProfile?.provinceBriefings?.length) {
     return bossProfile.provinceBriefings
       .filter((briefing) => briefing.impactStatus === "unaffected" || Boolean(briefing.estimatedAt))
       .map((briefing, index) => {
         const current = briefing.currentConditions;
+        const isPriority = Boolean(priority && briefing.province === priority.province);
         return {
         id: `${briefing.province}-${index}`,
-        province: provinceDisplayName(briefing.province),
+        // City precision is reserved for an official landfall record only.
+        province: isPriority && priority?.isConfirmed
+          ? `${provinceDisplayName(briefing.province)} · ${priority.place}`
+          : provinceDisplayName(briefing.province),
         headlineLabel: briefing.headlineLabel,
         impactStatus: briefing.impactStatus,
         impactLabel: briefing.impactLabel,
@@ -592,11 +649,29 @@ function buildLiveLandfallScenarios(bossProfile?: BossProfile | null): LiveLandf
         support: briefing.agencySupport > 0
           ? `${briefing.agencySupport}/${briefing.agencyTotal}家指向`
           : "暂无线形指向",
-        durationMs: briefing.displayDurationMs
+        durationMs: isPriority ? 5000 : briefing.displayDurationMs,
+        isPriority,
+        priorityReason: isPriority
+          ? `${priority?.isConfirmed ? "官方确认" : "推断"}${priority?.phase === "upcoming" ? " · 即将登陆" : " · 登陆后重点播报"}`
+          : null
         };
       });
   }
   return [];
+}
+
+function buildPriorityPlayback(scenarios: LiveLandfallScenario[]) {
+  const priority = scenarios.filter((scenario) => scenario.isPriority);
+  const ordinary = scenarios.filter((scenario) => !scenario.isPriority);
+  if (priority.length === 0) return scenarios;
+  const playback: LiveLandfallScenario[] = [];
+  ordinary.forEach((scenario, index) => {
+    playback.push(scenario);
+    // A landing event is inserted after every two ordinary provinces: it gets
+    // both more turns and a longer on-air slot without starving national coverage.
+    if (index % 2 === 1) playback.push(...priority);
+  });
+  return [...priority, ...playback, ...priority];
 }
 
 function provincePageAtTimestamp(scenarios: LiveLandfallScenario[], timestamp: number) {
@@ -609,6 +684,76 @@ function provincePageAtTimestamp(scenarios: LiveLandfallScenario[], timestamp: n
     if (offset < 0) return index;
   }
   return 0;
+}
+
+function buildLandingPriority(storm: Storm | null, bossProfile?: BossProfile | null): LiveLandingPriority | null {
+  if (!storm) return null;
+  const now = Date.now();
+  const windowMs = 30 * 60 * 1000;
+  const official = storm.landfalls
+    .map((landfall) => ({ landfall, offset: parseStormTime(landfall.time) - now }))
+    .filter((item) => Number.isFinite(item.offset) && item.offset >= -windowMs && item.offset <= windowMs)
+    .sort((left, right) => Math.abs(left.offset) - Math.abs(right.offset))[0];
+  if (official) {
+    return {
+      province: provinceFromPlace(official.landfall.place),
+      place: cityFromPlace(official.landfall.place) ?? official.landfall.place,
+      time: official.landfall.time,
+      isConfirmed: true,
+      phase: official.offset >= 0 ? "upcoming" : "just-landed"
+    };
+  }
+  const inferred = (bossProfile?.landfallScenarios ?? [])
+    .map((scenario) => ({ scenario, offset: parseStormTime(scenario.estimatedAt) - now }))
+    .filter((item) => item.scenario.estimatedAt && Number.isFinite(item.offset) && item.offset >= -windowMs && item.offset <= windowMs)
+    .sort((left, right) => Math.abs(left.offset) - Math.abs(right.offset))[0];
+  if (!inferred?.scenario.estimatedAt) return null;
+  return {
+    province: inferred.scenario.province,
+    place: `${provinceDisplayName(inferred.scenario.province)}沿海`,
+    time: inferred.scenario.estimatedAt,
+    isConfirmed: false,
+    phase: inferred.offset >= 0 ? "upcoming" : "just-landed"
+  };
+}
+
+function buildCityTickerItems(storm: Storm | null): LiveCityTickerItem[] {
+  if (!storm) return [];
+  const now = Date.now();
+  const oneHour = 60 * 60 * 1000;
+  return storm.track
+    .map((point) => {
+      const city = point.locationDescription ? cityFromPlace(point.locationDescription) : null;
+      const timestamp = parseStormTime(point.time);
+      if (!city || !Number.isFinite(timestamp) || Math.abs(timestamp - now) > oneHour) return null;
+      const minutes = Math.max(0, Math.ceil((timestamp - now) / 60_000));
+      const level = windForceFromSpeed(point.wind);
+      return {
+        id: `${point.time}-${city}`,
+        message: timestamp >= now
+          ? `预计 ${minutes} 分钟后抵达${city}，等级为 ${level} 级`
+          : `已抵达${city}，等级为 ${level} 级`
+      };
+    })
+    .filter((item): item is LiveCityTickerItem => item !== null)
+    .filter((item, index, items) => items.findIndex((candidate) => candidate.id === item.id) === index);
+}
+
+function parseStormTime(value: string | null | undefined) {
+  if (!value) return Number.NaN;
+  return new Date(value.replace(" ", "T")).getTime();
+}
+
+function provinceFromPlace(place: string) {
+  const match = place.match(/(北京|天津|上海|重庆|河北|辽宁|吉林|黑龙江|江苏|浙江|安徽|福建|江西|山东|河南|湖北|湖南|广东|海南|四川|贵州|云南|陕西|甘肃|青海|台湾|山西|广西|内蒙古|西藏|宁夏|新疆|香港|澳门)/);
+  return match?.[1] ?? null;
+}
+
+function cityFromPlace(place: string) {
+  // Only use a city explicitly present in the provider's place string. This
+  // deliberately does not reverse-geocode coordinates or invent a coastal city.
+  const afterProvince = place.replace(/^.*?(?:省|自治区|特别行政区)/, "");
+  return afterProvince.match(/([\u4e00-\u9fa5]{2}市)/)?.[1] ?? null;
 }
 
 function formatCountdown(value: string) {
@@ -679,10 +824,8 @@ function buildLandfallBrief(bossProfile?: BossProfile | null): LiveLandfallBrief
 }
 
 function windForceFromSpeed(speed: number) {
-  const thresholds = [0.3, 1.6, 3.4, 5.5, 8, 10.8, 13.9, 17.2, 20.8, 24.5, 28.5, 32.7, 37, 41.5, 46.2, 51, 56.1, 61.3];
   if (!Number.isFinite(speed) || speed < 0) return "--";
-  const level = thresholds.findIndex((threshold) => speed < threshold);
-  return level === -1 ? "17+" : String(level);
+  return sharedWindForceFromSpeed(speed);
 }
 
 function calculateFallbackEnergy(storm: Storm) {

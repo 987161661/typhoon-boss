@@ -4,6 +4,7 @@ out
 dist
 *.log
 .env*
+!.env.example
 *.tsbuildinfo
 
 # Local Codex/browser runtime state
@@ -19,6 +20,7 @@ tmp/
 next-*.log
 next-*.err.log
 .runtime/
+runtime/
 
 # Heavy local QA/reference captures
 ref-pic.png

@@ -10,10 +10,21 @@ export interface TrackPoint {
   lon: number;
   wind: number;
   pressure: number;
+  /** Provider-supplied location text. Never reverse-geocoded by this app. */
+  locationDescription?: string;
 }
 
-export interface ForecastPoint extends TrackPoint {
-  probability: number;
+export type ForecastPoint = TrackPoint;
+
+export interface WindRadiiQuadrants {
+  ne: number;
+  se: number;
+  sw: number;
+  nw: number;
+}
+
+export interface WindRadiusLevel extends WindRadiiQuadrants {
+  max: number;
 }
 
 export interface ForecastScenario {
@@ -28,6 +39,14 @@ export interface StormSkill {
   name: string;
   detail: string;
   severity: number;
+}
+
+export interface StormLandfall {
+  time: string;
+  place: string;
+  lat: number;
+  lon: number;
+  note?: string;
 }
 
 export interface Storm {
@@ -51,10 +70,17 @@ export interface Storm {
     r7: number;
     r10: number;
     r12: number;
+    quadrants: {
+      r7: WindRadiusLevel;
+      r10: WindRadiusLevel;
+      r12: WindRadiusLevel;
+    };
   };
   track: TrackPoint[];
   forecast: ForecastPoint[];
   forecastScenarios: ForecastScenario[];
+  /** Officially published landfall notices from the track provider. */
+  landfalls: StormLandfall[];
   skills: StormSkill[];
   notice: string;
 }
@@ -175,6 +201,9 @@ export interface WindFieldPayload extends EnvironmentLayerMeta {
   model: string;
   unit: "m/s";
   points: WindFieldPoint[];
+  nativeResolutionDegrees?: number;
+  displayResolutionDegrees?: number;
+  cycle?: string;
   isStale?: boolean;
   lastSuccessfulAt?: string;
   sampling?: "storm" | "viewport";

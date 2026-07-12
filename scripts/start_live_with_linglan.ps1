@@ -5,7 +5,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
-$vtuberRoot = 'D:\vtuber\aituber-onair-main'
+$vtuberRoot = 'D:\LocalToolset\vtuber\aituber-onair-main'
 $linglanLauncher = Join-Path $vtuberRoot 'Start-Linglan-Bilibili.ps1'
 $runtimeDir = Join-Path $projectRoot '.runtime'
 

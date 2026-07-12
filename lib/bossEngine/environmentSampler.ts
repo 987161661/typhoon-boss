@@ -75,13 +75,13 @@ const OPEN_METEO_VARIABLES = [
   "cape"
 ].join(",");
 
-export async function sampleBossEnvironment(storm: Storm): Promise<EnvironmentFeatures> {
+export async function sampleBossEnvironment(storm: Storm, signal?: AbortSignal): Promise<EnvironmentFeatures> {
   const points = buildSamplePoints(storm);
 
   try {
     const samples: EnvironmentSample[] = [];
     for (const pointChunk of chunk(points, 8)) {
-      const locations = await fetchOpenMeteoLocations(pointChunk);
+      const locations = await fetchOpenMeteoLocations(pointChunk, signal);
       samples.push(
         ...locations
           .map((location, index) => convertSample(location, pointChunk[index]))
@@ -129,7 +129,7 @@ function buildSamplePoints(storm: Storm): SamplePoint[] {
   return dedupePoints(points).slice(0, 9);
 }
 
-async function fetchOpenMeteoLocations(points: SamplePoint[]) {
+async function fetchOpenMeteoLocations(points: SamplePoint[], signal?: AbortSignal) {
   const query = new URLSearchParams({
     latitude: points.map((point) => point.lat.toFixed(2)).join(","),
     longitude: points.map((point) => point.lon.toFixed(2)).join(","),
@@ -139,7 +139,7 @@ async function fetchOpenMeteoLocations(points: SamplePoint[]) {
     wind_speed_unit: "ms",
     cell_selection: "sea"
   });
-  const response = await fetchOpenMeteoWithRetry(query);
+  const response = await fetchOpenMeteoWithRetry(query, signal);
   if (!response.ok) throw new Error(`Open-Meteo environment request failed: ${response.status}`);
   const raw = (await response.json()) as OpenMeteoLocation | OpenMeteoLocation[];
   return Array.isArray(raw) ? raw : [raw];
@@ -212,14 +212,15 @@ function unavailableEnvironment(reason: string): EnvironmentFeatures {
   };
 }
 
-async function fetchOpenMeteo(query: URLSearchParams) {
+async function fetchOpenMeteo(query: URLSearchParams, signal?: AbortSignal) {
   const path = `/v1/forecast?${query.toString()}`;
   const init: RequestInit = {
     headers: {
       Accept: "application/json",
       "User-Agent": "TyphoonBossRadar/1.0"
     },
-    cache: "no-store"
+    cache: "no-store",
+    signal
   };
 
   try {
@@ -229,11 +230,11 @@ async function fetchOpenMeteo(query: URLSearchParams) {
   }
 }
 
-async function fetchOpenMeteoWithRetry(query: URLSearchParams) {
+async function fetchOpenMeteoWithRetry(query: URLSearchParams, signal?: AbortSignal) {
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      const response = await fetchOpenMeteo(query);
+      const response = await fetchOpenMeteo(query, signal);
       if (response.ok || attempt === 2) return response;
     } catch (error) {
       lastError = error;

@@ -33,4 +33,6 @@ npm.cmd run agent:run
 npm.cmd run clean:local
 ```
 
+控制台无需管理员登录。网页进程启动时会自动调用 MiniMax 完成一次演进整理，并按直播设置中的间隔持续运行。
+
 `clean:local` 只删除本地调试缓存、日志、浏览器自动化配置和构建中间物；不删除 `.runtime` 里的直播设置与演进状态。

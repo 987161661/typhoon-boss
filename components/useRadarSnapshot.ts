@@ -26,6 +26,7 @@ export function useRadarSnapshot(stormId?: string | null): RadarSnapshotState {
     pollIntervalMs: SNAPSHOT_POLL_MS
   });
   const requestIdRef = useRef(0);
+  const etagRef = useRef<string | null>(null);
 
   useEffect(() => {
     let disposed = false;
@@ -40,13 +41,21 @@ export function useRadarSnapshot(stormId?: string | null): RadarSnapshotState {
       try {
         const response = await fetch(`/api/radar/snapshot?${params.toString()}`, {
           cache: "no-store",
-          signal: controller.signal
+          signal: controller.signal,
+          headers: etagRef.current ? { "If-None-Match": etagRef.current } : undefined
         });
+        if (response.status === 304) {
+          if (!disposed && requestId === requestIdRef.current) {
+            setState((current) => ({ ...current, error: null, fetchDurationMs: Math.round(performance.now() - start), lastSyncedAt: Date.now() }));
+          }
+          return;
+        }
         const payload = (await response.json()) as RadarSnapshot;
         if (!response.ok) {
           throw new Error(payload.warnings?.[0] ?? "Radar snapshot temporarily unavailable.");
         }
         if (disposed || requestId !== requestIdRef.current) return;
+        etagRef.current = response.headers.get("etag");
         setState((current) => ({
           snapshot: payload,
           error: null,

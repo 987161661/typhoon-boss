@@ -19,7 +19,6 @@ type SchedulerState = {
 };
 
 declare global {
-  // eslint-disable-next-line no-var
   var typhoonEvolutionSchedulerState: SchedulerState | undefined;
 }
 

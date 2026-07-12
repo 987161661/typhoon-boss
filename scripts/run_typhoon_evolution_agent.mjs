@@ -12,6 +12,8 @@ let apiBase = "https://typhoon.slt.zj.gov.cn/Api";
 let miniMaxEndpoint = "https://api.minimaxi.com/v1/chat/completions";
 let miniMaxModel = "MiniMax-M3";
 let documentAgentApiKey = "";
+let documentAgentTimeoutMs = 60_000;
+let documentAgentRetryCount = 1;
 const cityWindCacheMs = 50 * 60 * 1000;
 const cityLocations = [
   { region: "北京市", city: "北京", lat: 39.9042, lon: 116.4074 },
@@ -98,6 +100,8 @@ async function applyControlConsoleOverrides() {
   if (typeof route.endpoint === "string" && route.endpoint.trim()) miniMaxEndpoint = route.endpoint.trim();
   if (typeof route.model === "string" && route.model.trim()) miniMaxModel = route.model.trim();
   if (typeof route.apiKey === "string" && route.apiKey.trim()) documentAgentApiKey = route.apiKey.trim();
+  if (Number.isFinite(Number(route.timeoutSeconds))) documentAgentTimeoutMs = Math.max(5_000, Math.min(180_000, Number(route.timeoutSeconds) * 1000));
+  if (Number.isFinite(Number(settings.automation?.retryCount))) documentAgentRetryCount = Math.max(0, Math.min(3, Math.round(Number(settings.automation.retryCount))));
 }
 
 async function collectTyphoonFacts(now) {
@@ -296,9 +300,9 @@ function signedValue(value, unit) {
 }
 
 function windForceFromSpeed(speed) {
-  const upperBounds = [0.3, 1.6, 3.4, 5.5, 8.0, 10.8, 13.9, 17.2, 20.8, 24.5, 28.5, 32.7];
+  const upperBounds = [0.3, 1.6, 3.4, 5.5, 8.0, 10.8, 13.9, 17.2, 20.8, 24.5, 28.5, 32.7, 37, 41.5, 46.2, 51, 56.1, 61.3];
   const level = upperBounds.findIndex((bound) => speed < bound);
-  return level === -1 ? 12 : level;
+  return level === -1 ? "17+" : level;
 }
 
 function windDirectionLabel(degrees) {
@@ -337,13 +341,17 @@ async function requestAnalysis(apiKey, facts, changeSet, previousAnalysis) {
 }
 
 async function invokeMiniMax(apiKey, prompt) {
-  const response = await fetch(miniMaxEndpoint, {
+  let response;
+  let lastError;
+  for (let attempt = 0; attempt <= documentAgentRetryCount; attempt += 1) {
+    try {
+      response = await fetch(miniMaxEndpoint, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({
+        body: JSON.stringify({
       model: miniMaxModel,
       temperature: 0.1,
       max_completion_tokens: 2048,
@@ -352,8 +360,16 @@ async function invokeMiniMax(apiKey, prompt) {
         { role: "system", content: "你是严谨的热带气旋分析助手，优先陈述数据来源、时间与不确定性。" },
         { role: "user", content: JSON.stringify(prompt) }
       ]
-    })
-  });
+        }),
+        signal: AbortSignal.timeout(documentAgentTimeoutMs)
+      });
+      if (response.ok || response.status < 500 || attempt === documentAgentRetryCount) break;
+    } catch (error) {
+      lastError = error;
+      if (attempt === documentAgentRetryCount) throw error;
+    }
+  }
+  if (!response) throw lastError instanceof Error ? lastError : new Error("MiniMax request failed before receiving a response.");
   const payload = await response.json().catch(() => null);
   if (!response.ok) throw new Error(`MiniMax request failed: ${response.status} ${payload?.base_resp?.status_msg ?? ""}`.trim());
   const content = payload?.choices?.[0]?.message?.content;
@@ -477,6 +493,7 @@ function stripThinking(value) {
   return value
     .replace(/<think>[\s\S]*?<\/think>\s*/gi, "")
     .replace(/^#\s+.*$/gm, "")
+    .replace(/[ \t]+$/gm, "")
     .trim();
 }
 

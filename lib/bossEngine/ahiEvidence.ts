@@ -60,13 +60,13 @@ const BANDS: Array<{ band: AhiBand; label: string; use: string; resolution: AhiB
   }
 ];
 
-export async function getAhiEvidenceForStorm(storm: Storm): Promise<AhiEvidenceSummary> {
+export async function getAhiEvidenceForStorm(storm: Storm, signal?: AbortSignal): Promise<AhiEvidenceSummary> {
   void storm;
   let lastReason = "no recent Himawari-9 AHI slot matched.";
 
   for (const slot of recentAhiSlots()) {
     try {
-      const objects = await listSlotObjects(slot);
+      const objects = await listSlotObjects(slot, signal);
       if (objects.length === 0) {
         lastReason = `${slot.path} had no published objects.`;
         continue;
@@ -125,7 +125,7 @@ function buildWarnings(availableBands: AhiBand[], bands: AhiBandState[]) {
   return warnings;
 }
 
-async function listSlotObjects(slot: AhiSlot): Promise<S3Object[]> {
+async function listSlotObjects(slot: AhiSlot, signal?: AbortSignal): Promise<S3Object[]> {
   const cached = slotCache.get(slot.path);
   if (cached && cached.expiresAt > Date.now()) return cached.objects;
 
@@ -139,7 +139,8 @@ async function listSlotObjects(slot: AhiSlot): Promise<S3Object[]> {
       Accept: "application/xml,text/xml",
       "User-Agent": "TyphoonBossRadar/1.0"
     },
-    cache: "no-store"
+    cache: "no-store",
+    signal
   });
   if (!response.ok) throw new Error(`NOAA Himawari AHI listing failed: HTTP ${response.status}`);
 

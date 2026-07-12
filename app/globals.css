@@ -152,6 +152,7 @@ a:focus-visible {
 }
 
 .storm-intensity-canvas,
+.wind-color-canvas,
 .wind-particle-canvas,
 .forecast-route-canvas {
   position: absolute;
@@ -170,16 +171,23 @@ a:focus-visible {
   filter: saturate(1.28) contrast(1.12);
 }
 
-.wind-particle-canvas {
+.wind-color-canvas {
   z-index: 4;
-  mix-blend-mode: screen;
-  opacity: 1;
-  filter: brightness(1.16) contrast(1.08) drop-shadow(0 0 1px rgba(255, 255, 255, 0.4));
+  mix-blend-mode: normal;
+  opacity: 0.94;
+  filter: saturate(1.2);
+}
+
+.wind-particle-canvas {
+  z-index: 5;
+  mix-blend-mode: normal;
+  opacity: 0.98;
+  filter: saturate(1.28) contrast(1.12) drop-shadow(0 0 1px rgba(120, 255, 194, 0.52));
   will-change: contents;
 }
 
 .forecast-route-canvas {
-  z-index: 5;
+  z-index: 6;
   mix-blend-mode: screen;
   opacity: 0.98;
 }
@@ -2985,6 +2993,75 @@ a:focus-visible {
   line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.wind-render-mode {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+  padding: 8px 9px;
+  border-left: 2px solid rgba(88, 212, 229, 0.72);
+  background: rgba(5, 22, 28, 0.6);
+}
+
+.wind-render-mode > span {
+  color: rgba(213, 246, 250, 0.82);
+  font: 800 10px/1 "Bahnschrift", "Microsoft YaHei", sans-serif;
+  letter-spacing: 0.08em;
+}
+
+.wind-render-mode > div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.wind-render-mode button {
+  min-height: 25px;
+  border: 1px solid rgba(187, 232, 238, 0.2);
+  border-radius: 2px;
+  background: rgba(1, 12, 17, 0.72);
+  color: rgba(221, 237, 239, 0.62);
+  font: 800 10px/1 "Microsoft YaHei", sans-serif;
+  cursor: pointer;
+}
+
+.wind-render-mode button.active {
+  border-color: rgba(103, 222, 240, 0.72);
+  background: rgba(19, 104, 119, 0.38);
+  color: #e9fdff;
+}
+
+.wind-render-mode small {
+  color: rgba(191, 218, 222, 0.68);
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.gfs-wind-key {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 1px;
+  margin-top: 1px;
+}
+
+.gfs-wind-key i {
+  display: block;
+  height: 4px;
+}
+
+.gfs-wind-key i:nth-child(1) { background: #1e55ab; }
+.gfs-wind-key i:nth-child(2) { background: #24c2b8; }
+.gfs-wind-key i:nth-child(3) { background: #63d668; }
+.gfs-wind-key i:nth-child(4) { background: #f8d64b; }
+.gfs-wind-key i:nth-child(5) { background: linear-gradient(90deg, #fa812f, #dc3239, #a6267a); }
+
+.gfs-wind-key span {
+  grid-column: 1 / -1;
+  margin-top: 2px;
+  color: rgba(205, 234, 238, 0.64);
+  font: 700 8px/1.2 "Bahnschrift", sans-serif;
+  letter-spacing: 0.03em;
 }
 
 .terrain-elevation-key {
@@ -7897,6 +7974,42 @@ a:focus-visible {
   animation: liveLandfallPage 280ms cubic-bezier(0.22, 0.8, 0.24, 1) both;
 }
 
+.live-landfall-broadcast > article.is-landing-priority {
+  border-color: rgba(255, 91, 91, .94);
+  box-shadow: 0 0 0 1px rgba(255, 91, 91, .34), 0 0 30px rgba(255, 45, 45, .22);
+  animation: liveLandfallPage 280ms cubic-bezier(0.22, 0.8, 0.24, 1) both, live-landing-priority-pulse 1.25s ease-in-out infinite alternate;
+}
+
+.live-landfall-broadcast > article.is-landing-priority .live-landfall-destination span {
+  color: #ff9d9d;
+  font-weight: 800;
+}
+
+.live-arrival-ticker {
+  min-width: min(32vw, 430px);
+  overflow: hidden;
+  border-left-color: rgba(255, 91, 91, .78) !important;
+  background: linear-gradient(90deg, rgba(153, 18, 24, .32), rgba(153, 18, 24, .04));
+}
+
+.live-arrival-ticker strong {
+  display: block;
+  width: max-content;
+  min-width: 100%;
+  padding-left: 100%;
+  animation: live-city-ticker 8s linear both;
+}
+
+@keyframes live-city-ticker {
+  from { transform: translateX(0); }
+  to { transform: translateX(-100%); }
+}
+
+@keyframes live-landing-priority-pulse {
+  from { background-color: rgba(119, 10, 17, .18); }
+  to { background-color: rgba(177, 18, 26, .38); }
+}
+
 .live-landfall-destination,
 .live-landfall-current-wind,
 .live-landfall-time,
@@ -8332,7 +8445,7 @@ a:focus-visible {
 
 .live-pro-forecast-table > * {
   display: grid;
-  grid-template-columns: 1.4fr 0.75fr 0.85fr 0.5fr;
+  grid-template-columns: 1.4fr 0.75fr 0.85fr;
   gap: 4px;
   align-items: center;
   min-height: 27px;
@@ -8353,11 +8466,6 @@ a:focus-visible {
 
 .live-pro-forecast-table strong {
   color: var(--live-data);
-}
-
-.live-pro-forecast-table b {
-  color: var(--live-evidence);
-  text-align: right;
 }
 
 .live-agency-chips,

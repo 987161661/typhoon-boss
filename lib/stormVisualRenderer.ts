@@ -87,7 +87,10 @@ function stormRenderMetrics(storm: Storm, ahi?: BossAhiSummary | null): RenderMe
   const seed = hashStormSeed(`${storm.id}:${storm.updatedAt}:${storm.maxWind}:${storm.minPressure}:${ahi?.slot ?? "no-ahi"}`);
   const phase = (seed % 6283) / 1000;
   const speedSignal = clamp((storm.moveSpeed || 0) / 42, 0, 1);
-  const eyeOffset = (1 - eyeStrength * 0.45) * (0.014 + speedSignal * 0.018);
+  // The map marker, local eyewall analysis and satellite crop all use the
+  // official track centre.  Keep the rendered eye on that same coordinate;
+  // a decorative offset makes a correctly located wind vortex look wrong.
+  const eyeOffset = 0;
   return {
     intensity,
     compactness,

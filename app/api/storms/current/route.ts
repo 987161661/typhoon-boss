@@ -1,19 +1,22 @@
 import { NextResponse } from "next/server";
-import { getRadarSnapshot } from "@/lib/radarSnapshot";
+import { getTrackSnapshot } from "@/lib/realTyphoonData";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export async function GET() {
   try {
-    const snapshot = await getRadarSnapshot();
+    const snapshot = await getTrackSnapshot();
     return NextResponse.json(
       {
         source: snapshot.source,
-        updatedAt: snapshot.updatedAt,
+        observedAt: snapshot.observedAt,
+        fetchedAt: snapshot.fetchedAt,
+        updatedAt: snapshot.fetchedAt,
+        status: snapshot.status,
         count: snapshot.storms.length,
         storms: snapshot.storms,
-        cache: snapshot.cache
+        warnings: snapshot.warnings
       },
       {
         headers: {

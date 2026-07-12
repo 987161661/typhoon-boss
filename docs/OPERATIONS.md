@@ -31,7 +31,7 @@
 - 实时文档整理智能体开关。
 - 整理更新频率（5 至 360 分钟）。
 
-设置修改后会立即重新安排下一次任务。环境变量 `TYPHOON_EVOLUTION_AGENT_ENABLED=false` 是最高优先级总开关。
+网页进程启动时自动触发一次演进整理，并按直播设置中的间隔持续调度。环境变量 `TYPHOON_EVOLUTION_AGENT_ENABLED=false` 是最高优先级总开关。
 
 ## 凌岚数字人
 
@@ -53,6 +53,8 @@ npm.cmd run agent:run
 - `台风实时演进分析.md`：可读报告。
 
 需要在 `.env.local` 中配置 `MINIMAX_API_KEY`。不要提交 `.env.local`、`.runtime` 或任何调试日志。
+
+`runtime/` 与 `.runtime/` 都属于本地运行状态，不得提交。
 
 ## 本地清理
 

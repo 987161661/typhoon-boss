@@ -31,6 +31,7 @@ import type {
   WindFieldPoint
 } from "@/lib/types";
 import { DefenseDrawer } from "./DefenseDrawer";
+import { useViewportWindField } from "./map/useViewportWindField";
 import { HudPanel, StatusPill } from "./HudPrimitives";
 import { BossSkillSlotPanel, IntelPanel } from "./IntelPanel";
 import {
@@ -122,12 +123,12 @@ const TERRAIN_TILE_ZOOM_MAX = 6;
 const TERRAIN_TILE_URL = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 const TERRAIN_RENDER_DEBOUNCE_MS = 140;
 const MAX_TERRAIN_TILES_PER_RENDER = 40;
-const WIND_FRAME_INTERVAL_MS = 1000 / 80;
 const CANVAS_DPR_CAP = 1.5;
 const GLOBAL_SATELLITE_SOURCE_ID = "global-satellite-source";
 const GLOBAL_SATELLITE_LAYER_ID = "global-satellite-layer";
 const terrainTileCache = new Map<string, Promise<HTMLCanvasElement | null>>();
 const globalSatelliteImageUrls = new WeakMap<MapLibreMap, string>();
+let windFlowRendererSequence = 0;
 
 const DEFENSE_REGION_SHORT_NAMES = ["浙江", "福建", "广东", "上海", "江苏"] as const;
 
@@ -148,6 +149,7 @@ const DEFAULT_REGION_LABELS: MapRegionLabel[] = [];
 
 type RadarTheme = "night-radar" | "archive-command";
 export type RadarView = "standard" | "live";
+type WindRenderMode = "gfs" | "streamlines";
 
 type EnvironmentLayerKey = "satellite" | "impact" | "wind";
 
@@ -226,9 +228,11 @@ export function TyphoonMap({
   const [pathScreenLabels, setPathScreenLabels] = useState<PathScreenLabel[]>([]);
   const [regionScreenLabels, setRegionScreenLabels] = useState<ScreenRegionLabel[]>([]);
   const [environmentLayers, setEnvironmentLayers] = useState<EnvironmentLayerToggles>(DEFAULT_ENVIRONMENT_LAYERS);
+  // The operational default is a station-style, decoded view. Flow animation
+  // remains available, but is intentionally an opt-in model visualisation.
+  const [windRenderMode, setWindRenderMode] = useState<WindRenderMode>("streamlines");
   const [satelliteLayer, setSatelliteLayer] = useState<SatelliteLayerPayload | null>(null);
   const [windField, setWindField] = useState<WindFieldPayload | null>(null);
-  const [viewportWindField, setViewportWindField] = useState<WindFieldPayload | null>(null);
   const [impactArea, setImpactArea] = useState<ImpactAreaPayload | null>(null);
   const [satelliteScreenBox, setSatelliteScreenBox] = useState<ScreenBox | null>(null);
   const [watchRegions, setWatchRegions] = useState<ProvinceAlertPoint[]>([]);
@@ -252,16 +256,46 @@ export function TyphoonMap({
   }, [view]);
   const mapNode = useRef<HTMLDivElement | null>(null);
   const terrainCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const stormIntensityCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const windColorCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const windCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const forecastCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const markerRef = useRef<maplibregl.Marker | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const stormRef = useRef<Storm | null>(null);
+  const cycloneCoreRef = useRef<CycloneCoreAnalysis | null>(null);
   const focusedStormIdRef = useRef<string | null>(null);
-  const regionLabelsRef = useRef<MapRegionLabel[]>(DEFAULT_REGION_LABELS);
+  const requestedStormId = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("stormId");
   const storm = storms[activeIndex] ?? null;
+  const viewportBoundsForMap = useCallback((map: MapLibreMap) => visibleWindBounds(map, 0.08), []);
+  const viewportWindField = useViewportWindField({
+    map: mapReady ? mapRef.current : null,
+    enabled: mapReady && environmentLayers.wind,
+    stormId: storm?.id,
+    boundsForMap: viewportBoundsForMap
+  });
+  const regionLabelsRef = useRef<MapRegionLabel[]>(DEFAULT_REGION_LABELS);
   const activeWindField = viewportWindField ?? windField;
+  const windFieldSignature = useMemo(() => {
+    if (activeWindField?.status !== "available") return activeWindField?.status ?? "pending";
+    return [
+      activeWindField.source,
+      activeWindField.updatedAt,
+      activeWindField.points.length,
+      activeWindField.displayResolutionDegrees ?? "unknown-resolution",
+      activeWindField.coverage ? `${activeWindField.coverage.west}:${activeWindField.coverage.south}:${activeWindField.coverage.east}:${activeWindField.coverage.north}` : "unknown-coverage"
+    ].join(";");
+  }, [activeWindField]);
+  const pendingWindFieldRef = useRef<WindFieldPayload | null>(activeWindField);
+  const latestWindFieldRef = useRef<WindFieldPayload | null>(activeWindField);
+  const [stableWindField, setStableWindField] = useState<WindFieldPayload | null>(activeWindField);
+  pendingWindFieldRef.current = activeWindField;
+  // Polling replaces payload objects every cycle. Only advance the renderer's
+  // field when the actual vectors differ, so an unchanged snapshot cannot
+  // reset every particle at once.
+  useEffect(() => {
+    latestWindFieldRef.current = pendingWindFieldRef.current;
+    setStableWindField(pendingWindFieldRef.current);
+  }, [windFieldSignature]);
   const {
     snapshot,
     error: snapshotError,
@@ -270,7 +304,7 @@ export function TyphoonMap({
     lastSyncedAt,
     refreshSequence,
     pollIntervalMs
-  } = useRadarSnapshot(storm?.id ?? null);
+  } = useRadarSnapshot(requestedStormId ?? storm?.id ?? null);
   const [showPerfOverlay] = useState(() => {
     if (typeof window === "undefined") return false;
     return new URLSearchParams(window.location.search).get("perf") === "1";
@@ -279,6 +313,7 @@ export function TyphoonMap({
     () => (storm ? bossProfiles.find((profile) => profile.stormId === storm.id) ?? null : null),
     [bossProfiles, storm]
   );
+  const cycloneCoreAnalysis = useMemo(() => buildCycloneCoreAnalysis(storm, bossProfile), [storm, bossProfile]);
   const liveModel = useMemo(
     () =>
       buildLiveBroadcastModel({
@@ -328,6 +363,10 @@ export function TyphoonMap({
   useEffect(() => {
     stormRef.current = storm;
   }, [storm]);
+
+  useEffect(() => {
+    cycloneCoreRef.current = cycloneCoreAnalysis;
+  }, [cycloneCoreAnalysis]);
 
   useEffect(() => {
     if (isLiveView && mapReady && snapshotLoaded) onSceneReady?.();
@@ -429,8 +468,6 @@ export function TyphoonMap({
         map.addSource("windR7", { type: "geojson", data: emptyFeatureCollection() });
         map.addSource("windR10", { type: "geojson", data: emptyFeatureCollection() });
         map.addSource("windR12", { type: "geojson", data: emptyFeatureCollection() });
-        map.addSource("impactAreas", { type: "geojson", data: emptyFeatureCollection() });
-
         addStormLayers(map);
 
         map.on("click", "province-fill", (event) => {
@@ -549,63 +586,6 @@ export function TyphoonMap({
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapReady || !environmentLayers.wind) {
-      setViewportWindField(null);
-      return;
-    }
-
-    let disposed = false;
-    let timer = 0;
-    let controller: AbortController | null = null;
-
-    const loadViewportWind = async () => {
-      controller?.abort();
-      controller = new AbortController();
-      const bounds = visibleWindBounds(map, 0.08);
-      const query = new URLSearchParams({
-        west: bounds.west.toFixed(2),
-        south: bounds.south.toFixed(2),
-        east: bounds.east.toFixed(2),
-        north: bounds.north.toFixed(2),
-        t: String(Date.now())
-      });
-      if (storm?.id) query.set("stormId", storm.id);
-
-      try {
-        const response = await fetch(`/api/environment/wind-field?${query.toString()}`, {
-          cache: "no-store",
-          signal: controller.signal
-        });
-        if (!response.ok) throw new Error(`Viewport wind request failed: ${response.status}`);
-        const payload = (await response.json()) as WindFieldPayload;
-        if (!disposed && payload.status === "available" && payload.points.length > 0) {
-          setViewportWindField(payload);
-        }
-      } catch (error) {
-        if (!(error instanceof DOMException && error.name === "AbortError")) {
-          // Retain the last successful field while the global model endpoint recovers.
-        }
-      }
-    };
-
-    const scheduleViewportWind = () => {
-      window.clearTimeout(timer);
-      timer = window.setTimeout(() => void loadViewportWind(), 180);
-    };
-
-    setViewportWindField(null);
-    scheduleViewportWind();
-    map.on("moveend", scheduleViewportWind);
-    return () => {
-      disposed = true;
-      window.clearTimeout(timer);
-      controller?.abort();
-      map.off("moveend", scheduleViewportWind);
-    };
-  }, [mapReady, storm?.id, environmentLayers.wind]);
-
-  useEffect(() => {
-    const map = mapRef.current;
     if (!map || !mapReady) return;
     const syncSatellite = () => {
       const nextBox =
@@ -627,12 +607,6 @@ export function TyphoonMap({
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map || !mapReady) return;
-    updateImpactAreaLayer(map, impactArea, environmentLayers.impact);
-  }, [impactArea, environmentLayers.impact, mapReady]);
-
-  useEffect(() => {
-    const map = mapRef.current;
     const canvas = terrainCanvasRef.current;
     if (!map || !canvas || !mapReady) return;
     return startTerrainElevationRenderer(map, canvas);
@@ -640,17 +614,25 @@ export function TyphoonMap({
 
   useEffect(() => {
     const map = mapRef.current;
-    const canvas = stormIntensityCanvasRef.current;
+    const canvas = windColorCanvasRef.current;
     if (!map || !canvas || !mapReady) return;
-    return startStormIntensityRenderer(map, canvas, storm, environmentLayers.wind);
-  }, [storm, environmentLayers.wind, mapReady, theme]);
+    return startWindColorFieldRenderer(map, canvas, stableWindField, environmentLayers.wind);
+  }, [environmentLayers.wind, mapReady, stableWindField, theme]);
 
   useEffect(() => {
     const map = mapRef.current;
     const canvas = windCanvasRef.current;
     if (!map || !canvas || !mapReady) return;
-    return startWindFieldRenderer(map, canvas, activeWindField, environmentLayers.wind, storm);
-  }, [activeWindField, environmentLayers.wind, mapReady, theme, storm]);
+    return startWindFieldRenderer(
+      map,
+      canvas,
+      latestWindFieldRef,
+      cycloneCoreRef,
+      environmentLayers.wind,
+      windRenderMode,
+      isLiveView
+    );
+  }, [environmentLayers.wind, isLiveView, mapReady, theme, windRenderMode]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -666,7 +648,7 @@ export function TyphoonMap({
         {mapFailed ? <FallbackMap storm={storm} /> : <div className="map-canvas" ref={mapNode} />}
         {!mapFailed ? <canvas className="terrain-elevation-canvas" ref={terrainCanvasRef} aria-hidden="true" /> : null}
         <SatelliteCloudOverlay layer={satelliteLayer} box={satelliteScreenBox} />
-        {!mapFailed ? <canvas className="storm-intensity-canvas" ref={stormIntensityCanvasRef} aria-hidden="true" /> : null}
+        {!mapFailed ? <canvas className="wind-color-canvas" ref={windColorCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed ? <canvas className="wind-particle-canvas" ref={windCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed ? <canvas className="forecast-route-canvas" ref={forecastCanvasRef} aria-hidden="true" /> : null}
         {isLiveView && liveDeck === "briefing" ? <LiveRouteLegend storm={storm} /> : null}
@@ -723,7 +705,10 @@ export function TyphoonMap({
               satellite={satelliteLayer}
               windField={activeWindField}
               impactArea={impactArea}
+              cycloneCore={cycloneCoreAnalysis}
+              windRenderMode={windRenderMode}
               onToggle={toggleEnvironmentLayer}
+              onWindRenderModeChange={setWindRenderMode}
             />
           </div>
         ) : !isLiveView ? (
@@ -734,7 +719,10 @@ export function TyphoonMap({
               satellite={satelliteLayer}
               windField={activeWindField}
               impactArea={impactArea}
+              cycloneCore={cycloneCoreAnalysis}
+              windRenderMode={windRenderMode}
               onToggle={toggleEnvironmentLayer}
+              onWindRenderModeChange={setWindRenderMode}
             />
           </>
         ) : null}
@@ -1346,14 +1334,21 @@ function EnvironmentLayerPanel({
   satellite,
   windField,
   impactArea,
-  onToggle
+  cycloneCore,
+  windRenderMode,
+  onToggle,
+  onWindRenderModeChange
 }: {
   layers: EnvironmentLayerToggles;
   satellite: SatelliteLayerPayload | null;
   windField: WindFieldPayload | null;
   impactArea: ImpactAreaPayload | null;
+  cycloneCore: CycloneCoreAnalysis | null;
+  windRenderMode: WindRenderMode;
   onToggle: (layer: EnvironmentLayerKey) => void;
+  onWindRenderModeChange: (mode: WindRenderMode) => void;
 }) {
+  const hasDirectNcepGfs = windField?.source === "NOAA/NCEP NOMADS Grib Filter";
   const rows: Array<{
     id: EnvironmentLayerKey;
     icon: ComponentType<{ size?: number }>;
@@ -1371,19 +1366,21 @@ function EnvironmentLayerPanel({
     {
       id: "impact",
       icon: Shield,
-      label: "影响描边",
-      status: impactArea?.status === "available" ? `${impactArea.featureCount} 圈层` : impactArea?.reason ?? "等待资料",
+      label: "官方风圈",
+      status: impactArea?.status === "available" ? `${impactArea.featureCount} 个风力阈值范围` : impactArea?.reason ?? "等待资料",
       alert: impactArea?.status !== "available"
     },
     {
       id: "wind",
       icon: Wind,
-      label: "大气流场",
+      label: hasDirectNcepGfs ? "NCEP GFS 10m 风" : "备用环境风（非 GFS）",
       status:
         windField?.status === "available"
-          ? `${windField.points.length} 视口矢量 · 全球可漫游`
-          : "全球背景流场 · 模式源待恢复",
-      alert: windField?.status !== "available"
+          ? hasDirectNcepGfs
+            ? `${windField.points.length} 格点 · ${windField.displayResolutionDegrees ?? "?"}° · ${windField.cycle ?? "未知时次"}`
+            : `${windField.model} · 未冒充 NCEP`
+          : "官方模式格点暂不可用",
+      alert: windField?.status !== "available" || !hasDirectNcepGfs
     }
   ];
 
@@ -1393,7 +1390,7 @@ function EnvironmentLayerPanel({
         <Satellite size={16} />
         <span>环境图层</span>
       </div>
-      <small className="section-subtitle">全球卫星 / 视口风场 / 高差</small>
+      <small className="section-subtitle">卫星云图 / 官方风圈 / NCEP GFS</small>
       <div className="environment-layer-list">
         {rows.map((row) => {
           const Icon = row.icon;
@@ -1413,6 +1410,27 @@ function EnvironmentLayerPanel({
           );
         })}
       </div>
+      <div className="wind-render-mode" aria-label="10 米风显示方式">
+        <span>10m 风显示</span>
+        <div role="group" aria-label="选择风场显示方式">
+          <button className={windRenderMode === "streamlines" ? "active" : ""} type="button" onClick={() => onWindRenderModeChange("streamlines")}>
+            全屏流线
+          </button>
+          <button className={windRenderMode === "gfs" ? "active" : ""} type="button" onClick={() => onWindRenderModeChange("gfs")}>
+            GFS 风羽
+          </button>
+        </div>
+        <small>
+          {windRenderMode === "streamlines"
+            ? cycloneCore?.hasConfirmedEye
+              ? "GFS 环境风 + JTWC 确认眼墙的局地涡旋；风眼与官方路径中心锁定。"
+              : cycloneCore
+                ? "GFS 环境风 + 官方路径/风圈约束的局地核心旋转；当前无确认风眼。"
+                : "严格按模式 U/V 格点积分；当前无可用台风核心资料。"
+            : "原始模式格点；风羽按 5 kt 编码。"}
+        </small>
+        <div className="gfs-wind-key" aria-label="10米风速色阶"><i /><i /><i /><i /><i /><span>0 · 5 · 10 · 20 · 30+ m/s</span></div>
+      </div>
       <div className="terrain-elevation-key" aria-label="地形高程色阶">
         <span>地形高差</span>
         <div className="terrain-key-ramp" aria-hidden="true">
@@ -1425,7 +1443,7 @@ function EnvironmentLayerPanel({
         <small>80 / 250 / 700 / 1400 / 2600m+</small>
       </div>
       <p className="environment-attribution">
-        {satellite?.status === "available" ? satellite.attribution : "仅显示已接通的实时公开数据源。"}
+        {windField?.status === "available" ? `${windField.source} · ${windField.model} · ${windField.unit}` : "仅显示已接通的实时公开数据源。"}
       </p>
     </HudPanel>
   );
@@ -1579,61 +1597,7 @@ async function fetchProvinceGeoJson(): Promise<GeoJSON.FeatureCollection> {
   }
 }
 
-function addImpactAreaLayers(map: MapLibreMap) {
-  const colorExpression = [
-    "match",
-    ["get", "radiusLevel"],
-    "r12",
-    "#ff3b32",
-    "r10",
-    "#ffb000",
-    "#00d8ff"
-  ] as maplibregl.ExpressionSpecification;
-
-  map.addLayer({
-    id: "impact-area-fill",
-    type: "fill",
-    source: "impactAreas",
-    paint: {
-      "fill-color": colorExpression,
-      "fill-opacity": [
-        "match",
-        ["get", "radiusLevel"],
-        "r12",
-        0.14,
-        "r10",
-        0.1,
-        0.07
-      ]
-    }
-  });
-  map.addLayer({
-    id: "impact-area-glow",
-    type: "line",
-    source: "impactAreas",
-    paint: {
-      "line-color": colorExpression,
-      "line-width": ["interpolate", ["linear"], ["zoom"], 3, 5, 6, 8, 8, 12],
-      "line-opacity": 0.18,
-      "line-blur": 5
-    }
-  });
-  map.addLayer({
-    id: "impact-area-line",
-    type: "line",
-    source: "impactAreas",
-    paint: {
-      "line-color": colorExpression,
-      "line-width": ["interpolate", ["linear"], ["zoom"], 3, 1.4, 6, 2.2, 8, 3],
-      "line-opacity": 0.9,
-      "line-blur": 0.2
-    }
-  });
-}
-
 function addStormLayers(map: MapLibreMap) {
-  addImpactAreaLayers(map);
-
   map.addLayer({
     id: "track-line",
     type: "line",
@@ -1701,11 +1665,6 @@ function updateStormSources(map: MapLibreMap, stormGeo: ReturnType<typeof buildS
   (map.getSource("windR7") as GeoJSONSource | undefined)?.setData(stormGeo.r7);
   (map.getSource("windR10") as GeoJSONSource | undefined)?.setData(stormGeo.r10);
   (map.getSource("windR12") as GeoJSONSource | undefined)?.setData(stormGeo.r12);
-}
-
-function updateImpactAreaLayer(map: MapLibreMap, impactArea: ImpactAreaPayload | null, visible: boolean) {
-  (map.getSource("impactAreas") as GeoJSONSource | undefined)?.setData(impactArea?.areas ?? emptyFeatureCollection());
-  setLayerVisibility(map, ["impact-area-fill", "impact-area-glow", "impact-area-line"], visible && impactArea?.status === "available");
 }
 
 function setLayerVisibility(map: MapLibreMap, layerIds: string[], visible: boolean) {
@@ -2246,12 +2205,117 @@ function smoothStep(edge0: number, edge1: number, value: number) {
   return progress * progress * (3 - 2 * progress);
 }
 
-function startWindFieldRenderer(
+function startWindColorFieldRenderer(
   map: MapLibreMap,
   canvas: HTMLCanvasElement,
   windField: WindFieldPayload | null,
+  visible: boolean
+) {
+  const context = canvas.getContext("2d", { alpha: true, desynchronized: true });
+  if (!context) return undefined;
+  const points = windField?.status === "available" ? windField.points : [];
+  const resize = () => {
+    const dpr = Math.min(window.devicePixelRatio || 1, CANVAS_DPR_CAP);
+    const rect = canvas.getBoundingClientRect();
+    const width = Math.max(1, Math.floor(rect.width * dpr));
+    const height = Math.max(1, Math.floor(rect.height * dpr));
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+  };
+  const clear = () => {
+    context.save();
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.restore();
+  };
+  const draw = () => {
+    canvas.style.transform = "none";
+    resize();
+    clear();
+    if (!visible || points.length === 0) return;
+    drawGfsWindBackdrop(context, map, createWindVectorIndex(points), visibleWindBounds(map), 0.48);
+  };
+  let cameraAnchors: WindCanvasCameraAnchors | null = null;
+  const beginCameraMove = () => {
+    canvas.style.transform = "none";
+    cameraAnchors = captureWindCanvasCameraAnchors(map, canvas);
+  };
+  const followCamera = () => {
+    if (!cameraAnchors) beginCameraMove();
+    if (!cameraAnchors) return;
+    const transform = windCanvasCameraTransform(map, cameraAnchors);
+    canvas.style.transformOrigin = "0 0";
+    canvas.style.transform = `matrix(${transform.a}, ${transform.b}, ${transform.c}, ${transform.d}, ${transform.e}, ${transform.f})`;
+  };
+  const finishCameraMove = () => {
+    cameraAnchors = null;
+    draw();
+  };
+  draw();
+  map.on("movestart", beginCameraMove);
+  map.on("move", followCamera);
+  map.on("moveend", finishCameraMove);
+  map.on("resize", draw);
+  window.addEventListener("resize", draw);
+  return () => {
+    map.off("movestart", beginCameraMove);
+    map.off("move", followCamera);
+    map.off("moveend", finishCameraMove);
+    map.off("resize", draw);
+    window.removeEventListener("resize", draw);
+    canvas.style.transform = "none";
+    clear();
+  };
+}
+
+interface WindCanvasCameraAnchors {
+  width: number;
+  height: number;
+  topLeft: { lng: number; lat: number };
+  topRight: { lng: number; lat: number };
+  bottomLeft: { lng: number; lat: number };
+}
+
+function captureWindCanvasCameraAnchors(map: MapLibreMap, canvas: HTMLCanvasElement): WindCanvasCameraAnchors {
+  const width = Math.max(1, canvas.clientWidth);
+  const height = Math.max(1, canvas.clientHeight);
+  const topLeft = map.unproject([0, 0]);
+  const topRight = map.unproject([width, 0]);
+  const bottomLeft = map.unproject([0, height]);
+  return {
+    width,
+    height,
+    topLeft: { lng: topLeft.lng, lat: topLeft.lat },
+    topRight: { lng: topRight.lng, lat: topRight.lat },
+    bottomLeft: { lng: bottomLeft.lng, lat: bottomLeft.lat }
+  };
+}
+
+function windCanvasCameraTransform(map: MapLibreMap, anchors: WindCanvasCameraAnchors) {
+  const topLeft = map.project([anchors.topLeft.lng, anchors.topLeft.lat]);
+  const topRight = map.project([anchors.topRight.lng, anchors.topRight.lat]);
+  const bottomLeft = map.project([anchors.bottomLeft.lng, anchors.bottomLeft.lat]);
+  return {
+    a: (topRight.x - topLeft.x) / anchors.width,
+    b: (topRight.y - topLeft.y) / anchors.width,
+    c: (bottomLeft.x - topLeft.x) / anchors.height,
+    d: (bottomLeft.y - topLeft.y) / anchors.height,
+    e: topLeft.x,
+    f: topLeft.y
+  };
+}
+
+function startWindFieldRenderer(
+  map: MapLibreMap,
+  canvas: HTMLCanvasElement,
+  windFieldRef: MutableRefObject<WindFieldPayload | null>,
+  cycloneCoreRef: MutableRefObject<CycloneCoreAnalysis | null>,
   visible: boolean,
-  storm: Storm | null
+  renderMode: WindRenderMode,
+  livePerformanceMode: boolean
 ) {
   const context = canvas.getContext("2d", { alpha: true, desynchronized: true });
   if (!context) return undefined;
@@ -2261,12 +2325,70 @@ function startWindFieldRenderer(
   let frameTimingTotal = 0;
   let frameTimingMax = 0;
   let frameTimingSamples = 0;
-  let mapMoving = false;
   let canvasWidth = 1;
   let canvasHeight = 1;
+  let cameraRevision = 1;
+  let fieldHotSwapCount = 0;
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  const points = windField?.status === "available" ? windField.points : [];
-  const trailPointLimit = canvas.clientWidth <= 760 ? 14 : 20;
+  // Browser RAF commonly lands just below 33.3 ms on every second tick. A
+  // 30 ms gate therefore produces a stable two-RAF cadence instead of
+  // accidentally slipping to three RAFs (about 20 fps).
+  const targetFrameIntervalMs = 30;
+  let observedWindField: WindFieldPayload | null = null;
+  let observedCoreSignature = "";
+  let cycloneCore: CycloneCoreAnalysis | null = null;
+  let points: WindFieldPoint[] = [];
+  let vectorIndex = createWindVectorIndex(points);
+  let particles: WindParticle[] = [];
+  const trailPointLimit = canvas.clientWidth <= 760 ? 72 : 96;
+
+  const syncWindField = () => {
+    const nextField = windFieldRef.current;
+    if (nextField === observedWindField) return false;
+    observedWindField = nextField;
+    points = nextField?.status === "available" ? nextField.points : [];
+    vectorIndex = createWindVectorIndex(points);
+    fieldHotSwapCount += 1;
+    canvas.dataset.fieldHotSwaps = String(fieldHotSwapCount);
+    canvas.dataset.vectorCount = String(points.length);
+    canvas.dataset.windSource = nextField?.source ?? "unavailable";
+    canvas.dataset.windResolution = String(nextField?.displayResolutionDegrees ?? "unknown");
+    delete canvas.dataset.analysisCenterLon;
+    delete canvas.dataset.analysisCenterLat;
+    delete canvas.dataset.analysisCenterX;
+    delete canvas.dataset.analysisCenterY;
+    return true;
+  };
+
+  const syncCycloneCore = () => {
+    const nextCore = cycloneCoreRef.current;
+    const nextSignature = nextCore?.signature ?? "none";
+    if (nextSignature === observedCoreSignature) return false;
+    observedCoreSignature = nextSignature;
+    cycloneCore = nextCore;
+    canvas.dataset.cycloneCoreMode = nextCore
+      ? nextCore.hasConfirmedEye
+        ? "jtwc-confirmed-eye"
+        : "track-and-wind-radius-core"
+      : "none";
+    canvas.dataset.cycloneCenter = nextCore ? `${nextCore.center.lon.toFixed(4)},${nextCore.center.lat.toFixed(4)}` : "none";
+    syncCycloneCoreScreen();
+    canvas.dataset.eyeRadiusKm = nextCore?.hasConfirmedEye ? nextCore.eyeRadiusKm.toFixed(1) : "0";
+    if (particles.length > 0) {
+      for (let index = 0; index < particles.length; index += 1) {
+        if (particles[index].kind !== "ambient") {
+          Object.assign(particles[index], randomWindParticle(bounds, cameraRevision));
+        }
+      }
+      canvas.dataset.coreParticleCount = "0";
+    }
+    return true;
+  };
+
+  const syncCycloneCoreScreen = () => {
+    const centerScreen = cycloneCore ? map.project([cycloneCore.center.lon, cycloneCore.center.lat]) : null;
+    canvas.dataset.cycloneCenterScreen = centerScreen ? `${centerScreen.x.toFixed(1)},${centerScreen.y.toFixed(1)}` : "none";
+  };
 
   const resizeCanvas = () => {
     const dpr = Math.min(window.devicePixelRatio || 1, CANVAS_DPR_CAP);
@@ -2294,39 +2416,42 @@ function startWindFieldRenderer(
     clear();
     return () => clear();
   }
-
-  let bounds = visibleWindBounds(map);
-  const vectorIndex = createWindVectorIndex(points);
-  const particleCount = canvas.clientWidth <= 760 ? 360 : Math.min(1050, Math.max(820, Math.round((canvasWidth * canvasHeight) / 820)));
-  const particles = Array.from({ length: particleCount }, (_, index) => randomWindParticle(bounds, storm, index % 2 === 0));
-  canvas.dataset.renderer = "batched-2d-gpu-composite";
-  canvas.dataset.vectorInterpolation = "idw-4-inertial";
-  canvas.dataset.backgroundMode = points.length > 0 ? "open-meteo-idw" : "global-circulation-fallback";
+  syncWindField();
+  syncCycloneCore();
+  let bounds = visibleWindBounds(map, 0.16);
+  const particleCount = livePerformanceMode
+    ? canvas.clientWidth <= 760
+      ? 640
+      : Math.min(1_320, Math.max(1_040, Math.round((canvasWidth * canvasHeight) / 650)))
+    : canvas.clientWidth <= 760
+      ? 1_040
+      : Math.min(1_760, Math.max(1_480, Math.round((canvasWidth * canvasHeight) / 430)));
+  // Seed the whole layer from the observed/model grid. Injecting particles into
+  // an idealized cyclone ring creates a visually perfect circle that the source
+  // data does not support.
+  const coreParticleCount = 0;
+  particles = Array.from({ length: particleCount }, () => randomWindParticle(bounds));
+  canvas.dataset.flowSession = String(++windFlowRendererSequence);
+  canvas.dataset.renderer = renderMode === "gfs" ? "ncep-gfs-wind-barbs" : "ncep-gfs-streamlines";
+  canvas.dataset.vectorInterpolation = "structured-grid-bilinear-raw-uv";
+  canvas.dataset.backgroundMode = "raw-ncep-gfs-grid";
+  canvas.dataset.cameraContinuity = "geographic-state-with-live-reprojection";
   canvas.dataset.particleCount = String(particleCount);
   canvas.dataset.trailPoints = String(trailPointLimit);
+  canvas.dataset.particleJourney = "model-grid-streamlines";
+  canvas.dataset.simulationSecondsPerSecond = "14000";
+  canvas.dataset.maxVisibleHeadDensity = "ambient:5/core:3";
+  canvas.dataset.coreParticleCount = String(coreParticleCount);
 
   const drawStatic = () => {
+    syncWindField();
     resizeCanvas();
     clear();
     context.globalCompositeOperation = "source-over";
-    staticWindSamples(bounds, 10, 7).forEach((point, index) => {
-      const vector = renderedWindVector(vectorIndex, point.lon, point.lat, storm);
-      if (!vector) return;
-      const projected = map.project([point.lon, point.lat]);
-      const magnitude = Math.max(0.01, Math.hypot(vector.u, vector.v));
-      const length = Math.max(7, Math.min(16, 5 + vector.speed * 0.32));
-      const dx = (vector.u / magnitude) * length;
-      const dy = (-vector.v / magnitude) * length;
-      context.strokeStyle = windColor(vector.speed, 0.4);
-      context.lineWidth = 0.72;
-      context.lineCap = "round";
-      context.beginPath();
-      appendWindCurve(context, projected.x, projected.y, dx, dy, index, storm);
-      context.stroke();
-    });
+    drawMeteorologicalWindBarbs(context, map, points, livePerformanceMode);
   };
 
-  if (reducedMotion) {
+  if (reducedMotion || renderMode === "gfs") {
     drawStatic();
     map.on("move", drawStatic);
     map.on("resize", drawStatic);
@@ -2340,11 +2465,11 @@ function startWindFieldRenderer(
   }
 
   const render = (timeMs: number) => {
-    if (document.visibilityState !== "visible" || mapMoving) {
+    if (document.visibilityState !== "visible") {
       frame = window.requestAnimationFrame(render);
       return;
     }
-    if (timeMs - lastFrameTime < WIND_FRAME_INTERVAL_MS) {
+    if (timeMs - lastFrameTime < targetFrameIntervalMs) {
       frame = window.requestAnimationFrame(render);
       return;
     }
@@ -2364,11 +2489,21 @@ function startWindFieldRenderer(
     }
     lastFrameTime = timeMs;
 
+    syncWindField();
+    syncCycloneCore();
+    syncCycloneCoreScreen();
     clear();
+    if (points.length === 0) {
+      frame = window.requestAnimationFrame(render);
+      return;
+    }
     context.globalCompositeOperation = "source-over";
     const zoomSignal = smoothStep(3.25, 5.65, map.getZoom());
-    const activeParticleCount = Math.max(320, Math.round(particles.length * (0.56 + zoomSignal * 0.44)));
-    const trailScale = 0.78 + zoomSignal * 0.3;
+    const requestedActiveParticleCount = livePerformanceMode
+      ? Math.max(760, Math.min(1_040, Math.round(particles.length * (0.72 + zoomSignal * 0.16))))
+      : 1_380;
+    const activeParticleCount = Math.min(particles.length, requestedActiveParticleCount);
+    const trailScale = 1.08 + zoomSignal * 0.38;
     const strokeScale = 0.84 + zoomSignal * 0.24;
     const opacityScale = 0.9 + zoomSignal * 0.08;
     canvas.dataset.activeParticleCount = String(activeParticleCount);
@@ -2377,11 +2512,33 @@ function startWindFieldRenderer(
     let rawTrailLengthTotal = 0;
     let renderedTrailLengthTotal = 0;
     let measuredTrailCount = 0;
+    const impactTintCounts: Record<WindImpactTint, number> = { none: 0, r7: 0, r10: 0, r12: 0 };
+    let reseedCount = 0;
+    let densitySuppressedCount = 0;
+    const reseedBudget = Math.max(6, Math.ceil(activeParticleCount / 26));
+    // A streamline is a finite sample of the model field, rather than a
+    // permanently released tracer.  That keeps a real closed or weak-wind
+    // circulation from collecting every particle on its innermost orbit.
+    const simulationSeconds = 14_000 * deltaSeconds;
+    const visibleAmbientHeads = new Map<string, number>();
+    const visibleCoreHeads = new Map<string, number>();
+    const ambientHeadCellSize = Math.max(34, Math.min(46, canvas.clientWidth / 35));
+    const coreHeadCellSize = Math.max(24, Math.min(34, canvas.clientWidth / 52));
     for (let index = 0; index < activeParticleCount; index += 1) {
       const particle = particles[index];
-      const vector = renderedWindVector(vectorIndex, particle.lon, particle.lat, storm);
+      if (particle.kind === "core" && !cycloneCore) {
+        Object.assign(particle, randomWindParticle(bounds, cameraRevision));
+      }
+      if (particle.projectionRevision !== cameraRevision) {
+        particle.trailScreen = particle.trail.map((point) => map.project([point.lon, point.lat]));
+        particle.projectionRevision = cameraRevision;
+      }
+      const vector = lookupWindVector(vectorIndex, particle.lon, particle.lat);
       if (!vector) {
-        Object.assign(particle, randomWindParticle(bounds, storm, Math.random() < 0.5));
+        if (reseedCount < reseedBudget) {
+          Object.assign(particle, randomWindParticle(bounds, cameraRevision));
+          reseedCount += 1;
+        }
         continue;
       }
 
@@ -2389,37 +2546,62 @@ function startWindFieldRenderer(
         particle.u = vector.u;
         particle.v = vector.v;
         particle.trail.push({ lon: particle.lon, lat: particle.lat });
+        particle.trailScreen.push(map.project([particle.lon, particle.lat]));
       } else {
         const response = 1 - Math.exp(-deltaSeconds * 5.4);
         particle.u += (vector.u - particle.u) * response;
         particle.v += (vector.v - particle.v) * response;
       }
 
-      const simulationSeconds = 6800 * deltaSeconds;
+      // This is streamline integration distance, not a playback-speed trick:
+      // the finite-distance cap below keeps the visual field evenly sampled
+      // while the direction and speed remain the raw NCEP U/V values.
       const latitudeScale = 111_320;
       const longitudeScale = latitudeScale * Math.max(0.2, Math.cos(degToRad(particle.lat)));
+      const vectorSpeed = Math.hypot(particle.u, particle.v);
       particle.lon += (particle.u * simulationSeconds) / longitudeScale;
       particle.lat += (particle.v * simulationSeconds) / latitudeScale;
-      particle.life -= deltaSeconds * 20;
-      if (particle.life <= 0 || !containsWindPoint(bounds, particle.lon, particle.lat)) {
-        Object.assign(particle, randomWindParticle(bounds, storm, Math.random() < 0.5));
+      particle.life -= deltaSeconds;
+      particle.travelKm += (vectorSpeed * simulationSeconds) / 1000;
+      const trappedInCalm = vectorSpeed < 1.1 && particle.trail.length >= 7;
+      if (
+        particle.life <= 0 ||
+        particle.travelKm >= particle.maxTravelKm ||
+        trappedInCalm ||
+        !containsWindPoint(bounds, particle.lon, particle.lat)
+      ) {
+        if (reseedCount < reseedBudget) {
+          Object.assign(particle, randomWindParticle(bounds, cameraRevision));
+          reseedCount += 1;
+        }
         continue;
       }
 
       particle.trail.push({ lon: particle.lon, lat: particle.lat });
       if (particle.trail.length > trailPointLimit) particle.trail.shift();
-      const projectedTrail = particle.trail.map((point) => map.project([point.lon, point.lat]));
-      if (windTrailHasProjectionJump(projectedTrail)) {
-        particle.trail = [{ lon: particle.lon, lat: particle.lat }];
+      particle.trailScreen.push(map.project([particle.lon, particle.lat]));
+      if (particle.trailScreen.length > trailPointLimit) particle.trailScreen.shift();
+      const projectedTrail = particle.trailScreen;
+      const rawTrailLength = windTrailLength(projectedTrail);
+      const displayTrail = projectedTrail;
+      const head = displayTrail.at(-1);
+      if (!head) continue;
+      const isCoreParticle = particle.kind === "core";
+      const headCellSize = isCoreParticle ? coreHeadCellSize : ambientHeadCellSize;
+      const visibleHeads = isCoreParticle ? visibleCoreHeads : visibleAmbientHeads;
+      const maximumHeads = isCoreParticle ? 3 : 5;
+      const headCell = `${Math.floor(head.x / headCellSize)}:${Math.floor(head.y / headCellSize)}`;
+      const visibleHeadsInCell = visibleHeads.get(headCell) ?? 0;
+      visibleHeads.set(headCell, visibleHeadsInCell + 1);
+      if (visibleHeadsInCell >= maximumHeads) {
+        densitySuppressedCount += 1;
         continue;
       }
-      const rawTrailLength = windTrailLength(projectedTrail);
-      const targetTrailLength = Math.max(12, Math.min(34, 9 + Math.hypot(particle.u, particle.v) * 0.52)) * trailScale;
-      const displayTrail = stretchWindTrail(projectedTrail, targetTrailLength, rawTrailLength);
       rawTrailLengthTotal += rawTrailLength;
       renderedTrailLengthTotal += windTrailLength(displayTrail);
       measuredTrailCount += 1;
       const bucket = windParticleStyleIndex(Math.hypot(particle.u, particle.v));
+      impactTintCounts.none += 1;
       WIND_RIBBON_LAYERS.forEach((layer, layerIndex) => {
         const startIndex = Math.max(0, Math.floor((displayTrail.length - 1) * layer.start));
         appendSmoothWindTrail(paths[bucket][layerIndex], displayTrail, startIndex);
@@ -2427,16 +2609,19 @@ function startWindFieldRenderer(
     }
     canvas.dataset.averageRawTrailPx = measuredTrailCount > 0 ? (rawTrailLengthTotal / measuredTrailCount).toFixed(1) : "0";
     canvas.dataset.averageRenderedTrailPx = measuredTrailCount > 0 ? (renderedTrailLengthTotal / measuredTrailCount).toFixed(1) : "0";
-    WIND_PARTICLE_STYLES.forEach((style, index) => {
+    canvas.dataset.impactTintCounts = JSON.stringify(impactTintCounts);
+    canvas.dataset.densitySuppressedCount = String(densitySuppressedCount);
+    canvas.dataset.reseedCount = String(reseedCount);
+    WIND_PARTICLE_STYLES.forEach((style, styleIndex) => {
       WIND_RIBBON_LAYERS.forEach((layer, layerIndex) => {
-        context.strokeStyle = style.color;
-        context.globalAlpha = opacityScale * layer.alpha;
-        context.lineWidth = style.width * strokeScale * layer.widthScale * trailScale;
+        context.strokeStyle = windStrokeStyle(style.speed, 1);
+        context.globalAlpha = opacityScale * layer.alpha * 0.94;
+        context.lineWidth = style.width * strokeScale * layer.widthScale * trailScale * 1.12;
         context.lineCap = "round";
         context.lineJoin = "round";
-        context.shadowColor = style.glow;
-        context.shadowBlur = style.blur * strokeScale;
-        context.stroke(paths[index][layerIndex]);
+        context.shadowColor = windStrokeStyle(style.speed, 0.34);
+        context.shadowBlur = style.blur * strokeScale * 1.8;
+        context.stroke(paths[styleIndex][layerIndex]);
       });
     });
     context.globalAlpha = 1;
@@ -2445,32 +2630,25 @@ function startWindFieldRenderer(
     frame = window.requestAnimationFrame(render);
   };
 
-  const resetProjection = () => {
-    mapMoving = true;
-    clear();
-  };
-  const resumeProjection = () => {
-    bounds = visibleWindBounds(map);
-    particles.forEach((particle, index) => Object.assign(particle, randomWindParticle(bounds, storm, index % 3 === 0)));
-    mapMoving = false;
-    clear();
-    lastFrameTime = 0;
+  const followCamera = () => {
+    bounds = visibleWindBounds(map, 0.16);
+    cameraRevision += 1;
+    canvas.dataset.cameraRevision = String(cameraRevision);
+    syncCycloneCoreScreen();
   };
   const resetForResize = () => {
     resizeCanvas();
-    resumeProjection();
+    followCamera();
   };
 
   frame = window.requestAnimationFrame(render);
-  map.on("movestart", resetProjection);
-  map.on("moveend", resumeProjection);
+  map.on("move", followCamera);
   map.on("resize", resetForResize);
   window.addEventListener("resize", resizeCanvas);
 
   return () => {
     window.cancelAnimationFrame(frame);
-    map.off("movestart", resetProjection);
-    map.off("moveend", resumeProjection);
+    map.off("move", followCamera);
     map.off("resize", resetForResize);
     window.removeEventListener("resize", resizeCanvas);
     clear();
@@ -2478,81 +2656,63 @@ function startWindFieldRenderer(
 }
 
 const WIND_PARTICLE_STYLES = [
-  { color: "rgba(255, 255, 255, 0.62)", glow: "rgba(255, 255, 255, 0.24)", width: 0.74, blur: 0.55 },
-  { color: "rgba(255, 255, 255, 0.7)", glow: "rgba(255, 255, 255, 0.28)", width: 0.82, blur: 0.68 },
-  { color: "rgba(255, 255, 255, 0.78)", glow: "rgba(255, 255, 255, 0.32)", width: 0.9, blur: 0.82 },
-  { color: "rgba(255, 255, 255, 0.86)", glow: "rgba(255, 255, 255, 0.38)", width: 1, blur: 1 },
-  { color: "rgba(255, 255, 255, 0.94)", glow: "rgba(255, 255, 255, 0.44)", width: 1.1, blur: 1.2 }
+  { speed: 3, width: 0.74, blur: 0.55 },
+  { speed: 7, width: 0.82, blur: 0.68 },
+  { speed: 13, width: 0.9, blur: 0.82 },
+  { speed: 21, width: 1, blur: 1 },
+  { speed: 31, width: 1.1, blur: 1.2 }
 ] as const;
 
+type WindImpactTint = "none" | "r7" | "r10" | "r12";
+
+function windStrokeStyle(speed: number, alpha: number) {
+  const opacity = Math.min(1, alpha * (0.78 + smoothStep(2, 25, speed) * 0.22));
+  if (speed < 10) return `rgba(74, 255, 170, ${opacity})`;
+  if (speed < 18) return `rgba(154, 255, 116, ${opacity})`;
+  if (speed < 27) return `rgba(255, 226, 78, ${opacity})`;
+  if (speed < 36) return `rgba(255, 130, 53, ${opacity})`;
+  return `rgba(255, 62, 103, ${opacity})`;
+}
+
 const WIND_RIBBON_LAYERS = [
-  { start: 0, alpha: 0.24, widthScale: 0.68 },
-  { start: 0.38, alpha: 0.5, widthScale: 0.84 },
-  { start: 0.7, alpha: 1, widthScale: 1 }
+  { start: 0, alpha: 0.34, widthScale: 0.72 },
+  { start: 0.62, alpha: 1, widthScale: 1 }
 ] as const;
 
 function appendSmoothWindTrail(path: Path2D, points: Array<{ x: number; y: number }>, startIndex: number) {
   if (points.length - startIndex < 2) return;
+  const lastIndex = points.length - 1;
+  // Eight quadratic segments preserve the long meteorological curve while
+  // keeping high-zoom storm analysis below the frame budget.
+  const segmentStride = Math.max(1, Math.ceil((lastIndex - startIndex) / 8));
   const first = points[startIndex];
   path.moveTo(first.x, first.y);
-  for (let index = startIndex + 1; index < points.length - 1; index += 1) {
-    const point = points[index];
-    const next = points[index + 1];
-    path.quadraticCurveTo(point.x, point.y, (point.x + next.x) / 2, (point.y + next.y) / 2);
+  if (lastIndex - startIndex === 1) {
+    path.lineTo(points[lastIndex].x, points[lastIndex].y);
+    return;
   }
-  const endpoint = points[points.length - 1];
-  path.lineTo(endpoint.x, endpoint.y);
-}
-
-function windTrailHasProjectionJump(points: Array<{ x: number; y: number }>) {
-  for (let index = 1; index < points.length; index += 1) {
-    if (Math.hypot(points[index].x - points[index - 1].x, points[index].y - points[index - 1].y) > 54) return true;
+  for (let index = startIndex + segmentStride; index < lastIndex; index += segmentStride) {
+    const current = points[index];
+    const next = points[Math.min(lastIndex, index + segmentStride)];
+    path.quadraticCurveTo(current.x, current.y, (current.x + next.x) / 2, (current.y + next.y) / 2);
   }
-  return false;
+  path.lineTo(points[lastIndex].x, points[lastIndex].y);
 }
 
 function windTrailLength(points: Array<{ x: number; y: number }>) {
   let length = 0;
-  for (let index = 1; index < points.length; index += 1) {
-    length += Math.hypot(points[index].x - points[index - 1].x, points[index].y - points[index - 1].y);
+  const stride = Math.max(1, Math.ceil((points.length - 1) / 12));
+  let previous = points[0];
+  for (let index = stride; index < points.length; index += stride) {
+    const point = points[index];
+    length += Math.hypot(point.x - previous.x, point.y - previous.y);
+    previous = point;
+  }
+  const endpoint = points.at(-1);
+  if (endpoint && previous !== endpoint) {
+    length += Math.hypot(endpoint.x - previous.x, endpoint.y - previous.y);
   }
   return length;
-}
-
-function stretchWindTrail(points: Array<{ x: number; y: number }>, targetLength: number, currentLength: number) {
-  if (points.length < 2 || currentLength <= 0.05 || currentLength >= targetLength) return points;
-  const head = points[points.length - 1];
-  const scale = Math.min(6, targetLength / currentLength);
-  return points.map((point) => ({
-    x: head.x + (point.x - head.x) * scale,
-    y: head.y + (point.y - head.y) * scale
-  }));
-}
-
-function appendWindCurve(
-  path: Path2D | CanvasRenderingContext2D,
-  headX: number,
-  headY: number,
-  dx: number,
-  dy: number,
-  particleIndex: number,
-  storm?: Storm | null
-) {
-  const tailX = headX - dx;
-  const tailY = headY - dy;
-  const length = Math.max(1, Math.hypot(dx, dy));
-  const curveSign = storm ? cycloneTangentialSign(storm.position.lat) : 1;
-  const organicVariation = 0.72 + Math.sin(particleIndex * 12.9898) * 0.18;
-  const bend = length * 0.22 * organicVariation * curveSign;
-  const perpendicularX = -dy / length;
-  const perpendicularY = dx / length;
-  path.moveTo(tailX, tailY);
-  path.quadraticCurveTo(
-    (tailX + headX) / 2 + perpendicularX * bend,
-    (tailY + headY) / 2 + perpendicularY * bend,
-    headX,
-    headY
-  );
 }
 
 function windParticleStyleIndex(speed: number) {
@@ -2571,12 +2731,17 @@ interface WindParticleBounds {
 }
 
 interface WindParticle {
+  kind: "ambient" | "core";
   lon: number;
   lat: number;
   life: number;
+  travelKm: number;
+  maxTravelKm: number;
   u: number;
   v: number;
   trail: Array<{ lon: number; lat: number }>;
+  trailScreen: Array<{ x: number; y: number }>;
+  projectionRevision: number;
 }
 
 function visibleWindBounds(map: MapLibreMap, paddingRatio = 0.04): WindParticleBounds {
@@ -2595,50 +2760,232 @@ function visibleWindBounds(map: MapLibreMap, paddingRatio = 0.04): WindParticleB
   };
 }
 
-function staticWindSamples(bounds: WindParticleBounds, columns: number, rows: number) {
-  const samples: Array<{ lon: number; lat: number }> = [];
-  for (let row = 0; row < rows; row += 1) {
-    for (let column = 0; column < columns; column += 1) {
-      samples.push({
-        lon: bounds.west + ((bounds.east - bounds.west) * (column + 0.5)) / columns,
-        lat: bounds.south + ((bounds.north - bounds.south) * (row + 0.5)) / rows
-      });
-    }
+function drawMeteorologicalWindBarbs(
+  context: CanvasRenderingContext2D,
+  map: MapLibreMap,
+  points: WindFieldPoint[],
+  compact: boolean
+) {
+  const plotted: Array<{ x: number; y: number }> = [];
+  const minimumSpacing = compact ? 38 : 46;
+  for (const vector of points) {
+    const projected = map.project([vector.lon, vector.lat]);
+    if (projected.x < -20 || projected.y < -20 || projected.x > map.getCanvas().clientWidth + 20 || projected.y > map.getCanvas().clientHeight + 20) continue;
+    if (plotted.some((sample) => Math.hypot(sample.x - projected.x, sample.y - projected.y) < minimumSpacing)) continue;
+    plotted.push(projected);
+    drawWindBarb(
+      context,
+      projected.x,
+      projected.y,
+      vector,
+      gfsWindBarbColor(vector.speed)
+    );
   }
-  return samples;
 }
 
-function randomWindParticle(bounds: WindParticleBounds, storm?: Storm | null, preferStorm = false): WindParticle {
-  if (storm && preferStorm) {
-    const radiusOfMaxWindKm = stormRadiusOfMaxWindKm(storm);
-    const influenceKm = stormFlowInfluenceKm(storm);
-    const radiusKm =
-      Math.random() < 0.62
-        ? radiusOfMaxWindKm * (0.52 + Math.random() * 1.48)
-        : radiusOfMaxWindKm * 1.35 + Math.sqrt(Math.random()) * Math.max(1, influenceKm * 0.78 - radiusOfMaxWindKm * 1.35);
-    const angle = Math.random() * Math.PI * 2;
-    const lat = storm.position.lat + (Math.sin(angle) * radiusKm) / 111.32;
-    const lon =
-      storm.position.lon +
-      (Math.cos(angle) * radiusKm) / (111.32 * Math.max(0.2, Math.cos(degToRad(storm.position.lat))));
-    if (containsWindPoint(bounds, lon, lat)) {
-      return {
-        lon,
-        lat,
-        life: 90 + Math.floor(Math.random() * 170),
-        u: 0,
-        v: 0,
-        trail: []
-      };
+// A GFS-style forecast layer is a continuous scalar field first, with decoded
+// vectors on top. The colours are derived only from the same 10m u/v grid that
+// supplies the barbs; no storm-centred shape is added.
+function drawGfsWindBackdrop(
+  context: CanvasRenderingContext2D,
+  map: MapLibreMap,
+  index: WindVectorIndex,
+  bounds: WindParticleBounds,
+  opacity: number
+) {
+  const columns = 34;
+  const rows = 22;
+  context.save();
+  context.globalAlpha = opacity;
+  // The model samples are coarse while the display is full-screen. A soft
+  // blend removes cell seams without changing the underlying vectors.
+  context.filter = "blur(11px) saturate(1.2)";
+  for (let row = 0; row < rows; row += 1) {
+    const north = bounds.north - ((bounds.north - bounds.south) * row) / rows;
+    const south = bounds.north - ((bounds.north - bounds.south) * (row + 1)) / rows;
+    for (let column = 0; column < columns; column += 1) {
+      const west = bounds.west + ((bounds.east - bounds.west) * column) / columns;
+      const east = bounds.west + ((bounds.east - bounds.west) * (column + 1)) / columns;
+      const vector = lookupWindVector(index, (west + east) / 2, (north + south) / 2);
+      if (!vector) continue;
+      const topLeft = map.project([west, north]);
+      const bottomRight = map.project([east, south]);
+      context.fillStyle = gfsWindSpeedColor(vector.speed);
+      context.fillRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x + 1, bottomRight.y - topLeft.y + 1);
     }
   }
+  context.globalAlpha = 1;
+  context.filter = "none";
+  context.restore();
+}
+
+const GFS_WIND_COLOR_STOPS = [
+  [0, [30, 85, 171]],
+  [5, [36, 194, 184]],
+  [10, [99, 214, 104]],
+  [17, [248, 214, 75]],
+  [25, [250, 129, 47]],
+  [33, [220, 50, 57]],
+  [45, [166, 38, 122]]
+] as const;
+
+function gfsWindSpeedColor(speed: number) {
+  for (let index = 1; index < GFS_WIND_COLOR_STOPS.length; index += 1) {
+    const lower = GFS_WIND_COLOR_STOPS[index - 1];
+    const upper = GFS_WIND_COLOR_STOPS[index];
+    if (speed > upper[0]) continue;
+    const progress = Math.max(0, Math.min(1, (speed - lower[0]) / (upper[0] - lower[0])));
+    const color = lower[1].map((channel, channelIndex) => Math.round(channel + (upper[1][channelIndex] - channel) * progress));
+    return `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
+  }
+  const strongest = GFS_WIND_COLOR_STOPS.at(-1)![1];
+  return `rgb(${strongest[0]}, ${strongest[1]}, ${strongest[2]})`;
+}
+
+function gfsWindBarbColor(speed: number) {
+  if (speed >= 25) return "rgba(255, 246, 224, 0.98)";
+  if (speed >= 15) return "rgba(244, 255, 235, 0.98)";
+  return "rgba(236, 251, 255, 0.96)";
+}
+
+// Standard station-plot convention: the shaft points toward the direction the
+// wind comes FROM. Feathers encode speed in knots (half=5, full=10, flag=50).
+function drawWindBarb(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  vector: WindFieldPoint,
+  color: string
+) {
+  const knots = Math.max(0, Math.round((vector.speed / 0.514444) / 5) * 5);
+  const shaftLength = Math.max(21, Math.min(34, 18 + knots * 0.12));
+  const angle = (vector.direction * Math.PI) / 180;
+  const dx = Math.sin(angle);
+  const dy = -Math.cos(angle);
+  const endX = x + dx * shaftLength;
+  const endY = y + dy * shaftLength;
+  const normalX = -dy;
+  const normalY = dx;
+
+  context.save();
+  context.strokeStyle = color;
+  context.fillStyle = color;
+  context.lineWidth = 1.35;
+  context.lineCap = "round";
+  context.shadowColor = "rgba(0, 10, 18, 0.94)";
+  context.shadowBlur = 2.4;
+  context.beginPath();
+  if (knots < 5) {
+    context.arc(x, y, 2.2, 0, Math.PI * 2);
+  } else {
+    context.moveTo(x, y);
+    context.lineTo(endX, endY);
+  }
+  context.stroke();
+
+  let remaining = knots;
+  let offset = 2;
+  while (remaining >= 50) {
+    const baseX = endX - dx * offset;
+    const baseY = endY - dy * offset;
+    const nextX = endX - dx * (offset + 8);
+    const nextY = endY - dy * (offset + 8);
+    context.beginPath();
+    context.moveTo(baseX, baseY);
+    context.lineTo(baseX + normalX * 8 - dx * 3, baseY + normalY * 8 - dy * 3);
+    context.lineTo(nextX, nextY);
+    context.closePath();
+    context.fill();
+    remaining -= 50;
+    offset += 9;
+  }
+  while (remaining >= 10) {
+    const baseX = endX - dx * offset;
+    const baseY = endY - dy * offset;
+    context.beginPath();
+    context.moveTo(baseX, baseY);
+    context.lineTo(baseX + normalX * 8 - dx * 3, baseY + normalY * 8 - dy * 3);
+    context.stroke();
+    remaining -= 10;
+    offset += 4.5;
+  }
+  if (remaining >= 5) {
+    const baseX = endX - dx * offset;
+    const baseY = endY - dy * offset;
+    context.beginPath();
+    context.moveTo(baseX, baseY);
+    context.lineTo(baseX + normalX * 4.5 - dx * 1.5, baseY + normalY * 4.5 - dy * 1.5);
+    context.stroke();
+  }
+  context.restore();
+}
+
+function randomWindParticle(
+  bounds: WindParticleBounds,
+  projectionRevision = 0
+): WindParticle {
   return {
+    kind: "ambient",
     lon: bounds.west + Math.random() * (bounds.east - bounds.west),
     lat: bounds.south + Math.random() * (bounds.north - bounds.south),
-    life: 70 + Math.floor(Math.random() * 150),
+    // Every particle gets an independent lifetime and distance budget.  This
+    // deliberately avoids a periodic global reset while keeping the large
+    // environmental flow readable over a long continuous path.
+    life: 15 + Math.random() * 15,
+    travelKm: 0,
+    maxTravelKm: 1_260 + Math.random() * 1_080,
     u: 0,
     v: 0,
-    trail: []
+    trail: [],
+    trailScreen: [],
+    projectionRevision
+  };
+}
+
+interface CycloneCoreAnalysis {
+  signature: string;
+  center: { lon: number; lat: number };
+  hasConfirmedEye: boolean;
+  eyeRadiusKm: number;
+  eyewallRadiusKm: number;
+  outerRadiusKm: number;
+  peakWindMs: number;
+  tangentialSign: 1 | -1;
+}
+
+function buildCycloneCoreAnalysis(storm: Storm | null, bossProfile: BossProfile | null): CycloneCoreAnalysis | null {
+  if (!storm || storm.maxWind < 17.2) return null;
+  const structure = bossProfile?.structure;
+  const hasConfirmedEye = Boolean(
+    structure && structure.state === "stable-eye" && structure.evidenceLevel === "confirmed" && !structure.stale
+  );
+  const reportedInnerRadiusKm = structure?.signals.innerRadiusNm ? structure.signals.innerRadiusNm * 1.852 : 0;
+  const reportedOuterRadiusKm = structure?.signals.outerRadiusNm ? structure.signals.outerRadiusNm * 1.852 : 0;
+  const windCoreRadiusKm = Math.max(storm.windRadiiKm.r12 * 1.35, storm.windRadiiKm.r10 * 0.74, 42);
+  const eyewallRadiusKm = Math.max(reportedInnerRadiusKm, windCoreRadiusKm);
+  const eyeRadiusKm = hasConfirmedEye ? Math.max(10, Math.min(46, eyewallRadiusKm * 0.5)) : 0;
+  const outerRadiusKm = Math.max(reportedOuterRadiusKm, eyewallRadiusKm * 3.3, storm.windRadiiKm.r7 * 0.27, 110);
+  const signature = [
+    storm.id,
+    storm.position.lon.toFixed(4),
+    storm.position.lat.toFixed(4),
+    storm.maxWind,
+    storm.windRadiiKm.r7,
+    storm.windRadiiKm.r10,
+    storm.windRadiiKm.r12,
+    structure?.state ?? "unknown",
+    structure?.signals.innerRadiusNm ?? "none",
+    structure?.signals.outerRadiusNm ?? "none"
+  ].join("|");
+  return {
+    signature,
+    center: { ...storm.position },
+    hasConfirmedEye,
+    eyeRadiusKm,
+    eyewallRadiusKm,
+    outerRadiusKm,
+    peakWindMs: Math.max(18, Math.min(75, storm.maxWind * 1.05)),
+    tangentialSign: cycloneTangentialSign(storm.position.lat)
   };
 }
 
@@ -2648,14 +2995,28 @@ function containsWindPoint(bounds: WindParticleBounds, lon: number, lat: number)
 
 interface WindVectorIndex {
   points: WindFieldPoint[];
+  longitudes: number[];
+  latitudes: number[];
+  grid: Map<string, WindFieldPoint>;
 }
 
 function createWindVectorIndex(points: WindFieldPoint[]): WindVectorIndex {
-  return { points };
+  const longitudes = [...new Set(points.map((point) => point.lon))].sort((left, right) => left - right);
+  const latitudes = [...new Set(points.map((point) => point.lat))].sort((left, right) => left - right);
+  const grid = new Map(points.map((point) => [windGridKey(point.lon, point.lat), point]));
+  return { points, longitudes, latitudes, grid };
 }
 
 function lookupWindVector(index: WindVectorIndex, lon: number, lat: number) {
   if (index.points.length === 0) return null;
+  const bilinear = bilinearWindVector(index, lon, lat);
+  if (bilinear) return bilinear;
+  const outsideStructuredGrid =
+    lon < index.longitudes[0] ||
+    lon > index.longitudes[index.longitudes.length - 1] ||
+    lat < index.latitudes[0] ||
+    lat > index.latitudes[index.latitudes.length - 1];
+  if (outsideStructuredGrid || index.points.length > 500) return null;
   const cosLat = Math.max(0.2, Math.cos(degToRad(lat)));
   const nearest: Array<{ point: WindFieldPoint; distanceSquared: number }> = [];
   index.points.forEach((point) => {
@@ -2692,91 +3053,41 @@ function lookupWindVector(index: WindVectorIndex, lon: number, lat: number) {
   };
 }
 
-function renderedWindVector(index: WindVectorIndex, lon: number, lat: number, storm?: Storm | null) {
-  const background = lookupWindVector(index, lon, lat) ?? globalBackgroundWindVector(lon, lat);
-  const vortex = storm ? stormVortexVector(storm, lon, lat) : null;
-  if (!vortex) return background;
-  if (!background) return vortex;
-
-  const u = background.u * (1 - vortex.weight * 0.86) + vortex.u;
-  const v = background.v * (1 - vortex.weight * 0.86) + vortex.v;
-  return {
-    ...background,
-    u,
-    v,
-    speed: Math.hypot(u, v),
-    direction: (Math.atan2(u, v) * 180) / Math.PI
-  };
+function bilinearWindVector(index: WindVectorIndex, lon: number, lat: number): WindFieldPoint | null {
+  const x = gridBracket(index.longitudes, lon);
+  const y = gridBracket(index.latitudes, lat);
+  if (!x || !y) return null;
+  const southwest = index.grid.get(windGridKey(x.lower, y.lower));
+  const southeast = index.grid.get(windGridKey(x.upper, y.lower));
+  const northwest = index.grid.get(windGridKey(x.lower, y.upper));
+  const northeast = index.grid.get(windGridKey(x.upper, y.upper));
+  if (!southwest || !southeast || !northwest || !northeast) return null;
+  const tx = x.upper === x.lower ? 0 : (lon - x.lower) / (x.upper - x.lower);
+  const ty = y.upper === y.lower ? 0 : (lat - y.lower) / (y.upper - y.lower);
+  const blend = (field: "u" | "v") =>
+    southwest[field] * (1 - tx) * (1 - ty) +
+    southeast[field] * tx * (1 - ty) +
+    northwest[field] * (1 - tx) * ty +
+    northeast[field] * tx * ty;
+  const u = blend("u");
+  const v = blend("v");
+  return { lon, lat, u, v, speed: Math.hypot(u, v), direction: (Math.atan2(-u, -v) * 180) / Math.PI };
 }
 
-function globalBackgroundWindVector(lon: number, lat: number): WindFieldPoint {
-  const absoluteLatitude = Math.abs(lat);
-  const tropicalWeight = 1 - smoothStep(18, 34, absoluteLatitude);
-  const midLatitudeWeight = smoothStep(18, 36, absoluteLatitude) * (1 - smoothStep(58, 72, absoluteLatitude));
-  const polarWeight = smoothStep(58, 76, absoluteLatitude);
-  const longitudeWave = Math.sin(degToRad(lon * 1.7 + lat * 0.8));
-  const planetaryWave = Math.sin(degToRad(lon * 2.6 - lat * 1.4));
-  const hemisphereSign = lat >= 0 ? 1 : -1;
-  const u = -5.6 * tropicalWeight + 9.8 * midLatitudeWeight - 3.4 * polarWeight + longitudeWave * 1.7;
-  const v = (planetaryWave * 1.55 + Math.cos(degToRad(lon * 0.9)) * 0.7) * hemisphereSign;
-  return {
-    lon,
-    lat,
-    u,
-    v,
-    speed: Math.hypot(u, v),
-    direction: (Math.atan2(-u, -v) * 180) / Math.PI
-  };
+function gridBracket(values: number[], value: number) {
+  if (values.length < 2 || value < values[0] || value > values[values.length - 1]) return null;
+  let lowerIndex = 0;
+  let upperIndex = values.length - 1;
+  while (upperIndex - lowerIndex > 1) {
+    const middle = Math.floor((lowerIndex + upperIndex) / 2);
+    if (value <= values[middle]) upperIndex = middle;
+    else lowerIndex = middle;
+  }
+  return { lower: values[lowerIndex], upper: values[upperIndex] };
 }
 
-function stormVortexVector(storm: Storm, lon: number, lat: number) {
-  const cosLat = Math.max(0.2, Math.cos(degToRad(storm.position.lat)));
-  const dxKm = (lon - storm.position.lon) * 111.32 * cosLat;
-  const dyKm = (lat - storm.position.lat) * 111.32;
-  const radiusKm = Math.hypot(dxKm, dyKm);
-  const influenceKm = stormFlowInfluenceKm(storm);
-  if (radiusKm > influenceKm) return null;
-
-  const radiusOfMaxWindKm = stormRadiusOfMaxWindKm(storm);
-  const calmEyeRadiusKm = Math.max(8, Math.min(24, radiusOfMaxWindKm * 0.32));
-  const peakWind = Math.max(18, storm.maxWind || 32);
-  const radialProfile =
-    radiusKm <= radiusOfMaxWindKm
-      ? smoothStep(calmEyeRadiusKm, radiusOfMaxWindKm, radiusKm)
-      : Math.pow(radiusOfMaxWindKm / Math.max(radiusKm, 1), 0.62);
-  const edgeFade = 1 - smoothStep(0.74, 1, radiusKm / influenceKm);
-  const tangentialSpeed = peakWind * radialProfile * edgeFade;
-  const inflowSpeed = tangentialSpeed * (0.045 + 0.09 * smoothStep(radiusOfMaxWindKm, influenceKm, radiusKm));
-  const safeRadius = Math.max(radiusKm, 0.5);
-  const unitX = dxKm / safeRadius;
-  const unitY = dyKm / safeRadius;
-  const weight = edgeFade * (0.92 + smoothStep(calmEyeRadiusKm, radiusOfMaxWindKm, radiusKm) * 0.08);
-  const tangentialSign = cycloneTangentialSign(storm.position.lat);
-
-  return {
-    lon,
-    lat,
-    u: -unitY * tangentialSpeed * tangentialSign - unitX * inflowSpeed,
-    v: unitX * tangentialSpeed * tangentialSign - unitY * inflowSpeed,
-    speed: tangentialSpeed,
-    direction: 0,
-    weight
-  };
-}
-
-function stormRadiusOfMaxWindKm(storm: Storm) {
-  const structuralRadius = storm.windRadiiKm.r12 || storm.windRadiiKm.r10 || Math.max(70, storm.windRadiiKm.r7 * 0.32);
-  return Math.max(22, Math.min(78, structuralRadius * 0.28));
-}
-
-function stormFlowInfluenceKm(storm: Storm) {
-  const { r7, r10, r12 } = storm.windRadiiKm;
-  return Math.max(r7 * 1.55, r10 * 2.4, r12 * 3.2, 620);
-}
-
-function windColor(speed: number, alpha: number) {
-  const speedSignal = smoothStep(3, 30, speed);
-  return `rgba(255, 255, 255, ${Math.min(0.96, alpha + 0.18 + speedSignal * 0.26)})`;
+function windGridKey(lon: number, lat: number) {
+  return `${lon.toFixed(4)}:${lat.toFixed(4)}`;
 }
 
 function renderStormOnMap(

@@ -1,10 +1,10 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import sharp from "sharp";
-import { makeCircle } from "@/lib/provinceGeo";
+import { makeQuadrantWindPolygon } from "@/lib/meteorology";
 import { getCurrentStorms } from "@/lib/realTyphoonData";
 import type {
   ImpactAreaPayload,
@@ -40,6 +40,12 @@ const OPEN_METEO_SOURCE = "Open-Meteo Forecast API";
 const OPEN_METEO_ATTRIBUTION = "Open-Meteo weather forecast model blend";
 const MET_NORWAY_SOURCE = "MET Norway Locationforecast API";
 const MET_NORWAY_ATTRIBUTION = "MET Norway Locationforecast 2.0 global forecast";
+const NCEP_GFS_SOURCE = "NOAA/NCEP NOMADS Grib Filter";
+const NCEP_GFS_ATTRIBUTION = "NOAA NCEP GFS 0.25 degree analysis";
+const NCEP_GFS_FILTER_URL = "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl";
+const NCEP_GFS_NATIVE_RESOLUTION_DEGREES = 0.25;
+const NCEP_GFS_MAX_DISPLAY_POINTS = 18_000;
+const WGRIB2_PATH = process.env.WGRIB2_PATH ?? join(process.cwd(), ".runtime", "tools", "wgrib2", "wgrib2.exe");
 const SATELLITE_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const SATELLITE_IMAGE_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
 const WIND_FIELD_CACHE_TTL_MS = 15 * 60 * 1000;
@@ -233,9 +239,9 @@ export async function getImpactArea(stormId?: string | null): Promise<ImpactArea
     }
 
     const features = [
-      impactFeature(storm, "r7", storm.windRadiiKm.r7),
-      impactFeature(storm, "r10", storm.windRadiiKm.r10),
-      impactFeature(storm, "r12", storm.windRadiiKm.r12)
+      impactFeature(storm, "r7"),
+      impactFeature(storm, "r10"),
+      impactFeature(storm, "r12")
     ].filter((feature): feature is GeoJSON.Feature => Boolean(feature));
 
     return {
@@ -334,6 +340,13 @@ async function loadWindField(stormId?: string | null, viewportBounds?: WindField
   const sampleBounds = viewportBounds ?? buildStormWindBounds(storm as Storm);
   const samplePoints = buildWindSampleGrid(sampleBounds);
 
+  let ncepReason = "";
+  try {
+    return await loadNcepGfsWindField(sampleBounds, Boolean(viewportBounds));
+  } catch (error) {
+    ncepReason = error instanceof Error ? error.message : "NCEP GFS GRIB2 decoding failed.";
+  }
+
   try {
     const batches = await Promise.all(chunk(samplePoints, 54).map(async (points) => {
       const latitude = points.map((point) => point.lat.toFixed(2)).join(",");
@@ -344,7 +357,8 @@ async function loadWindField(stormId?: string | null, viewportBounds?: WindField
         hourly: "wind_speed_10m,wind_direction_10m",
         forecast_hours: "1",
         timezone: "UTC",
-        wind_speed_unit: "ms"
+        wind_speed_unit: "ms",
+        models: "gfs_global"
       });
       const response = await fetchOpenMeteoWithRetry(query);
       if (!response.ok) throw new Error(`Open-Meteo wind request failed: ${response.status}`);
@@ -360,7 +374,8 @@ async function loadWindField(stormId?: string | null, viewportBounds?: WindField
       updatedAt: locations[0]?.hourly?.time?.[0] ?? new Date().toISOString(),
       status: "available",
       attribution: OPEN_METEO_ATTRIBUTION,
-      model: "Open-Meteo best match, 10m wind",
+      reason: ncepReason ? `Direct NCEP feed unavailable: ${ncepReason}` : undefined,
+      model: "NCEP GFS global via Open-Meteo, 10m wind",
       unit: "m/s",
       points,
       sampling: viewportBounds ? "viewport" : "storm",
@@ -368,7 +383,9 @@ async function loadWindField(stormId?: string | null, viewportBounds?: WindField
     };
   } catch (error) {
     const openMeteoReason = error instanceof Error ? error.message : "风场接口暂时不可用。";
-    if (isNationwideWindBounds(viewportBounds)) {
+    // A throttled primary GFS mirror must not make an otherwise valid local
+    // viewport blank. The fallback is labeled separately in its payload.
+    if (samplePoints.length > 0) {
       try {
         return await loadMetNorwayWindField(samplePoints, sampleBounds);
       } catch (fallbackError) {
@@ -378,6 +395,161 @@ async function loadWindField(stormId?: string | null, viewportBounds?: WindField
     }
     return unavailableWindField(viewportBounds ?? null, sampleBounds, openMeteoReason);
   }
+}
+
+async function loadNcepGfsWindField(sampleBounds: WindFieldBounds, viewportSampling: boolean): Promise<WindFieldPayload> {
+  const bounds = snapNcepBounds(sampleBounds);
+  const errors: string[] = [];
+
+  for (const cycle of ncepCycleCandidates()) {
+    const query = new URLSearchParams({
+      file: `gfs.t${cycle.hour}z.pgrb2.0p25.f000`,
+      lev_10_m_above_ground: "on",
+      var_UGRD: "on",
+      var_VGRD: "on",
+      subregion: "",
+      leftlon: String(bounds.west),
+      rightlon: String(bounds.east),
+      toplat: String(bounds.north),
+      bottomlat: String(bounds.south),
+      dir: `/gfs.${cycle.date}/${cycle.hour}/atmos`
+    });
+    try {
+      const response = await fetch(`${NCEP_GFS_FILTER_URL}?${query.toString()}`, {
+        cache: "no-store",
+        headers: {
+          Accept: "application/octet-stream",
+          "User-Agent": process.env.WEATHER_API_USER_AGENT ?? "TyphoonBossRadar/1.0 local-deployment"
+        },
+        signal: AbortSignal.timeout(35_000)
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.length < 16 || String.fromCharCode(...bytes.slice(0, 4)) !== "GRIB") {
+        throw new Error("response was not GRIB2");
+      }
+      const decoded = await decodeNcepGfsWind(bytes, cycle, bounds);
+      return {
+        source: NCEP_GFS_SOURCE,
+        updatedAt: decoded.updatedAt,
+        status: "available",
+        attribution: NCEP_GFS_ATTRIBUTION,
+        model: "NCEP GFS 0.25 degree analysis, 10m U/V wind",
+        unit: "m/s",
+        points: decoded.points,
+        nativeResolutionDegrees: NCEP_GFS_NATIVE_RESOLUTION_DEGREES,
+        displayResolutionDegrees: decoded.displayResolutionDegrees,
+        cycle: `${cycle.date} ${cycle.hour}Z`,
+        sampling: viewportSampling ? "viewport" : "storm",
+        coverage: bounds
+      };
+    } catch (error) {
+      errors.push(`${cycle.date}${cycle.hour}: ${error instanceof Error ? error.message : "unknown error"}`);
+    }
+  }
+  throw new Error(`NCEP GFS unavailable (${errors.join(" | ")})`);
+}
+
+async function decodeNcepGfsWind(
+  bytes: Uint8Array,
+  cycle: { date: string; hour: string },
+  bounds: WindFieldBounds
+) {
+  await mkdir(WIND_FIELD_CACHE_DIR, { recursive: true });
+  const token = createHash("sha1")
+    .update(`${cycle.date}${cycle.hour}:${bounds.west}:${bounds.south}:${bounds.east}:${bounds.north}:${Date.now()}`)
+    .digest("hex")
+    .slice(0, 16);
+  const gribPath = join(WIND_FIELD_CACHE_DIR, `ncep-${token}.grib2`);
+  const csvPath = join(WIND_FIELD_CACHE_DIR, `ncep-${token}.csv`);
+  try {
+    await writeFile(gribPath, bytes);
+    await execFileAsync(WGRIB2_PATH, [gribPath, "-csv", csvPath], {
+      cwd: join(process.cwd(), ".runtime", "tools", "wgrib2"),
+      windowsHide: true,
+      timeout: 45_000,
+      maxBuffer: 2 * 1024 * 1024
+    });
+    return parseNcepWindCsv(await readFile(csvPath, "utf8"));
+  } finally {
+    await Promise.all([
+      rm(gribPath, { force: true }).catch(() => undefined),
+      rm(csvPath, { force: true }).catch(() => undefined)
+    ]);
+  }
+}
+
+function parseNcepWindCsv(csv: string) {
+  const grid = new Map<string, { lon: number; lat: number; u?: number; v?: number }>();
+  let updatedAt = "";
+  for (const line of csv.split(/\r?\n/)) {
+    if (!line) continue;
+    const fields = line.split(",");
+    if (fields.length < 7) continue;
+    const validTime = fields[1].replaceAll('"', "");
+    const variable = fields[2].replaceAll('"', "");
+    const lon = Number(fields[4]);
+    const lat = Number(fields[5]);
+    const value = Number(fields[6]);
+    if (!Number.isFinite(lon) || !Number.isFinite(lat) || !Number.isFinite(value)) continue;
+    if (variable !== "UGRD" && variable !== "VGRD") continue;
+    if (!updatedAt && validTime) updatedAt = `${validTime.replace(" ", "T")}Z`;
+    const key = windSampleKey(lon, lat);
+    const point = grid.get(key) ?? { lon, lat };
+    if (variable === "UGRD") point.u = value;
+    if (variable === "VGRD") point.v = value;
+    grid.set(key, point);
+  }
+
+  const complete = [...grid.values()].filter(
+    (point): point is { lon: number; lat: number; u: number; v: number } => Number.isFinite(point.u) && Number.isFinite(point.v)
+  );
+  if (complete.length < 100) throw new Error(`wgrib2 decoded only ${complete.length} complete U/V cells`);
+  const longitudes = [...new Set(complete.map((point) => point.lon))].sort((left, right) => left - right);
+  const latitudes = [...new Set(complete.map((point) => point.lat))].sort((left, right) => left - right);
+  const stride = Math.max(1, Math.ceil(Math.sqrt(complete.length / NCEP_GFS_MAX_DISPLAY_POINTS)));
+  const indexed = new Map(complete.map((point) => [windSampleKey(point.lon, point.lat), point]));
+  const points: WindFieldPoint[] = [];
+  for (let latIndex = 0; latIndex < latitudes.length; latIndex += stride) {
+    for (let lonIndex = 0; lonIndex < longitudes.length; lonIndex += stride) {
+      const point = indexed.get(windSampleKey(longitudes[lonIndex], latitudes[latIndex]));
+      if (!point) continue;
+      const speed = Math.hypot(point.u, point.v);
+      points.push({ ...point, speed, direction: (Math.atan2(-point.u, -point.v) * 180) / Math.PI });
+    }
+  }
+  if (points.length < 100) throw new Error(`NCEP display grid retained only ${points.length} cells`);
+  return {
+    updatedAt: updatedAt || new Date().toISOString(),
+    displayResolutionDegrees: NCEP_GFS_NATIVE_RESOLUTION_DEGREES * stride,
+    points
+  };
+}
+
+function ncepCycleCandidates(now = new Date()) {
+  const delayed = new Date(now.getTime() - 4.5 * 60 * 60 * 1000);
+  delayed.setUTCMinutes(0, 0, 0);
+  delayed.setUTCHours(Math.floor(delayed.getUTCHours() / 6) * 6);
+  return Array.from({ length: 4 }, (_, index) => {
+    const cycle = new Date(delayed.getTime() - index * 6 * 60 * 60 * 1000);
+    return {
+      date: `${cycle.getUTCFullYear()}${String(cycle.getUTCMonth() + 1).padStart(2, "0")}${String(cycle.getUTCDate()).padStart(2, "0")}`,
+      hour: String(cycle.getUTCHours()).padStart(2, "0")
+    };
+  });
+}
+
+function snapNcepBounds(bounds: WindFieldBounds): WindFieldBounds {
+  return {
+    west: clamp(Math.floor(bounds.west / 0.25) * 0.25, 0, 359.75),
+    east: clamp(Math.ceil(bounds.east / 0.25) * 0.25, 0.25, 359.75),
+    south: clamp(Math.floor(bounds.south / 0.25) * 0.25, -90, 89.75),
+    north: clamp(Math.ceil(bounds.north / 0.25) * 0.25, -89.75, 90)
+  };
+}
+
+function windSampleKey(lon: number, lat: number) {
+  return `${lon.toFixed(2)}:${lat.toFixed(2)}`;
 }
 
 function unavailableWindField(
@@ -391,7 +563,7 @@ function unavailableWindField(
       status: "unavailable",
       attribution: OPEN_METEO_ATTRIBUTION,
       reason,
-      model: "Open-Meteo best match, 10m wind",
+      model: "NCEP GFS global via Open-Meteo, 10m wind",
       unit: "m/s",
       points: [],
       sampling: viewportBounds ? "viewport" : "storm",
@@ -818,14 +990,16 @@ async function renderCloudMask(
     .toBuffer();
 }
 
-function impactFeature(storm: Storm, level: "r7" | "r10" | "r12", radiusKm: number) {
-  if (!Number.isFinite(radiusKm) || radiusKm <= 0) return null;
-  const feature = makeCircle(storm.position.lon, storm.position.lat, radiusKm, 160) as GeoJSON.Feature;
+function impactFeature(storm: Storm, level: "r7" | "r10" | "r12") {
+  const radius = storm.windRadiiKm.quadrants[level];
+  const feature = makeQuadrantWindPolygon(storm.position, radius, 160) as GeoJSON.Feature | null;
+  if (!feature) return null;
   feature.properties = {
     stormId: storm.id,
     stormName: storm.nameZh,
     radiusLevel: level,
-    radiusKm,
+    radiusKm: radius.max,
+    quadrants: { ne: radius.ne, se: radius.se, sw: radius.sw, nw: radius.nw },
     updatedAt: storm.updatedAt
   };
   return feature;

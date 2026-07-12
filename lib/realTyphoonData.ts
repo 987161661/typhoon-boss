@@ -8,14 +8,18 @@ import type {
   StormStage,
   TrackPoint
 } from "@/lib/types";
-import { findProvinceReferencePoint, normalizeProvinceName } from "@/lib/provinceGeo";
+import { findProvinceReferencePoint, getProvinceBoundaryCoordinates, normalizeProvinceName } from "@/lib/provinceGeo";
 import { readControlConsoleSettings } from "@/lib/controlConsoleSettingsStore";
+import { distanceBetweenKm, distanceToPathKm, maxWindRadius, parseBeijingTime, parseWindRadii, toBeijingIso } from "@/lib/meteorology";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import path from "node:path";
 
 const GDACS_SEARCH_API = "https://gdacs.org/gdacsapi/api/events/geteventlist/SEARCH";
 // The radar client polls every 10 seconds. Do not keep a second server-side
 // freshness window here: the latest point must come from the upstream source
 // on every polling cycle, even if that source has not published a new fix yet.
 const CURRENT_STORMS_CACHE_TTL_MS = 0;
+const TRACK_SNAPSHOT_PATH = path.join(process.cwd(), ".runtime", "track-snapshot.json");
 const DATA_SOURCE = "浙江省水利厅台风路径公开接口";
 const NOTICE =
   "本系统用于台风路径可视化与创意大屏演示，真实预警以中央气象台、海洋预报台和属地应急部门发布为准。";
@@ -45,6 +49,7 @@ interface ZjPoint {
   radius12?: string;
   forecast?: ZjForecastGroup[];
   jl?: string;
+  ckposition?: string;
 }
 
 interface ZjForecastGroup {
@@ -96,6 +101,7 @@ interface GdacsEventCollection {
 }
 
 const gdacsEvidenceCache = new Map<string, Promise<NonNullable<DexEntry["impactData"]["gdacs"]> | null>>();
+const yearlyTyphoonListCache = new Map<number, { expiresAt: number; items: ZjTyphoonListItem[] }>();
 
 const retiredNameMap: Record<string, string> = {
   BILIS: "马力斯",
@@ -140,6 +146,40 @@ const retiredNameMap: Record<string, string> = {
 
 let currentStormsCache: { expiresAt: number; storms: Storm[] } | null = null;
 let currentStormsInFlight: Promise<Storm[]> | null = null;
+let lastTrackWarning: string | null = null;
+let lastTrackFetchedAt: string | null = null;
+
+export interface TrackSnapshot {
+  source: string;
+  observedAt: string | null;
+  fetchedAt: string;
+  status: "fresh" | "stale" | "unavailable";
+  storms: Storm[];
+  warnings: string[];
+}
+
+export async function getTrackSnapshot(): Promise<TrackSnapshot> {
+  try {
+    const storms = await getCurrentStorms();
+    return {
+      source: DATA_SOURCE,
+      observedAt: storms[0]?.updatedAt ?? null,
+      fetchedAt: lastTrackFetchedAt ?? new Date().toISOString(),
+      status: lastTrackWarning ? "stale" : "fresh",
+      storms,
+      warnings: lastTrackWarning ? [lastTrackWarning] : []
+    };
+  } catch (error) {
+    return {
+      source: DATA_SOURCE,
+      observedAt: null,
+      fetchedAt: new Date().toISOString(),
+      status: "unavailable",
+      storms: [],
+      warnings: [error instanceof Error ? error.message : "台风路径源暂时不可用。"]
+    };
+  }
+}
 
 export async function getCurrentStorms(): Promise<Storm[]> {
   const now = Date.now();
@@ -152,15 +192,25 @@ export async function getCurrentStorms(): Promise<Storm[]> {
 
   currentStormsInFlight = loadCurrentStorms().then(
     (storms) => {
+      lastTrackWarning = null;
+      lastTrackFetchedAt = new Date().toISOString();
       currentStormsCache = {
         expiresAt: Date.now() + CURRENT_STORMS_CACHE_TTL_MS,
         storms
       };
+      void persistTrackSnapshot(storms, lastTrackFetchedAt);
       currentStormsInFlight = null;
       return storms;
     },
-    (error) => {
+    async (error) => {
       currentStormsInFlight = null;
+      const fallback = await readLastTrackSnapshot();
+      if (fallback) {
+        currentStormsCache = { expiresAt: 0, storms: fallback.storms };
+        lastTrackFetchedAt = fallback.fetchedAt;
+        lastTrackWarning = `路径源刷新失败，继续使用最后有效数据：${error instanceof Error ? error.message : String(error)}`;
+        return fallback.storms;
+      }
       throw error;
     }
   );
@@ -191,10 +241,13 @@ export async function getDexEntries(limit = 100): Promise<DexEntry[]> {
     .sort((a, b) => b.tfid.localeCompare(a.tfid))
     .slice(0, limit);
 
-  return mapWithConcurrency(listItems, 8, async (item) => {
-    const detail = await getTyphoonInfo(item.tfid);
-    return convertDexEntry(detail ?? item);
-  });
+  return listItems.map(convertDexEntry);
+}
+
+export async function getDexEntry(id: string): Promise<DexEntry | null> {
+  if (!/^\d{6}$/.test(id)) return null;
+  const detail = await getTyphoonInfo(id);
+  return detail ? convertDexEntry(detail) : null;
 }
 
 export async function getProvinceDefenseStatus(provinceName: string, stormId?: string): Promise<ProvinceDefenseStatus> {
@@ -219,7 +272,10 @@ export async function getProvinceDefenseStatus(provinceName: string, stormId?: s
     throw new Error(`Province center unavailable: ${province}`);
   }
   const center = provincePoint.center;
-  const distanceKm = Math.round(distanceBetweenKm(storm.position, { lon: center[0], lat: center[1] }));
+  const boundary = getProvinceBoundaryCoordinates(province);
+  const targets = boundary.length ? boundary : [{ lon: center[0], lat: center[1] }];
+  const path = [storm.position, ...storm.forecast];
+  const distanceKm = Math.round(Math.min(...targets.map((target) => distanceToPathKm(target, path) ?? distanceBetweenKm(storm.position, target))));
   const coreRange = Math.max(storm.windRadiiKm.r12, 40);
   const rainBandRange = Math.max(storm.windRadiiKm.r7, storm.windRadiiKm.r10, 160);
   const watchRange = Math.max(rainBandRange * 2.2, 650);
@@ -231,7 +287,7 @@ export async function getProvinceDefenseStatus(provinceName: string, stormId?: s
       storm.rating,
       distanceKm,
       storm,
-      "已接近高强度风圈，请优先执行属地停航、停课、停工和避险指令。",
+      "当前路径资料显示中心距离较近，请立即查看并遵循属地气象与应急部门发布。",
       "这不是擦边，是 Boss 把技能圈画到脚下了。"
     );
   }
@@ -276,7 +332,11 @@ export function getDataSourceLabel() {
 }
 
 async function getTyphoonList(year: number): Promise<ZjTyphoonListItem[]> {
-  return fetchJson<ZjTyphoonListItem[]>(`${await typhoonApiBase()}/TyphoonList/${year}`);
+  const cached = yearlyTyphoonListCache.get(year);
+  if (cached && cached.expiresAt > Date.now()) return cached.items;
+  const items = await fetchJson<ZjTyphoonListItem[]>(`${await typhoonApiBase()}/TyphoonList/${year}`);
+  yearlyTyphoonListCache.set(year, { expiresAt: Date.now() + 24 * 60 * 60 * 1000, items });
+  return items;
 }
 
 async function getTyphoonInfo(tfid: string): Promise<ZjTyphoonInfo | null> {
@@ -293,12 +353,14 @@ async function typhoonApiBase() {
 }
 
 async function fetchJson<T>(url: string): Promise<T> {
+  const settings = await readControlConsoleSettings();
   const response = await fetch(url, {
     headers: {
       Accept: "application/json",
       "User-Agent": "TyphoonBossRadar/1.0"
     },
-    cache: "no-store"
+    cache: "no-store",
+    signal: AbortSignal.timeout(settings.reliability.requestTimeoutSeconds * 1000)
   });
 
   if (!response.ok) {
@@ -364,10 +426,18 @@ function convertStorm(info: ZjTyphoonInfo | ZjTyphoonListItem): Storm | null {
   const rating = ratingFromWind(toNumber(latest.speed), stage);
   const forecastScenarios = convertForecastScenarios(latest);
   const forecast = forecastScenarios.find((scenario) => scenario.isPrimary)?.points ?? forecastScenarios[0]?.points ?? [];
+  const r7 = parseWindRadii(latest.radius7);
+  const r10 = parseWindRadii(latest.radius10);
+  const r12 = parseWindRadii(latest.radius12);
   const windRadiiKm = {
-    r7: parseRadius(latest.radius7),
-    r10: parseRadius(latest.radius10),
-    r12: parseRadius(latest.radius12)
+    r7: maxWindRadius(r7),
+    r10: maxWindRadius(r10),
+    r12: maxWindRadius(r12),
+    quadrants: {
+      r7: { ...r7, max: maxWindRadius(r7) },
+      r10: { ...r10, max: maxWindRadius(r10) },
+      r12: { ...r12, max: maxWindRadius(r12) }
+    }
   };
 
   return {
@@ -386,11 +456,18 @@ function convertStorm(info: ZjTyphoonInfo | ZjTyphoonListItem): Storm | null {
     minPressure: toNumber(latest.pressure),
     moveDirection: normalizeDirection(latest.movedirection),
     moveSpeed: toNumber(latest.movespeed),
-    updatedAt: latest.time,
+    updatedAt: toBeijingIso(latest.time) ?? latest.time,
     windRadiiKm,
     track,
     forecast,
     forecastScenarios,
+    landfalls: ("land" in info ? info.land ?? [] : []).map((land) => ({
+      time: toBeijingIso(land.landtime) ?? land.landtime ?? "",
+      place: land.landaddress ?? "公开路径档案未注明地点",
+      lat: toNumber(land.lat),
+      lon: toNumber(land.lng),
+      note: land.info?.trim() || undefined
+    })).filter((land) => Boolean(land.time)),
     skills: buildSkills(latest, windRadiiKm),
     notice: NOTICE
   };
@@ -470,20 +547,45 @@ function convertDexEntry(info: ZjTyphoonInfo | ZjTyphoonListItem): DexEntry {
 }
 
 function durationBetweenHours(start: string, end: string) {
-  const startAt = new Date(start.replace(" ", "T")).getTime();
-  const endAt = new Date(end.replace(" ", "T")).getTime();
-  if (!Number.isFinite(startAt) || !Number.isFinite(endAt) || endAt < startAt) return null;
+  const startAt = parseBeijingTime(start);
+  const endAt = parseBeijingTime(end);
+  if (startAt === null || endAt === null || endAt < startAt) return null;
   return Math.round((endAt - startAt) / (60 * 60 * 1000));
 }
 
 function convertTrackPoint(point: ZjPoint | ZjForecastPoint): TrackPoint {
   return {
-    time: point.time,
+    time: toBeijingIso(point.time) ?? point.time,
     lon: toNumber(point.lng),
     lat: toNumber(point.lat),
     wind: toNumber(point.speed),
-    pressure: toNumber(point.pressure)
+    pressure: toNumber(point.pressure),
+    locationDescription: "ckposition" in point ? point.ckposition?.trim() || undefined : undefined
   };
+}
+
+async function persistTrackSnapshot(storms: Storm[], fetchedAt: string) {
+  try {
+    await mkdir(path.dirname(TRACK_SNAPSHOT_PATH), { recursive: true });
+    const temporary = `${TRACK_SNAPSHOT_PATH}.${process.pid}.tmp`;
+    await writeFile(temporary, JSON.stringify({ version: 1, fetchedAt, storms }), "utf8");
+    await rename(temporary, TRACK_SNAPSHOT_PATH);
+  } catch (error) {
+    console.warn("[track-snapshot] persistence failed", error);
+  }
+}
+
+async function readLastTrackSnapshot(): Promise<{ fetchedAt: string; storms: Storm[] } | null> {
+  try {
+    const settings = await readControlConsoleSettings();
+    const payload = JSON.parse(await readFile(TRACK_SNAPSHOT_PATH, "utf8")) as { version?: number; fetchedAt?: string; storms?: Storm[] };
+    const fetchedAt = Date.parse(payload.fetchedAt ?? "");
+    if (payload.version !== 1 || !Array.isArray(payload.storms) || !Number.isFinite(fetchedAt)) return null;
+    if (Date.now() - fetchedAt > settings.reliability.retainLastGoodDataHours * 60 * 60 * 1000) return null;
+    return { fetchedAt: payload.fetchedAt as string, storms: payload.storms };
+  } catch {
+    return null;
+  }
 }
 
 function convertForecastScenarios(point: ZjPoint): ForecastScenario[] {
@@ -501,10 +603,7 @@ function convertForecastScenarios(point: ZjPoint): ForecastScenario[] {
       id: `${agencyCodes[group.tm] ?? group.tm}-${point.time}`,
       agency: group.tm,
       agencyCode: agencyCodes[group.tm] ?? group.tm.slice(0, 4).toUpperCase(),
-      points: group.forecastpoints.filter(isUsableForecastPoint).map((item, index) => ({
-        ...convertTrackPoint(item),
-        probability: Math.max(42, 92 - index * 8)
-      })),
+      points: group.forecastpoints.filter(isUsableForecastPoint).map(convertTrackPoint),
       isPrimary: group.tm === "中国"
     }))
     .filter((scenario) => scenario.points.length >= 2)
@@ -544,14 +643,7 @@ function normalizeDirection(direction?: string) {
   return direction?.trim() || "暂无";
 }
 
-function parseRadius(value?: string): number {
-  if (!value) return 0;
-  const radii = value
-    .split("|")
-    .map((item) => Number(item))
-    .filter((item) => Number.isFinite(item) && item > 0);
-  return radii.length ? Math.max(...radii) : 0;
-}
+function parseRadius(value?: string): number { return maxWindRadius(parseWindRadii(value)); }
 
 function buildSkills(point: ZjPoint, radii: Storm["windRadiiKm"]): StormSkill[] {
   const wind = toNumber(point.speed);
@@ -619,38 +711,4 @@ function toNumber(value: string | number | undefined): number {
 
 function clampSeverity(value: number) {
   return Math.max(1, Math.min(9, value));
-}
-
-function distanceBetweenKm(a: { lon: number; lat: number }, b: { lon: number; lat: number }) {
-  const earthRadiusKm = 6371;
-  const dLat = degToRad(b.lat - a.lat);
-  const dLon = degToRad(b.lon - a.lon);
-  const lat1 = degToRad(a.lat);
-  const lat2 = degToRad(b.lat);
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
-  return 2 * earthRadiusKm * Math.asin(Math.sqrt(h));
-}
-
-function degToRad(deg: number) {
-  return (deg * Math.PI) / 180;
-}
-
-async function mapWithConcurrency<T, R>(
-  items: T[],
-  concurrency: number,
-  mapper: (item: T) => Promise<R>
-): Promise<R[]> {
-  const results: R[] = [];
-  let index = 0;
-
-  async function worker() {
-    while (index < items.length) {
-      const currentIndex = index;
-      index += 1;
-      results[currentIndex] = await mapper(items[currentIndex]);
-    }
-  }
-
-  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, worker));
-  return results;
 }

@@ -64,8 +64,9 @@ const structureInFlight = new Map<string, Promise<BossStructureSummary>>();
 let ledgerReadPromise: Promise<StructureLedger> | null = null;
 let ledgerWriteQueue: Promise<void> = Promise.resolve();
 
-export async function getStormStructureIntelligence(storm: Storm): Promise<BossStructureSummary> {
+export async function getStormStructureIntelligence(storm: Storm, signal?: AbortSignal): Promise<BossStructureSummary> {
   const source = jtwcSourceForStorm(storm);
+  if (signal) return loadStormStructure(storm, source, signal);
   const cacheKey = `${storm.id}:${source.url}`;
   const cached = structureCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
@@ -88,9 +89,9 @@ export async function getStormStructureIntelligence(storm: Storm): Promise<BossS
   return request;
 }
 
-async function loadStormStructure(storm: Storm, source: ReturnType<typeof jtwcSourceForStorm>) {
+async function loadStormStructure(storm: Storm, source: ReturnType<typeof jtwcSourceForStorm>, signal?: AbortSignal) {
   try {
-    const bulletin = await fetchJtwcBulletin(source.url);
+    const bulletin = await fetchJtwcBulletin(source.url, signal);
     const observation = parseJtwcStructureBulletin(bulletin, storm, source.url);
     return persistObservation(storm.id, observation);
   } catch (error) {
@@ -107,11 +108,11 @@ async function loadStormStructure(storm: Storm, source: ReturnType<typeof jtwcSo
   }
 }
 
-async function fetchJtwcBulletin(url: string) {
+async function fetchJtwcBulletin(url: string, outerSignal?: AbortSignal) {
   let lastReason = "JTWC structure bulletin unavailable.";
-  for (let attempt = 0; attempt < 4; attempt += 1) {
+  for (let attempt = 0; attempt < 1; attempt += 1) {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15_000);
+    const timeout = setTimeout(() => controller.abort(), 2_500);
     try {
       const response = await fetch(url, {
         headers: {
@@ -119,7 +120,7 @@ async function fetchJtwcBulletin(url: string) {
           "User-Agent": "TyphoonBossRadar/1.0"
         },
         cache: "no-store",
-        signal: controller.signal
+        signal: outerSignal ? AbortSignal.any([controller.signal, outerSignal]) : controller.signal
       });
       if (!response.ok) {
         lastReason = `JTWC structure bulletin HTTP ${response.status}.`;
@@ -136,7 +137,6 @@ async function fetchJtwcBulletin(url: string) {
     } finally {
       clearTimeout(timeout);
     }
-    if (attempt < 3) await waitForRetry(250 * (attempt + 1));
   }
   throw new Error(lastReason);
 }
@@ -148,12 +148,12 @@ function describeFetchError(error: unknown, fallback: string) {
   return causeText ? `${error.message} (${causeText})` : error.message;
 }
 
-function waitForRetry(delayMs: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, delayMs));
-}
-
 export function parseJtwcStructureBulletin(text: string, storm: Storm, sourceUrl: string): BossStructureSummary {
   const normalized = text.replace(/\s+/g, " ").toUpperCase();
+  const expectedName = storm.nameEn.trim().toUpperCase();
+  if (expectedName && !normalized.includes(`(${expectedName})`) && !normalized.includes(` ${expectedName} `)) {
+    throw new Error(`JTWC bulletin identity did not match ${expectedName}.`);
+  }
   const warningNumber = /WARNING NR\s+(\d+)/.exec(normalized)?.[1] ?? null;
   const bulletinId = warningNumber ? `JTWC-W${Number(warningNumber)}` : "JTWC-CURRENT";
   const observedAt = parseJtwcObservedAt(text) ?? new Date().toISOString();

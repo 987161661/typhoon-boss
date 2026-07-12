@@ -17,9 +17,21 @@ export default function DexAtlas({ entries }: { entries: DexEntry[] }) {
   const [year, setYear] = useState(grouped[0]?.[0] ?? new Date().getFullYear());
   const yearEntries = grouped.find(([value]) => value === year)?.[1] ?? [];
   const [selectedId, setSelectedId] = useState(yearEntries[0]?.id ?? "");
-  const selected = yearEntries.find((entry) => entry.id === selectedId) ?? yearEntries[0];
+  const selectedSummary = yearEntries.find((entry) => entry.id === selectedId) ?? yearEntries[0];
+  const [selectedDetail, setSelectedDetail] = useState<DexEntry | null>(null);
+  const selected = selectedDetail?.id === selectedSummary?.id ? selectedDetail : selectedSummary;
   const [gdacs, setGdacs] = useState<GdacsEvidence | null>(null);
   useEffect(() => { setSelectedId(grouped.find(([value]) => value === year)?.[1][0]?.id ?? ""); }, [year, grouped]);
+  useEffect(() => {
+    if (!selectedSummary?.id) { setSelectedDetail(null); return; }
+    let live = true;
+    setSelectedDetail(null);
+    fetch(`/api/dex/${encodeURIComponent(selectedSummary.id)}`, { cache: "force-cache" })
+      .then((response) => response.ok ? response.json() : null)
+      .then((payload) => { if (live) setSelectedDetail(payload?.entry ?? null); })
+      .catch(() => undefined);
+    return () => { live = false; };
+  }, [selectedSummary?.id]);
   useEffect(() => {
     if (!selected?.nameEn || !selected.lifecycle.startedAt) { setGdacs(null); return; }
     const query = new URLSearchParams({ name: selected.nameEn, startedAt: selected.lifecycle.startedAt, ...(selected.lifecycle.endedAt ? { endedAt: selected.lifecycle.endedAt } : {}) });
