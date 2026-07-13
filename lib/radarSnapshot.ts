@@ -18,7 +18,16 @@ const FAST_PROVINCE_BRIEFINGS = new Set(["西藏", "青海", "宁夏", "海南",
 export interface RadarSnapshotEnvironment {
   satellite: SatelliteLayerPayload;
   windField: WindFieldPayload;
+  windCenters: Record<string, StormWindCenter>;
   impactArea: ImpactAreaPayload;
+}
+
+export interface StormWindCenter {
+  stormId: string;
+  status: WindFieldPayload["status"];
+  source: string;
+  updatedAt: string;
+  analysisCenter: WindFieldPayload["analysisCenter"] | null;
 }
 
 export interface RadarSnapshot {
@@ -127,10 +136,11 @@ function refreshDerivedSnapshot(key: string, storms: Storm[], activeStormId: str
 async function loadDerivedSnapshot(storms: Storm[], activeStormId: string | null): Promise<DerivedSnapshot> {
   const generatedAt = new Date().toISOString();
   const warnings: string[] = [];
-  const [bossResult, satelliteResult, windResult, impactResult, chinaWindResult] = await Promise.allSettled([
+  const [bossResult, satelliteResult, windResult, windCentersResult, impactResult, chinaWindResult] = await Promise.allSettled([
     withTimeout(buildBossProfiles(storms), "Boss profile"),
     withTimeout(getSatelliteLayer(storms.find((storm) => storm.id === activeStormId)?.updatedAt ?? storms[0]?.updatedAt), "Satellite layer"),
     withTimeout(getWindField(activeStormId), "Local wind field"),
+    withTimeout(loadStormWindCenters(storms), "Storm wind centers"),
     withTimeout(getImpactArea(activeStormId), "Impact area"),
     withTimeout(getWindField(activeStormId, CHINA_WIND_BOUNDS), "Nationwide wind field")
   ]);
@@ -138,6 +148,7 @@ async function loadDerivedSnapshot(storms: Storm[], activeStormId: string | null
   const baseBosses = settleValue(bossResult, [], warnings, "Boss profile generation failed.");
   const satellite = settleValue(satelliteResult, fallbackSatellite(generatedAt), warnings, "Satellite layer generation failed.");
   const directWindField = settleValue(windResult, fallbackWindField(generatedAt), warnings, "Wind field generation failed.");
+  const windCenters = settleValue(windCentersResult, {}, warnings, "Storm wind center generation failed.");
   const impactArea = settleValue(impactResult, fallbackImpactArea(generatedAt), warnings, "Impact area generation failed.");
   const chinaWindField = settleValue(chinaWindResult, directWindField, warnings, "Nationwide province wind field generation failed.");
   const windField = directWindField.status === "available"
@@ -157,6 +168,7 @@ async function loadDerivedSnapshot(storms: Storm[], activeStormId: string | null
     environment: {
       satellite,
       windField: compactWindField(windField),
+      windCenters,
       impactArea
     },
     generatedAt,
@@ -164,6 +176,30 @@ async function loadDerivedSnapshot(storms: Storm[], activeStormId: string | null
     staleUntil: Date.now() + STALE_DERIVED_CACHE_TTL_MS,
     warnings
   };
+}
+
+async function loadStormWindCenters(storms: Storm[]): Promise<Record<string, StormWindCenter>> {
+  const entries = await Promise.all(storms.map(async (storm) => {
+    try {
+      const field = await getWindField(storm.id);
+      return [storm.id, {
+        stormId: storm.id,
+        status: field.status,
+        source: field.source,
+        updatedAt: field.updatedAt,
+        analysisCenter: field.analysisCenter ?? null
+      } satisfies StormWindCenter] as const;
+    } catch {
+      return [storm.id, {
+        stormId: storm.id,
+        status: "unavailable",
+        source: "Wind field unavailable",
+        updatedAt: new Date().toISOString(),
+        analysisCenter: null
+      } satisfies StormWindCenter] as const;
+    }
+  }));
+  return Object.fromEntries(entries);
 }
 
 function compactWindField(payload: WindFieldPayload): WindFieldPayload {

@@ -1,0 +1,99 @@
+import type { Storm, WindFieldPayload } from "./types";
+import type { StormWindCenter } from "./radarSnapshot";
+
+export const FORECAST_ROUTE_COLORS: Record<string, string> = {
+  CMA: "#fff0a8",
+  JMA: "#61efff",
+  JTWC: "#9cff72",
+  CWA: "#ff70c7",
+  HKO: "#ff985d"
+};
+
+export interface StormFleetGeo {
+  routes: GeoJSON.FeatureCollection;
+  points: GeoJSON.FeatureCollection;
+}
+
+export function alignStormToWindCenter(storm: Storm, windCenter?: StormWindCenter) {
+  const center = windCenter?.source === "NOAA/NCEP NOMADS Grib Filter" ? windCenter.analysisCenter : null;
+  if (windCenter?.status !== "available" || !center) return storm;
+  return {
+    ...storm,
+    position: { lon: center.lon, lat: center.lat },
+    updatedAt: windCenter.updatedAt
+  };
+}
+
+export function windFieldMatchesStorm(windField: WindFieldPayload | null, storm: Storm | null) {
+  return Boolean(windField && storm && windField.stormId === storm.id);
+}
+
+export function buildStormFleetGeo(storms: Storm[], activeStormId: string | null): StormFleetGeo {
+  const routeFeatures: GeoJSON.Feature[] = [];
+  const pointFeatures: GeoJSON.Feature[] = [];
+
+  storms.forEach((storm) => {
+    const properties = {
+      stormId: storm.id,
+      code: storm.code,
+      nameZh: storm.nameZh,
+      active: storm.id === activeStormId
+    };
+    const track = storm.track.map((point) => [point.lon, point.lat]);
+
+    if (track.length >= 2) {
+      routeFeatures.push(lineFeature(track, { ...properties, routeKind: "track" }));
+    }
+    const scenarios = storm.forecastScenarios.length > 0
+      ? storm.forecastScenarios
+      : [{ agencyCode: "CMA", isPrimary: true, points: storm.forecast }];
+    scenarios.forEach((scenario) => {
+      const forecast = scenario.points.map((point) => [point.lon, point.lat]);
+      if (forecast.length < 2) return;
+      routeFeatures.push(lineFeature(forecast, {
+        ...properties,
+        routeKind: "forecast",
+        agencyCode: scenario.agencyCode,
+        isPrimary: scenario.isPrimary,
+        color: FORECAST_ROUTE_COLORS[scenario.agencyCode] ?? "#e8f5fb"
+      }));
+    });
+
+    storm.track.forEach((point, index) => {
+      if (index !== storm.track.length - 1 && index % 2 !== 0) return;
+      pointFeatures.push(pointFeature([point.lon, point.lat], { ...properties, routeKind: "track" }));
+    });
+  });
+
+  return {
+    routes: featureCollection(routeFeatures),
+    points: featureCollection(pointFeatures)
+  };
+}
+
+export function stormFleetBounds(storms: Storm[]): [[number, number], [number, number]] | null {
+  const coordinates = storms.flatMap((storm) => [
+    ...storm.track.map((point) => [point.lon, point.lat] as [number, number]),
+    ...(storm.forecastScenarios.length > 0 ? storm.forecastScenarios.flatMap((scenario) => scenario.points) : storm.forecast)
+      .map((point) => [point.lon, point.lat] as [number, number]),
+    [storm.position.lon, storm.position.lat] as [number, number]
+  ]);
+  if (coordinates.length === 0) return null;
+
+  return [
+    [Math.min(...coordinates.map(([lon]) => lon)), Math.min(...coordinates.map(([, lat]) => lat))],
+    [Math.max(...coordinates.map(([lon]) => lon)), Math.max(...coordinates.map(([, lat]) => lat))]
+  ];
+}
+
+function lineFeature(coordinates: number[][], properties: GeoJSON.GeoJsonProperties): GeoJSON.Feature {
+  return { type: "Feature", properties, geometry: { type: "LineString", coordinates } };
+}
+
+function pointFeature(coordinates: number[], properties: GeoJSON.GeoJsonProperties): GeoJSON.Feature {
+  return { type: "Feature", properties, geometry: { type: "Point", coordinates } };
+}
+
+function featureCollection(features: GeoJSON.Feature[]): GeoJSON.FeatureCollection {
+  return { type: "FeatureCollection", features };
+}

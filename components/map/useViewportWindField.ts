@@ -20,6 +20,7 @@ export function useViewportWindField({
 
   useEffect(() => {
     if (!map || !enabled) { setField(null); return; }
+    setField(null);
     let disposed = false;
     let timer = 0;
     let controller: AbortController | null = null;

@@ -52,6 +52,21 @@ if ($health.status -ne 'ok' -or $health.track.stormCount -lt 1) {
   throw "Typhoon data connection is not ready. status=$($health.status); storms=$($health.track.stormCount)"
 }
 
+# The one-click live workflow is an operational session: enable the evolution
+# agent explicitly after the web API is healthy. A manual Next start remains
+# opt-in, while this launcher verifies that its requested background work is
+# actually scheduled.
+$agentSettings = @{ evolutionAgentEnabled = $true } | ConvertTo-Json -Compress
+$agentStatus = Invoke-RestMethod `
+  -Uri "http://127.0.0.1:$Port/api/live-control-settings" `
+  -Method Patch `
+  -ContentType 'application/json' `
+  -Body $agentSettings `
+  -TimeoutSec 12
+if (-not $agentStatus.settings.evolutionAgentEnabled -or -not $agentStatus.scheduler.enabled) {
+  throw 'Typhoon evolution agent was not enabled. Check TYPHOON_EVOLUTION_AGENT_ENABLED and the live-control settings.'
+}
+
 $hostReady = $false
 for ($attempt = 0; $attempt -lt 30; $attempt += 1) {
   try {
@@ -71,6 +86,7 @@ if (-not $hostReady) {
 
 Write-Host "Typhoon live page: $liveUrl"
 Write-Host 'Linglan runtime: http://127.0.0.1:5173/?overlay=1'
+Write-Host "Evolution agent: enabled (every $($agentStatus.scheduler.intervalMinutes) minutes)"
 
 if ($OpenBrowser) {
   Start-Process $liveUrl

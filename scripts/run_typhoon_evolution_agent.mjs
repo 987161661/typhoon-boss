@@ -354,8 +354,13 @@ async function invokeMiniMax(apiKey, prompt) {
         body: JSON.stringify({
       model: miniMaxModel,
       temperature: 0.1,
-      max_completion_tokens: 2048,
-      reasoning_split: true,
+      // M3 may emit a long thinking segment before the publishable body. The
+      // report needs enough headroom to complete its constrained Markdown.
+      max_completion_tokens: 4096,
+      // This is a publishable operational report, not a reasoning task. With
+      // reasoning splitting enabled, M3 can exhaust the completion budget in
+      // hidden reasoning and return no usable report body.
+      reasoning_split: false,
       messages: [
         { role: "system", content: "你是严谨的热带气旋分析助手，优先陈述数据来源、时间与不确定性。" },
         { role: "user", content: JSON.stringify(prompt) }
@@ -490,8 +495,11 @@ function formatBeijingTime(value) {
 }
 
 function stripThinking(value) {
-  return value
-    .replace(/<think>[\s\S]*?<\/think>\s*/gi, "")
+  const withoutThinking = value.replace(/<think>[\s\S]*?<\/think>\s*/gi, "");
+  // Never publish an incomplete hidden-reasoning segment when a model reaches
+  // its completion limit before emitting a closing tag and final answer.
+  if (/<think>/i.test(withoutThinking)) return "";
+  return withoutThinking
     .replace(/^#\s+.*$/gm, "")
     .replace(/[ \t]+$/gm, "")
     .trim();

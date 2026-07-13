@@ -178,7 +178,7 @@ a:focus-visible {
 .official-alert-strip {
   position: absolute;
   z-index: 18;
-  top: 86px;
+  top: 108px;
   left: 50%;
   display: flex;
   max-width: min(720px, calc(100vw - 560px));
@@ -1804,20 +1804,11 @@ a:focus-visible {
   color: rgba(47, 34, 22, 0.92);
 }
 
-.radar-shell[data-theme="archive-command"] .path-time-label,
-.radar-shell[data-theme="archive-command"] .storm-target-label {
+.radar-shell[data-theme="archive-command"] .path-time-label {
   border-color: rgba(91, 65, 37, 0.62);
   background: rgba(226, 204, 160, 0.9);
   color: #352719;
   box-shadow: 0 10px 18px rgba(29, 18, 9, 0.22);
-}
-
-.radar-shell[data-theme="archive-command"] .storm-target-label span {
-  color: #8f352c;
-}
-
-.radar-shell[data-theme="archive-command"] .storm-target-label strong {
-  color: #352719;
 }
 
 .dossier-panel {
@@ -3184,6 +3175,78 @@ a:focus-visible {
   white-space: nowrap;
 }
 
+.brand-run-indicator {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-left: 10px;
+  border-radius: 50%;
+  background: #52656b;
+  box-shadow: 0 0 0 2px rgba(5, 8, 10, 0.78);
+  vertical-align: middle;
+}
+
+.brand-run-indicator.is-running {
+  background: #42e58d;
+  box-shadow: 0 0 10px #42e58d, 0 0 0 2px rgba(5, 8, 10, 0.78);
+}
+
+.command-strip {
+  grid-template-columns: minmax(230px, 1.5fr) minmax(104px, 0.75fr) minmax(104px, 0.75fr);
+}
+
+.current-storm-control {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  min-height: 42px;
+  padding: 5px 7px;
+  border: 1px solid rgba(0, 216, 255, 0.48);
+  background: linear-gradient(90deg, rgba(0, 216, 255, 0.12), rgba(5, 15, 19, 0.9) 48%);
+  box-shadow: inset 3px 0 0 var(--cyan);
+}
+
+.current-storm-control > span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.current-storm-control > div {
+  display: grid;
+  grid-template-columns: 24px minmax(84px, 1fr) minmax(76px, 0.9fr) 24px;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.current-storm-control button {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  color: var(--cyan);
+  background: rgba(0, 216, 255, 0.08);
+  cursor: pointer;
+}
+
+.current-storm-control button:hover:not(:disabled) { background: rgba(0, 216, 255, 0.2); }
+.current-storm-control button:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.current-storm-control button:disabled { opacity: 0.28; cursor: default; }
+
+.current-storm-control strong,
+.current-storm-control em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.current-storm-control strong { color: var(--mist); font: 800 12px/1 Consolas, monospace; }
+.current-storm-control em { color: var(--amber); font-size: 10px; font-style: normal; }
+
 .gfs-scalar-control,
 .cwa-radar-control,
 .gfs-wave-control,
@@ -3852,33 +3915,6 @@ a:focus-visible {
 .vortex-super {
   --storm-core-accent: 255, 59, 50;
   --storm-core-glow: rgba(255, 59, 50, 0.68);
-}
-
-.storm-target-label {
-  position: absolute;
-  left: 50%;
-  top: calc(50% + 160px);
-  display: grid;
-  min-width: 128px;
-  gap: 2px;
-  padding: 8px 12px;
-  border: 1px solid rgba(255, 75, 62, 0.72);
-  border-radius: 4px;
-  background: rgba(5, 8, 10, 0.82);
-  text-align: center;
-  transform: translateX(-50%);
-  opacity: 0;
-}
-
-.storm-target-label span {
-  color: var(--red);
-  font-size: 20px;
-  font-weight: 900;
-}
-
-.storm-target-label strong {
-  color: var(--mist);
-  font-size: 13px;
 }
 
 .legend-line {
@@ -5915,89 +5951,6 @@ a:focus-visible {
   .standby-sweep { animation: none; transform: rotate(42deg); }
 }
 
-.multi-storm-target-queue {
-  position: absolute;
-  z-index: 18;
-  top: 104px;
-  left: clamp(286px, 20vw, 330px);
-  right: 16px;
-  display: grid;
-  grid-template-columns: 92px minmax(0, 1fr);
-  min-width: 0;
-  height: 68px;
-  border: 1px solid rgba(0, 216, 255, 0.32);
-  background: rgba(3, 10, 14, 0.9);
-  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.34);
-  backdrop-filter: blur(8px);
-}
-
-.multi-storm-queue-label {
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr);
-  grid-template-rows: 1fr 1fr;
-  gap: 0 7px;
-  align-items: center;
-  padding: 9px 10px;
-  border-right: 1px solid rgba(0, 216, 255, 0.28);
-  background: linear-gradient(135deg, rgba(0, 216, 255, 0.14), transparent);
-}
-
-.multi-storm-queue-label svg { grid-row: 1 / 3; width: 20px; color: var(--cyan); }
-.multi-storm-queue-label span { align-self: end; color: var(--muted); font-size: 9px; font-weight: 900; letter-spacing: 0.08em; }
-.multi-storm-queue-label strong { align-self: start; color: #ecfbff; font: 900 18px/1 Consolas, monospace; }
-
-.multi-storm-queue-track {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(210px, 1fr);
-  gap: 1px;
-  min-width: 0;
-  overflow-x: auto;
-  background: rgba(0, 216, 255, 0.12);
-  scrollbar-width: thin;
-}
-
-.multi-storm-queue-track button {
-  position: relative;
-  display: grid;
-  grid-template-columns: 5px minmax(58px, 0.75fr) minmax(54px, 1fr) minmax(62px, 0.9fr) auto;
-  gap: 8px;
-  align-items: center;
-  min-width: 0;
-  padding: 8px 10px;
-  color: var(--paper);
-  border: 0;
-  background: #071217;
-  text-align: left;
-  cursor: pointer;
-}
-
-.multi-storm-queue-track button:hover { background: #0a1b21; }
-.multi-storm-queue-track button > i { align-self: stretch; width: 4px; background: var(--cyan); box-shadow: 0 0 10px rgba(0, 216, 255, 0.48); }
-.multi-storm-queue-track button > span { display: grid; gap: 3px; min-width: 0; }
-.multi-storm-queue-track button b { color: var(--cyan); font: 900 11px/1 Consolas, monospace; white-space: nowrap; }
-.multi-storm-queue-track button small { overflow: hidden; color: var(--muted); font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
-.multi-storm-queue-track button > strong { overflow: hidden; color: #ecfbff; font-size: 17px; text-overflow: ellipsis; white-space: nowrap; }
-.multi-storm-queue-track button > em { overflow: hidden; color: var(--amber); font-size: 10px; font-style: normal; text-overflow: ellipsis; white-space: nowrap; }
-.multi-storm-queue-track .multi-storm-vitals { justify-items: end; text-align: right; }
-.multi-storm-queue-track .multi-storm-vitals b { color: #ecfbff; }
-
-.multi-storm-queue-track button.active {
-  background: linear-gradient(90deg, rgba(255, 59, 50, 0.18), rgba(7, 18, 23, 0.96) 54%);
-  box-shadow: inset 0 -2px 0 rgba(255, 59, 50, 0.9);
-}
-
-.multi-storm-queue-track button.active > i { background: var(--red); box-shadow: 0 0 12px rgba(255, 59, 50, 0.7); }
-.multi-storm-queue-track button.active b { color: var(--red); }
-.multi-storm-queue-track button:focus-visible { z-index: 2; outline: 2px solid var(--amber); outline-offset: -2px; }
-
-@media (max-width: 980px) {
-  .multi-storm-target-queue { left: 16px; top: 96px; grid-template-columns: 76px minmax(0, 1fr); }
-  .multi-storm-queue-track { grid-auto-columns: minmax(200px, 72vw); }
-  .multi-storm-queue-track button { grid-template-columns: 5px minmax(52px, 0.7fr) minmax(50px, 1fr) auto; }
-  .multi-storm-queue-track button > em { display: none; }
-}
-
 @keyframes stormLockResolve {
   0% {
     transform: rotate(0deg) scale(0.98);
@@ -7875,14 +7828,6 @@ a:focus-visible {
   align-items: center;
   color: rgba(236, 251, 255, 0.68);
   font-size: var(--live-label);
-}
-
-.radar-shell[data-view="live"] .storm-target-label span {
-  font-size: var(--live-key);
-}
-
-.radar-shell[data-view="live"] .storm-target-label strong {
-  font-size: var(--live-body);
 }
 
 .radar-shell[data-view="live"] .maplibregl-ctrl-bottom-right {

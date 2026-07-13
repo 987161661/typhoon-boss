@@ -209,6 +209,7 @@ export interface WindFieldPoint {
 }
 
 export interface WindFieldPayload extends EnvironmentLayerMeta {
+  stormId?: string | null;
   model: string;
   unit: "m/s";
   points: WindFieldPoint[];

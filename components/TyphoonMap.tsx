@@ -14,10 +14,11 @@ import {
   type SetStateAction
 } from "react";
 import maplibregl, { type GeoJSONSource, type ImageSource, type Map as MapLibreMap } from "maplibre-gl";
-import { AlertTriangle, ChevronRight, Crosshair, Database, Palette, RadioTower, Satellite, Settings2, Shield, Wind } from "lucide-react";
+import { AlertTriangle, ChevronLeft, ChevronRight, Database, Palette, RadioTower, Satellite, Settings2, Shield, Wind } from "lucide-react";
 import Link from "next/link";
 import { makeCircle } from "@/lib/provinceGeo";
 import { createStormVisualCanvas } from "@/lib/stormVisualRenderer";
+import { alignStormToWindCenter, buildStormFleetGeo, FORECAST_ROUTE_COLORS, stormFleetBounds, windFieldMatchesStorm } from "@/lib/stormFleet";
 import { cycloneTangentialSign, cycloneVisualKinematics } from "@/lib/stormKinematics";
 import type { BossProfile } from "@/lib/bossEngine/types";
 import { useRadarSnapshot } from "./useRadarSnapshot";
@@ -289,8 +290,10 @@ export function TyphoonMap({
   const windCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const forecastCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const markerRef = useRef<maplibregl.Marker | null>(null);
+  const fleetMarkerRefs = useRef<Map<string, maplibregl.Marker>>(new Map());
   const mapRef = useRef<MapLibreMap | null>(null);
   const stormRef = useRef<Storm | null>(null);
+  const stormsRef = useRef<Storm[]>([]);
   const cycloneCoreRef = useRef<CycloneCoreAnalysis | null>(null);
   const focusedStormIdRef = useRef<string | null>(null);
   const requestedStormId = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("stormId");
@@ -345,20 +348,22 @@ export function TyphoonMap({
   const matchedEcmwfTracks = useMemo(() => matchEcmwfTracks(storm, ecmwfTrackLayer), [ecmwfTrackLayer, storm]);
   const regionLabelsRef = useRef<MapRegionLabel[]>(DEFAULT_REGION_LABELS);
   const activeWindField = viewportWindField ?? windField;
+  const scopedActiveWindField = windFieldMatchesStorm(activeWindField, storm) ? activeWindField : null;
   const windFieldSignature = useMemo(() => {
-    if (activeWindField?.status !== "available") return activeWindField?.status ?? "pending";
+    if (scopedActiveWindField?.status !== "available") return `${storm?.id ?? "no-storm"};${scopedActiveWindField?.status ?? "pending"}`;
     return [
-      activeWindField.source,
-      activeWindField.updatedAt,
-      activeWindField.points.length,
-      activeWindField.displayResolutionDegrees ?? "unknown-resolution",
-      activeWindField.coverage ? `${activeWindField.coverage.west}:${activeWindField.coverage.south}:${activeWindField.coverage.east}:${activeWindField.coverage.north}` : "unknown-coverage"
+      scopedActiveWindField.stormId ?? "no-storm",
+      scopedActiveWindField.source,
+      scopedActiveWindField.updatedAt,
+      scopedActiveWindField.points.length,
+      scopedActiveWindField.displayResolutionDegrees ?? "unknown-resolution",
+      scopedActiveWindField.coverage ? `${scopedActiveWindField.coverage.west}:${scopedActiveWindField.coverage.south}:${scopedActiveWindField.coverage.east}:${scopedActiveWindField.coverage.north}` : "unknown-coverage"
     ].join(";");
-  }, [activeWindField]);
-  const pendingWindFieldRef = useRef<WindFieldPayload | null>(activeWindField);
-  const latestWindFieldRef = useRef<WindFieldPayload | null>(activeWindField);
-  const [stableWindField, setStableWindField] = useState<WindFieldPayload | null>(activeWindField);
-  pendingWindFieldRef.current = activeWindField;
+  }, [scopedActiveWindField, storm?.id]);
+  const pendingWindFieldRef = useRef<WindFieldPayload | null>(scopedActiveWindField);
+  const latestWindFieldRef = useRef<WindFieldPayload | null>(scopedActiveWindField);
+  const [stableWindField, setStableWindField] = useState<WindFieldPayload | null>(scopedActiveWindField);
+  pendingWindFieldRef.current = scopedActiveWindField;
   // Polling replaces payload objects every cycle. Only advance the renderer's
   // field when the actual vectors differ, so an unchanged snapshot cannot
   // reset every particle at once.
@@ -366,9 +371,10 @@ export function TyphoonMap({
     latestWindFieldRef.current = pendingWindFieldRef.current;
     setStableWindField(pendingWindFieldRef.current);
   }, [windFieldSignature]);
+  const stormWindField = windFieldMatchesStorm(stableWindField, storm) ? stableWindField : null;
   const gfsAlignedStorm = useMemo(
-    () => stormAtGfsAnalysisCenter(storm, stableWindField),
-    [storm, stableWindField]
+    () => stormAtGfsAnalysisCenter(storm, stormWindField),
+    [storm, stormWindField]
   );
   const {
     snapshot,
@@ -403,6 +409,18 @@ export function TyphoonMap({
   );
 
   const stormGeo = useMemo(() => buildStormGeo(storm), [storm]);
+  const stormFleetGeo = useMemo(() => buildStormFleetGeo(storms, storm?.id ?? null), [storm, storms]);
+  const markerStorms = useMemo(
+    () => storms.map((item) => {
+      const recordedCenterStorm = alignStormToWindCenter(item, snapshot?.environment.windCenters?.[item.id]);
+      if (item.id !== storm?.id) return recordedCenterStorm;
+      return stormWindField?.analysisCenter
+        ? gfsAlignedStorm ?? recordedCenterStorm
+        : recordedCenterStorm;
+    }),
+    [gfsAlignedStorm, snapshot?.environment.windCenters, storm, storms, stormWindField?.analysisCenter]
+  );
+  const activeMarkerStorm = markerStorms.find((item) => item.id === storm?.id) ?? null;
   const provinceAlerts = useMemo(() => buildProvinceAlerts(storm, watchRegions), [storm, watchRegions]);
   const toggleEnvironmentLayer = useCallback((layer: EnvironmentLayerKey) => {
     setEnvironmentLayers((current) => ({
@@ -442,7 +460,8 @@ export function TyphoonMap({
 
   useEffect(() => {
     stormRef.current = storm;
-  }, [storm]);
+    stormsRef.current = markerStorms;
+  }, [markerStorms, storm]);
 
   useEffect(() => {
     cycloneCoreRef.current = cycloneCoreAnalysis;
@@ -478,6 +497,7 @@ export function TyphoonMap({
   useEffect(() => {
     if (!mapNode.current || mapRef.current) return;
     let resizeObserver: ResizeObserver | null = null;
+    const fleetMarkers = fleetMarkerRefs.current;
 
     try {
       const map = new maplibregl.Map({
@@ -545,6 +565,8 @@ export function TyphoonMap({
         map.addSource("forecast", { type: "geojson", data: emptyFeatureCollection() });
         map.addSource("trackPoints", { type: "geojson", data: emptyFeatureCollection() });
         map.addSource("forecastPoints", { type: "geojson", data: emptyFeatureCollection() });
+        map.addSource("fleetRoutes", { type: "geojson", data: emptyFeatureCollection() });
+        map.addSource("fleetPoints", { type: "geojson", data: emptyFeatureCollection() });
         map.addSource("windR7", { type: "geojson", data: emptyFeatureCollection() });
         map.addSource("windR10", { type: "geojson", data: emptyFeatureCollection() });
         map.addSource("windR12", { type: "geojson", data: emptyFeatureCollection() });
@@ -578,6 +600,7 @@ export function TyphoonMap({
 
       const syncOverlaysNow = () => {
         syncStormMarkerScale(map, stormRef.current, markerRef);
+        syncStormFleetMarkerScale(map, stormsRef.current, stormRef.current?.id ?? null, fleetMarkers);
         syncMapOverlays(
           map,
           stormRef.current,
@@ -598,6 +621,7 @@ export function TyphoonMap({
       return () => {
         resizeObserver?.disconnect();
       disposeStormMarker(markerRef.current);
+      disposeStormFleetMarkers(fleetMarkers);
       markerRef.current = null;
       focusedStormIdRef.current = null;
       mapRef.current?.remove();
@@ -614,6 +638,7 @@ export function TyphoonMap({
     if (!map) return;
     map.resize();
     syncStormMarkerScale(map, stormRef.current, markerRef);
+    syncStormFleetMarkerScale(map, stormsRef.current, stormRef.current?.id ?? null, fleetMarkerRefs.current);
     syncMapOverlays(
       map,
       stormRef.current,
@@ -627,15 +652,19 @@ export function TyphoonMap({
     const map = mapRef.current;
     if (!map || !mapReady) return;
     updateStormSources(map, stormGeo);
-    renderStormOnMap(map, gfsAlignedStorm, markerRef, satelliteLayer, bossProfile);
+    renderStormOnMap(map, activeMarkerStorm, markerRef, satelliteLayer, bossProfile);
+    updateStormFleetSources(map, stormFleetGeo);
+    syncStormFleetMarkers(map, markerStorms, storm?.id ?? null, fleetMarkerRefs.current, bossProfiles, satelliteLayer);
     syncMapOverlays(map, storm, setPathScreenLabels, regionLabelsRef.current, setRegionScreenLabels);
     if (storm) {
       // The live deck changes every five seconds. It must not be treated as a
       // new target: fitBounds/easeTo during the layout swap causes canvas
       // overlays to be projected twice and leaves a visible afterimage.
-      if (focusedStormIdRef.current !== storm.id) {
-        focusMapOnStorm(map, storm, true, theme, view);
-        focusedStormIdRef.current = storm.id;
+      const focusKey = storms.length > 1 ? storms.map((item) => item.id).join("|") : storm.id;
+      if (focusedStormIdRef.current !== focusKey) {
+        if (storms.length > 1) focusMapOnStormFleet(map, storms, true);
+        else focusMapOnStorm(map, storm, true, theme, view);
+        focusedStormIdRef.current = focusKey;
       }
       if (theme === "archive-command") {
         const syncProjectedOverlays = () =>
@@ -656,11 +685,11 @@ export function TyphoonMap({
       setPathScreenLabels([]);
       setRegionScreenLabels(projectRegionLabels(map, regionLabelsRef.current));
     }
-  }, [storm, stormGeo, mapReady, theme, satelliteLayer, bossProfile, view, gfsAlignedStorm]);
+  }, [storm, storms, markerStorms, activeMarkerStorm, stormGeo, stormFleetGeo, mapReady, theme, satelliteLayer, bossProfile, bossProfiles, view]);
 
   useEffect(() => {
     const map = mapRef.current;
-    const shouldShowLatestCenter = Boolean(storm && stableWindField?.source === "NOAA/NCEP NOMADS Grib Filter" && stableWindField.analysisCenter);
+    const shouldShowLatestCenter = Boolean(storm && stormWindField?.source === "NOAA/NCEP NOMADS Grib Filter" && stormWindField.analysisCenter);
     if (!map || !mapReady || !storm) {
       setLatestPathCenterScreenPoint(null);
       setHistoricalTrackScreenPath(null);
@@ -689,7 +718,7 @@ export function TyphoonMap({
       map.off("move", syncThrottled);
       map.off("resize", syncThrottled);
     };
-  }, [mapReady, storm, stableWindField]);
+  }, [mapReady, storm, stormWindField]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -715,8 +744,8 @@ export function TyphoonMap({
     const map = mapRef.current;
     const canvas = windColorCanvasRef.current;
     if (!map || !canvas || !mapReady) return;
-    return startWindColorFieldRenderer(map, canvas, stableWindField, environmentLayers.wind);
-  }, [environmentLayers.wind, mapReady, stableWindField, theme]);
+    return startWindColorFieldRenderer(map, canvas, stormWindField, environmentLayers.wind);
+  }, [environmentLayers.wind, mapReady, stormWindField, theme]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -781,7 +810,7 @@ export function TyphoonMap({
         {!mapFailed ? <canvas className="wind-color-canvas" ref={windColorCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed ? <canvas className="wind-particle-canvas" ref={windCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed ? <canvas className="forecast-route-canvas" ref={forecastCanvasRef} aria-hidden="true" /> : null}
-        {!mapFailed ? <WindFieldTimeBadge windField={stableWindField} currentStorm={storm} /> : null}
+        {!mapFailed ? <WindFieldTimeBadge windField={stormWindField} currentStorm={storm} /> : null}
         {!mapFailed ? <HistoricalTrackOverlay path={historicalTrackScreenPath} /> : null}
         {!mapFailed ? <LatestPathCenterMarker point={latestPathCenterScreenPoint} storm={storm} /> : null}
         {isLiveView && liveDeck === "briefing" ? <LiveRouteLegend storm={storm} /> : null}
@@ -819,6 +848,9 @@ export function TyphoonMap({
         ) : (
           <TopCommandBar
             storm={storm}
+            storms={storms}
+            activeIndex={activeIndex}
+            onSelect={selectStorm}
             bossProfile={bossProfile}
             count={storms.length}
             lastUpdated={lastUpdated}
@@ -829,9 +861,6 @@ export function TyphoonMap({
           />
         )}
 
-        {!isLiveView && theme === "night-radar" && storms.length > 1 ? (
-          <MultiStormTargetQueue storms={storms} activeIndex={activeIndex} onSelect={selectStorm} />
-        ) : null}
         {!isLiveView && theme === "night-radar" ? <OfficialAlertStrip payload={officialAlerts} /> : null}
 
         {!isLiveView && theme === "night-radar" ? (
@@ -927,46 +956,6 @@ export function TyphoonMap({
       )}
       {isLiveView ? <LiveBottomBar model={liveModel} deck={liveDeck} secondsToSwitch={secondsToSwitch} /> : null}
     </main>
-  );
-}
-
-function MultiStormTargetQueue({
-  storms,
-  activeIndex,
-  onSelect
-}: {
-  storms: Storm[];
-  activeIndex: number;
-  onSelect: (index: number) => void;
-}) {
-  return (
-    <nav className="multi-storm-target-queue" aria-label="活动台风目标切换">
-      <div className="multi-storm-queue-label">
-        <Crosshair aria-hidden="true" />
-        <span>活动目标</span>
-        <strong>{storms.length}</strong>
-      </div>
-      <div className="multi-storm-queue-track">
-        {storms.map((item, index) => {
-          const active = index === activeIndex;
-          return (
-            <button
-              aria-current={active ? "true" : undefined}
-              className={active ? "active" : ""}
-              key={item.id}
-              onClick={() => onSelect(index)}
-              type="button"
-            >
-              <i aria-hidden="true" />
-              <span><b>{item.code}</b><small>{active ? "已锁定" : "待选择"}</small></span>
-              <strong>{item.nameZh}</strong>
-              <em>{item.stage}</em>
-              <span className="multi-storm-vitals"><b>{item.maxWind || "--"} m/s</b><small>{formatClock(item.updatedAt)}</small></span>
-            </button>
-          );
-        })}
-      </div>
-    </nav>
   );
 }
 
@@ -1440,6 +1429,9 @@ function PathTimeOverlay({ labels }: { labels: Array<{ id: string; x: number; y:
 
 function TopCommandBar({
   storm,
+  storms,
+  activeIndex,
+  onSelect,
   bossProfile,
   count,
   lastUpdated,
@@ -1449,6 +1441,9 @@ function TopCommandBar({
   onThemeChange
 }: {
   storm: Storm | null;
+  storms: Storm[];
+  activeIndex: number;
+  onSelect: (index: number) => void;
   bossProfile?: BossProfile | null;
   count: number;
   lastUpdated: string;
@@ -1496,13 +1491,13 @@ function TopCommandBar({
   return (
     <header className="top-command">
       <div className="brand-block">
-        <span>{"\u53f0\u98ce BOSS \u96f7\u8fbe"}</span>
+        <span>{"\u53f0\u98ce BOSS \u96f7\u8fbe"}<i aria-label={storm && !dataError ? "执行中" : "未执行"} className={`brand-run-indicator ${storm && !dataError ? "is-running" : ""}`} title={storm && !dataError ? "执行中" : "未执行"} /></span>
         <strong>实时气象战术态势</strong>
       </div>
       <div className="live-radar-band">
         <b>实时雷达</b>
         <div className="command-strip">
-          <StatusPill label="任务状态" value={dataError ? "链路异常" : storm ? "执行中" : "待机巡航"} alert={Boolean(dataError || storm)} />
+          <CurrentStormControl storms={storms} activeIndex={activeIndex} onSelect={onSelect} />
           <StatusPill label="BOSS 阶段" value={bossProfile?.phaseLabel ?? storm?.rating ?? "低威胁"} alert={Boolean(storm)} />
           <StatusPill label="系统时间" value={lastUpdated} />
         </div>
@@ -2002,6 +1997,42 @@ async function fetchProvinceGeoJson(): Promise<GeoJSON.FeatureCollection> {
 
 function addStormLayers(map: MapLibreMap) {
   map.addLayer({
+    id: "fleet-track-lines",
+    type: "line",
+    source: "fleetRoutes",
+    filter: ["all", ["==", ["get", "active"], false], ["==", ["get", "routeKind"], "track"]],
+    paint: {
+      "line-color": "#31d6f4",
+      "line-width": 2.2,
+      "line-opacity": 0.82
+    }
+  });
+  map.addLayer({
+    id: "fleet-forecast-lines",
+    type: "line",
+    source: "fleetRoutes",
+    filter: ["all", ["==", ["get", "active"], false], ["==", ["get", "routeKind"], "forecast"]],
+    paint: {
+      "line-color": ["coalesce", ["get", "color"], "#e8f5fb"],
+      "line-width": ["case", ["boolean", ["get", "isPrimary"], false], 2.8, 1.8],
+      "line-dasharray": [2, 1.6],
+      "line-opacity": ["case", ["boolean", ["get", "isPrimary"], false], 0.88, 0.7]
+    }
+  });
+  map.addLayer({
+    id: "fleet-track-points",
+    type: "circle",
+    source: "fleetPoints",
+    filter: ["==", ["get", "active"], false],
+    paint: {
+      "circle-radius": 3.2,
+      "circle-color": "#071015",
+      "circle-stroke-color": "#31d6f4",
+      "circle-stroke-width": 1.5,
+      "circle-opacity": 0.9
+    }
+  });
+  map.addLayer({
     id: "track-line",
     type: "line",
     source: "track",
@@ -2060,6 +2091,43 @@ function addStormLayers(map: MapLibreMap) {
       "circle-opacity": ["case", ["boolean", ["get", "isPrimary"], false], 0.98, 0.82]
     }
   });
+}
+
+function focusMapOnStormFleet(map: MapLibreMap, storms: Storm[], animated: boolean) {
+  const bounds = stormFleetBounds(storms);
+  if (!bounds) {
+    focusMapOnStorm(map, null, animated);
+    return;
+  }
+  const width = map.getCanvas().clientWidth;
+  const height = map.getCanvas().clientHeight;
+  map.fitBounds(bounds, {
+    padding: {
+      top: height <= 760 ? 126 : 142,
+      bottom: height <= 760 ? 128 : 146,
+      left: width <= 760 ? 28 : width <= 1180 ? 278 : 320,
+      right: width <= 760 ? 28 : width <= 1180 ? 238 : 270
+    },
+    maxZoom: 4.7,
+    duration: animated ? 900 : 0
+  });
+}
+
+function CurrentStormControl({ storms, activeIndex, onSelect }: { storms: Storm[]; activeIndex: number; onSelect: (index: number) => void }) {
+  const storm = storms[activeIndex] ?? null;
+  const canSwitch = storms.length > 1;
+  const move = (delta: number) => canSwitch && onSelect((activeIndex + delta + storms.length) % storms.length);
+  return (
+    <section className="current-storm-control" aria-label="当前台风">
+      <span>当前台风 · {storms.length} 个同屏目标{storm ? ` · 已锁定 ${formatClock(storm.updatedAt)}` : ""}</span>
+      <div aria-live="polite">
+        <button type="button" aria-label="锁定上一个台风" onClick={() => move(-1)} disabled={!canSwitch}><ChevronLeft size={15} /></button>
+        <strong>{storm ? `${storm.code} ${storm.nameZh}` : "待机"}</strong>
+        <em>{storm?.stage ?? "--"} · {storm?.maxWind ?? "--"} m/s</em>
+        <button type="button" aria-label="锁定下一个台风" onClick={() => move(1)} disabled={!canSwitch}><ChevronRight size={15} /></button>
+      </div>
+    </section>
+  );
 }
 
 function updateStormSources(map: MapLibreMap, stormGeo: ReturnType<typeof buildStormGeo>) {
@@ -2294,6 +2362,16 @@ function terrainBandColor(elevation: number): [number, number, number, number] {
   if (elevation < 1400) return [213, 116, 50, 164];
   if (elevation < 2600) return [181, 67, 55, 178];
   return [238, 220, 184, 192];
+}
+
+function updateStormFleetSources(map: MapLibreMap, fleetGeo: ReturnType<typeof buildStormFleetGeo>) {
+  (map.getSource("fleetRoutes") as GeoJSONSource | undefined)?.setData(fleetGeo.routes);
+  (map.getSource("fleetPoints") as GeoJSONSource | undefined)?.setData(fleetGeo.points);
+  const forecastFeatures = fleetGeo.routes.features.filter((feature) => feature.properties?.routeKind === "forecast");
+  map.getCanvas().dataset.fleetForecastRoutes = String(forecastFeatures.length);
+  map.getCanvas().dataset.fleetForecastAgencies = [...new Set(forecastFeatures
+    .map((feature) => String(feature.properties?.agencyCode ?? ""))
+    .filter(Boolean))].join(",");
 }
 
 function startGfsScalarLayerRenderer(
@@ -2652,14 +2730,6 @@ function threatFieldColor(value: number, intensity: number): [number, number, nu
   const last = THREAT_FIELD_STOPS[THREAT_FIELD_STOPS.length - 1];
   return [last[1], last[2], last[3], Math.round(last[4] * (0.72 + intensity * 0.28))];
 }
-
-const FORECAST_ROUTE_COLORS: Record<string, string> = {
-  CMA: "#fff0a8",
-  JMA: "#61efff",
-  JTWC: "#9cff72",
-  CWA: "#ff70c7",
-  HKO: "#ff985d"
-};
 
 function forecastScenariosForStorm(storm: Storm): ForecastScenario[] {
   if (storm.forecastScenarios.length > 0) return storm.forecastScenarios.slice(0, 5);
@@ -3701,25 +3771,34 @@ function renderStormOnMap(
     ref.current = null;
     return;
   }
+  ref.current = upsertStormMarker(map, storm, ref.current, satelliteLayer, bossProfile);
+}
+
+function upsertStormMarker(
+  map: MapLibreMap,
+  storm: Storm,
+  marker: maplibregl.Marker | null,
+  satelliteLayer?: SatelliteLayerPayload | null,
+  bossProfile?: BossProfile | null
+) {
   const nextKey = stormMarkerRenderKey(storm, satelliteLayer, bossProfile);
-  const currentElement = ref.current?.getElement();
-  if (ref.current && currentElement?.dataset.renderKey === nextKey) {
-    ref.current.setLngLat([storm.position.lon, storm.position.lat]);
+  const currentElement = marker?.getElement();
+  if (marker && currentElement?.dataset.renderKey === nextKey) {
+    marker.setLngLat([storm.position.lon, storm.position.lat]);
     applyStormMarkerDimensions(map, storm, currentElement);
-    return;
+    return marker;
   }
 
-  disposeStormMarker(ref.current);
-  ref.current = null;
-
+  disposeStormMarker(marker);
   const element = createStormMarkerElement(map, storm, satelliteLayer, bossProfile);
   element.dataset.renderKey = nextKey;
-  ref.current = new maplibregl.Marker({ element, anchor: "center" })
+  return new maplibregl.Marker({ element, anchor: "center" })
     .setLngLat([storm.position.lon, storm.position.lat])
     .addTo(map);
 }
 
 function stormAtGfsAnalysisCenter(storm: Storm | null, windField: WindFieldPayload | null) {
+  if (!windFieldMatchesStorm(windField, storm)) return storm;
   const center = windField?.source === "NOAA/NCEP NOMADS Grib Filter" ? windField.analysisCenter : undefined;
   if (!storm || !center || !windField?.updatedAt) return storm;
   // The model vortex is the only location the GFS streamlines can truthfully
@@ -3731,6 +3810,8 @@ function stormAtGfsAnalysisCenter(storm: Storm | null, windField: WindFieldPaylo
 function stormMarkerRenderKey(storm: Storm, satelliteLayer?: SatelliteLayerPayload | null, bossProfile?: BossProfile | null) {
   return [
     storm.id,
+    storm.position.lon,
+    storm.position.lat,
     storm.updatedAt,
     storm.maxWind,
     storm.minPressure,
@@ -3754,6 +3835,9 @@ function createStormMarkerElement(
 
   const root = document.createElement("div");
   root.className = `storm-map-marker structure-${bossProfile?.structure.state ?? "unknown"}`;
+  root.dataset.stormId = storm.id;
+  root.dataset.centerLon = String(storm.position.lon);
+  root.dataset.centerLat = String(storm.position.lat);
   root.dataset.rotationDirection = kinematics.direction;
   root.dataset.windForceLevel = String(forceLevel);
   root.style.setProperty("--storm-core-intensity", String(intensity));
@@ -3792,15 +3876,7 @@ function createStormMarkerElement(
   lockRing.className = "storm-analysis-lock-ring";
   core.appendChild(lockRing);
 
-  const label = document.createElement("div");
-  label.className = "storm-target-label";
-  const name = document.createElement("span");
-  name.textContent = storm.nameZh;
-  const stage = document.createElement("strong");
-  stage.textContent = storm.stage;
-  label.append(name, stage);
-
-  root.append(core, label);
+  root.append(core);
   return root;
 }
 
@@ -3813,6 +3889,34 @@ function disposeStormMarker(marker: maplibregl.Marker | null) {
   marker.remove();
 }
 
+function syncStormFleetMarkers(
+  map: MapLibreMap,
+  storms: Storm[],
+  activeStormId: string | null,
+  markers: Map<string, maplibregl.Marker>,
+  bossProfiles: BossProfile[],
+  satelliteLayer?: SatelliteLayerPayload | null
+) {
+  const visibleIds = new Set(storms.filter((storm) => storm.id !== activeStormId).map((storm) => storm.id));
+  markers.forEach((marker, stormId) => {
+    if (visibleIds.has(stormId)) return;
+    disposeStormMarker(marker);
+    markers.delete(stormId);
+  });
+
+  storms.forEach((storm) => {
+    if (storm.id === activeStormId) return;
+    const bossProfile = bossProfiles.find((profile) => profile.stormId === storm.id) ?? null;
+    const marker = upsertStormMarker(map, storm, markers.get(storm.id) ?? null, satelliteLayer, bossProfile);
+    markers.set(storm.id, marker);
+  });
+}
+
+function disposeStormFleetMarkers(markers: Map<string, maplibregl.Marker>) {
+  markers.forEach((marker) => marker.remove());
+  markers.clear();
+}
+
 function syncStormMarkerScale(
   map: MapLibreMap,
   storm: Storm | null,
@@ -3821,6 +3925,19 @@ function syncStormMarkerScale(
   const element = markerRef.current?.getElement();
   if (!storm || !element) return;
   applyStormMarkerDimensions(map, storm, element);
+}
+
+function syncStormFleetMarkerScale(
+  map: MapLibreMap,
+  storms: Storm[],
+  activeStormId: string | null,
+  markers: Map<string, maplibregl.Marker>
+) {
+  storms.forEach((storm) => {
+    if (storm.id === activeStormId) return;
+    const element = markers.get(storm.id)?.getElement();
+    if (element) applyStormMarkerDimensions(map, storm, element);
+  });
 }
 
 function applyStormMarkerDimensions(map: MapLibreMap, storm: Storm, root: HTMLElement) {

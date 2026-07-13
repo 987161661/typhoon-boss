@@ -494,10 +494,11 @@ export async function getImpactArea(stormId?: string | null): Promise<ImpactArea
 
 export async function getWindField(stormId?: string | null, requestedBounds?: WindFieldBounds | null): Promise<WindFieldPayload> {
   const bounds = requestedBounds ? normalizeWindFieldBounds(requestedBounds) : null;
-  const cacheKey = bounds ? `viewport:${windBoundsCacheKey(bounds)}` : stormId ?? "default";
+  const requestedStormId = stormId ?? null;
+  const cacheKey = bounds ? `viewport:${requestedStormId ?? "default"}:${windBoundsCacheKey(bounds)}` : requestedStormId ?? "default";
   const cached = windFieldCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
-    return cached.payload;
+    return withWindFieldStormId(cached.payload, requestedStormId);
   }
   const inFlight = windFieldInFlight.get(cacheKey);
   if (inFlight) {
@@ -511,7 +512,7 @@ export async function getWindField(stormId?: string | null, requestedBounds?: Wi
       windFieldLastSuccess.set(cacheKey, persisted);
     }
 
-    const payload = await loadWindField(stormId, bounds);
+    const payload = withWindFieldStormId(await loadWindField(stormId, bounds), requestedStormId);
     if (payload.status === "available" && payload.points.length > 0) {
       const freshPayload = {
         ...payload,
@@ -624,6 +625,10 @@ async function loadWindField(stormId?: string | null, viewportBounds?: WindField
     }
     return unavailableWindField(viewportBounds ?? null, sampleBounds, openMeteoReason);
   }
+}
+
+function withWindFieldStormId(payload: WindFieldPayload, stormId: string | null): WindFieldPayload {
+  return payload.stormId === stormId ? payload : { ...payload, stormId };
 }
 
 const GFS_SCALAR_LAYERS: Record<GfsScalarLayerId, {
