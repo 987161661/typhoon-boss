@@ -9,16 +9,14 @@ import {
   useState,
   type CSSProperties,
   type ComponentType,
-  type Dispatch,
-  type MutableRefObject,
-  type SetStateAction
+  type MutableRefObject
 } from "react";
 import maplibregl, { type GeoJSONSource, type ImageSource, type Map as MapLibreMap } from "maplibre-gl";
 import { AlertTriangle, ChevronLeft, ChevronRight, Database, Palette, RadioTower, Satellite, Settings2, Shield, Wind } from "lucide-react";
 import Link from "next/link";
 import { makeCircle } from "@/lib/provinceGeo";
 import { createStormVisualCanvas } from "@/lib/stormVisualRenderer";
-import { alignStormToWindCenter, buildStormFleetGeo, FORECAST_ROUTE_COLORS, stormFleetBounds, windFieldMatchesStorm } from "@/lib/stormFleet";
+import { alignStormToWindCenter, buildStormFleetGeo, FORECAST_ROUTE_COLORS, stormFleetBounds, stormTrackColor, windFieldMatchesStorm } from "@/lib/stormFleet";
 import { cycloneTangentialSign, cycloneVisualKinematics } from "@/lib/stormKinematics";
 import type { BossProfile } from "@/lib/bossEngine/types";
 import { useRadarSnapshot } from "./useRadarSnapshot";
@@ -60,7 +58,10 @@ const MAP_STYLE = {
   sources: {
     basemap: {
       type: "raster",
-      tiles: ["https://basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"],
+      // Standard OSM raster uses each place's local `name` tag. In China this
+      // keeps city and district labels Chinese without introducing GCJ-02
+      // offsets from a commercial China-only basemap.
+      tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"],
       tileSize: 256,
       attribution: "OpenStreetMap, CARTO"
     },
@@ -69,6 +70,14 @@ const MAP_STYLE = {
       tiles: ["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"],
       tileSize: 256,
       encoding: "terrarium",
+      attribution: "AWS Terrain Tiles"
+    },
+    terrainColor: {
+      type: "raster",
+      tiles: ["/api/terrain-color/{z}/{x}/{y}"],
+      tileSize: 256,
+      minzoom: 3,
+      maxzoom: 6,
       attribution: "AWS Terrain Tiles"
     },
     landMask: {
@@ -91,7 +100,22 @@ const MAP_STYLE = {
         "raster-saturation": 0.18,
         "raster-brightness-min": 0.06,
         "raster-brightness-max": 0.96,
-        "raster-contrast": 0.1
+        "raster-contrast": 0.1,
+        // Avoid compositing two full tile sets during wheel zoom. Camera
+        // response matters more here than a decorative tile cross-fade.
+        "raster-fade-duration": 0
+      }
+    },
+    {
+      id: "terrain-color",
+      type: "raster",
+      source: "terrainColor",
+      paint: {
+        "raster-opacity": 0.9,
+        "raster-saturation": 0.22,
+        "raster-contrast": 0.08,
+        "raster-fade-duration": 0,
+        "raster-resampling": "linear"
       }
     },
     {
@@ -127,12 +151,6 @@ const MAP_STYLE = {
   ]
 } as maplibregl.StyleSpecification;
 
-const TERRAIN_TILE_SIZE = 256;
-const TERRAIN_TILE_ZOOM_MIN = 3;
-const TERRAIN_TILE_ZOOM_MAX = 6;
-const TERRAIN_TILE_URL = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
-const TERRAIN_RENDER_DEBOUNCE_MS = 140;
-const MAX_TERRAIN_TILES_PER_RENDER = 40;
 const CANVAS_DPR_CAP = 1.5;
 const REGIONAL_SATELLITE_SOURCE_ID = "regional-satellite-source";
 const REGIONAL_SATELLITE_LAYER_ID = "regional-satellite-layer";
@@ -140,7 +158,6 @@ const GLOBAL_SATELLITE_SOURCE_ID = "global-satellite-source";
 const GLOBAL_SATELLITE_LAYER_ID = "global-satellite-layer";
 const CWA_RADAR_SOURCE_ID = "cwa-radar-source";
 const CWA_RADAR_LAYER_ID = "cwa-radar-layer";
-const terrainTileCache = new Map<string, Promise<HTMLCanvasElement | null>>();
 const regionalSatelliteImageUrls = new WeakMap<MapLibreMap, string>();
 const globalSatelliteImageUrls = new WeakMap<MapLibreMap, string>();
 const cwaRadarImageUrls = new WeakMap<MapLibreMap, string>();
@@ -148,20 +165,11 @@ let windFlowRendererSequence = 0;
 
 const DEFENSE_REGION_SHORT_NAMES = ["浙江", "福建", "广东", "上海", "江苏"] as const;
 
-const REGION_EN_NAMES: Record<string, string> = {
-  江苏: "JIANGSU",
-  上海: "SHANGHAI",
-  浙江: "ZHEJIANG",
-  福建: "FUJIAN",
-  广东: "GUANGDONG",
-  台湾: "TAIWAN",
-  山东: "SHANDONG",
-  安徽: "ANHUI",
-  江西: "JIANGXI",
-  海南: "HAINAN"
-};
-
 const DEFAULT_REGION_LABELS: MapRegionLabel[] = [];
+const CHINA_LABEL_FOCUS_POLYGON: ReadonlyArray<readonly [number, number]> = [
+  [72, 40], [79, 29], [88, 27], [97, 21], [108, 17], [122, 18],
+  [126, 28], [135, 48], [126, 54], [96, 50], [82, 47]
+];
 
 type RadarTheme = "night-radar" | "archive-command";
 export type RadarView = "standard" | "live";
@@ -174,39 +182,12 @@ type EnvironmentLayerToggles = Record<EnvironmentLayerKey, boolean>;
 interface MapRegionLabel {
   id: string;
   zh: string;
-  en: string;
   coordinate: [number, number];
-}
-
-interface ScreenRegionLabel {
-  id: string;
-  zh: string;
-  en: string;
-  x: number;
-  y: number;
 }
 
 interface ProvinceAlertPoint {
   name: string;
   center: [number, number];
-}
-
-interface PathScreenLabel {
-  id: string;
-  x: number;
-  y: number;
-  label: string;
-}
-
-interface ScreenPoint {
-  x: number;
-  y: number;
-}
-
-interface ScreenPath {
-  points: ScreenPoint[];
-  width: number;
-  height: number;
 }
 
 interface DefenseResponse {
@@ -245,10 +226,7 @@ export function TyphoonMap({
   const [dataError, setDataError] = useState<string | null>(null);
   const [mapFailed, setMapFailed] = useState(false);
   const [mapReady, setMapReady] = useState(false);
-  const [pathScreenLabels, setPathScreenLabels] = useState<PathScreenLabel[]>([]);
-  const [regionScreenLabels, setRegionScreenLabels] = useState<ScreenRegionLabel[]>([]);
-  const [latestPathCenterScreenPoint, setLatestPathCenterScreenPoint] = useState<ScreenPoint | null>(null);
-  const [historicalTrackScreenPath, setHistoricalTrackScreenPath] = useState<ScreenPath | null>(null);
+  const [mapRegionLabels, setMapRegionLabels] = useState<MapRegionLabel[]>(DEFAULT_REGION_LABELS);
   const [environmentLayers, setEnvironmentLayers] = useState<EnvironmentLayerToggles>(DEFAULT_ENVIRONMENT_LAYERS);
   // The operational default is a station-style, decoded view. Flow animation
   // remains available, but is intentionally an opt-in model visualisation.
@@ -281,7 +259,6 @@ export function TyphoonMap({
       .catch(() => undefined);
   }, [view]);
   const mapNode = useRef<HTMLDivElement | null>(null);
-  const terrainCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const windColorCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const gfsScalarCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const gfsWaveCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -346,7 +323,6 @@ export function TyphoonMap({
     enabled: !isLiveView
   });
   const matchedEcmwfTracks = useMemo(() => matchEcmwfTracks(storm, ecmwfTrackLayer), [ecmwfTrackLayer, storm]);
-  const regionLabelsRef = useRef<MapRegionLabel[]>(DEFAULT_REGION_LABELS);
   const activeWindField = viewportWindField ?? windField;
   const scopedActiveWindField = windFieldMatchesStorm(activeWindField, storm) ? activeWindField : null;
   const windFieldSignature = useMemo(() => {
@@ -520,27 +496,11 @@ export function TyphoonMap({
       map.on("load", async () => {
         const initialStorm = stormRef.current;
         renderStormOnMap(map, initialStorm, markerRef);
-        syncMapOverlays(
-          map,
-          stormRef.current,
-          setPathScreenLabels,
-          regionLabelsRef.current,
-          setRegionScreenLabels
-        );
         const provinces = await fetchProvinceGeoJson();
         const geoLabels = buildMapRegionLabels(provinces);
         const geoWatchRegions = buildWatchRegions(provinces);
         setWatchRegions(geoWatchRegions);
-        if (geoLabels.length > 0) {
-          regionLabelsRef.current = geoLabels;
-          syncMapOverlays(
-            map,
-            stormRef.current,
-            setPathScreenLabels,
-            regionLabelsRef.current,
-            setRegionScreenLabels
-          );
-        }
+        if (geoLabels.length > 0) setMapRegionLabels(geoLabels);
         map.addSource("provinces", { type: "geojson", data: provinces });
         map.addLayer({
           id: "province-fill",
@@ -588,30 +548,18 @@ export function TyphoonMap({
         renderStormOnMap(map, stormRef.current, markerRef);
         focusMapOnStorm(map, currentStorm, false);
         focusedStormIdRef.current = currentStorm?.id ?? null;
-        syncMapOverlays(
-          map,
-          stormRef.current,
-          setPathScreenLabels,
-          regionLabelsRef.current,
-          setRegionScreenLabels
-        );
         setMapReady(true);
       });
 
       const syncOverlaysNow = () => {
         syncStormMarkerScale(map, stormRef.current, markerRef);
         syncStormFleetMarkerScale(map, stormsRef.current, stormRef.current?.id ?? null, fleetMarkers);
-        syncMapOverlays(
-          map,
-          stormRef.current,
-          setPathScreenLabels,
-          regionLabelsRef.current,
-          setRegionScreenLabels
-        );
       };
       const syncOverlays = rafThrottle(syncOverlaysNow);
-      map.on("move", syncOverlays);
-      map.on("zoom", syncOverlays);
+      // Marker size only depends on zoom. Keep the current visual during the
+      // gesture and resize once at the end instead of forcing filtered DOM
+      // markers through width/height transitions on every zoom frame.
+      map.on("zoomend", syncOverlays);
       map.on("resize", syncOverlays);
       map.on("error", () => undefined);
     } catch {
@@ -639,13 +587,6 @@ export function TyphoonMap({
     map.resize();
     syncStormMarkerScale(map, stormRef.current, markerRef);
     syncStormFleetMarkerScale(map, stormsRef.current, stormRef.current?.id ?? null, fleetMarkerRefs.current);
-    syncMapOverlays(
-      map,
-      stormRef.current,
-      setPathScreenLabels,
-      regionLabelsRef.current,
-      setRegionScreenLabels
-    );
   }, [isLiveView, mapReady]);
 
   useEffect(() => {
@@ -655,7 +596,6 @@ export function TyphoonMap({
     renderStormOnMap(map, activeMarkerStorm, markerRef, satelliteLayer, bossProfile);
     updateStormFleetSources(map, stormFleetGeo);
     syncStormFleetMarkers(map, markerStorms, storm?.id ?? null, fleetMarkerRefs.current, bossProfiles, satelliteLayer);
-    syncMapOverlays(map, storm, setPathScreenLabels, regionLabelsRef.current, setRegionScreenLabels);
     if (storm) {
       // The live deck changes every five seconds. It must not be treated as a
       // new target: fitBounds/easeTo during the layout swap causes canvas
@@ -666,59 +606,11 @@ export function TyphoonMap({
         else focusMapOnStorm(map, storm, true, theme, view);
         focusedStormIdRef.current = focusKey;
       }
-      if (theme === "archive-command") {
-        const syncProjectedOverlays = () =>
-          syncMapOverlays(
-            map,
-            storm,
-            setPathScreenLabels,
-            regionLabelsRef.current,
-            setRegionScreenLabels
-          );
-        syncProjectedOverlays();
-        window.requestAnimationFrame(syncProjectedOverlays);
-        window.setTimeout(syncProjectedOverlays, 120);
-      }
     } else if (focusedStormIdRef.current !== null) {
       map.easeTo({ center: [122.5, 27.4], zoom: 4.7, duration: 900 });
       focusedStormIdRef.current = null;
-      setPathScreenLabels([]);
-      setRegionScreenLabels(projectRegionLabels(map, regionLabelsRef.current));
     }
   }, [storm, storms, markerStorms, activeMarkerStorm, stormGeo, stormFleetGeo, mapReady, theme, satelliteLayer, bossProfile, bossProfiles, view]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    const shouldShowLatestCenter = Boolean(storm && stormWindField?.source === "NOAA/NCEP NOMADS Grib Filter" && stormWindField.analysisCenter);
-    if (!map || !mapReady || !storm) {
-      setLatestPathCenterScreenPoint(null);
-      setHistoricalTrackScreenPath(null);
-      return;
-    }
-    const sync = () => {
-      const point = map.project([storm.position.lon, storm.position.lat]);
-      const canvas = map.getCanvas();
-      const width = canvas.clientWidth;
-      const height = canvas.clientHeight;
-      const trackCoordinates = storm.track.map((item) => map.project([item.lon, item.lat]));
-      const lastTrackPoint = trackCoordinates[trackCoordinates.length - 1];
-      if (!lastTrackPoint || Math.hypot(lastTrackPoint.x - point.x, lastTrackPoint.y - point.y) > 0.5) trackCoordinates.push(point);
-      setHistoricalTrackScreenPath({
-        points: trackCoordinates.map((item) => ({ x: item.x, y: item.y })),
-        width,
-        height
-      });
-      setLatestPathCenterScreenPoint(shouldShowLatestCenter ? { x: point.x, y: point.y } : null);
-    };
-    const syncThrottled = rafThrottle(sync);
-    sync();
-    map.on("move", syncThrottled);
-    map.on("resize", syncThrottled);
-    return () => {
-      map.off("move", syncThrottled);
-      map.off("resize", syncThrottled);
-    };
-  }, [mapReady, storm, stormWindField]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -732,13 +624,6 @@ export function TyphoonMap({
     if (!map || !mapReady) return;
     syncCwaRadarLayer(map, cwaRadarLayer, cwaRadarVisible);
   }, [cwaRadarLayer, cwaRadarVisible, mapReady]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    const canvas = terrainCanvasRef.current;
-    if (!map || !canvas || !mapReady) return;
-    return startTerrainElevationRenderer(map, canvas);
-  }, [mapReady, theme]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -802,23 +687,30 @@ export function TyphoonMap({
       {!isLiveView ? <div className="boot-scan" /> : null}
       <section className="map-stage" aria-label="台风 Boss 雷达地图">
         {mapFailed ? <FallbackMap storm={storm} /> : <div className="map-canvas" ref={mapNode} />}
-        {!mapFailed ? <canvas className="terrain-elevation-canvas" ref={terrainCanvasRef} aria-hidden="true" /> : null}
-        {!mapFailed ? <canvas className="gfs-scalar-canvas" ref={gfsScalarCanvasRef} aria-hidden="true" /> : null}
-        {!mapFailed ? <canvas className="gfs-wave-canvas" ref={gfsWaveCanvasRef} aria-hidden="true" /> : null}
-        {!mapFailed ? <canvas className="ecmwf-track-canvas" ref={ecmwfTrackCanvasRef} aria-hidden="true" /> : null}
-        {!mapFailed ? <canvas className="regional-observation-canvas" ref={observationCanvasRef} aria-hidden="true" /> : null}
-        {!mapFailed ? <canvas className="wind-color-canvas" ref={windColorCanvasRef} aria-hidden="true" /> : null}
-        {!mapFailed ? <canvas className="wind-particle-canvas" ref={windCanvasRef} aria-hidden="true" /> : null}
-        {!mapFailed ? <canvas className="forecast-route-canvas" ref={forecastCanvasRef} aria-hidden="true" /> : null}
+        {!mapFailed && gfsScalarLayer ? <canvas className="gfs-scalar-canvas" ref={gfsScalarCanvasRef} aria-hidden="true" /> : null}
+        {!mapFailed && gfsWaveVisible ? <canvas className="gfs-wave-canvas" ref={gfsWaveCanvasRef} aria-hidden="true" /> : null}
+        {!mapFailed && ecmwfTracksVisible ? <canvas className="ecmwf-track-canvas" ref={ecmwfTrackCanvasRef} aria-hidden="true" /> : null}
+        {!mapFailed && observationsVisible ? <canvas className="regional-observation-canvas" ref={observationCanvasRef} aria-hidden="true" /> : null}
+        {!mapFailed && environmentLayers.wind ? <canvas className="wind-color-canvas" ref={windColorCanvasRef} aria-hidden="true" /> : null}
+        {!mapFailed && environmentLayers.wind ? <canvas className="wind-particle-canvas" ref={windCanvasRef} aria-hidden="true" /> : null}
+        {!mapFailed && storm ? <canvas className="forecast-route-canvas" ref={forecastCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed ? <WindFieldTimeBadge windField={stormWindField} currentStorm={storm} /> : null}
-        {!mapFailed ? <HistoricalTrackOverlay path={historicalTrackScreenPath} /> : null}
-        {!mapFailed ? <LatestPathCenterMarker point={latestPathCenterScreenPoint} storm={storm} /> : null}
+        {!mapFailed ? (
+          <ProjectedMapOverlays
+            map={mapReady ? mapRef.current : null}
+            storm={storm}
+            storms={storms}
+            regionLabels={mapRegionLabels}
+            showPathTimes={!isLiveView}
+          />
+        ) : null}
         {isLiveView && liveDeck === "briefing" ? <LiveRouteLegend storm={storm} /> : null}
         <PerformanceOverlay
           enabled={showPerfOverlay}
           fetchDurationMs={snapshotFetchDurationMs}
           windPointCount={activeWindField?.points.length ?? 0}
           warningCount={snapshot?.warnings.length ?? 0}
+          windCanvasRef={windCanvasRef}
         />
 
         <div className="map-effects" aria-hidden="true">
@@ -830,8 +722,6 @@ export function TyphoonMap({
         {theme === "archive-command" ? <DossierSceneDecor storm={storm} sourceLabel={sourceLabel} dataError={dataError} /> : null}
         {theme === "archive-command" ? <DossierMapFurniture /> : null}
 
-        <MapLabelLayer labels={regionScreenLabels} />
-        {!isLiveView ? <PathTimeOverlay labels={pathScreenLabels} /> : null}
         {!isLiveView ? <ForecastBadge storm={storm} /> : null}
 
         {isLiveView ? (
@@ -1056,15 +946,18 @@ function PerformanceOverlay({
   enabled,
   fetchDurationMs,
   windPointCount,
-  warningCount
+  warningCount,
+  windCanvasRef
 }: {
   enabled: boolean;
   fetchDurationMs: number | null;
   windPointCount: number;
   warningCount: number;
+  windCanvasRef: MutableRefObject<HTMLCanvasElement | null>;
 }) {
   const [fps, setFps] = useState(0);
   const [longTasks, setLongTasks] = useState(0);
+  const [windMetrics, setWindMetrics] = useState({ fps: 0, renderMs: 0, particles: 0, quality: 0 });
 
   useEffect(() => {
     if (!enabled) return;
@@ -1085,6 +978,23 @@ function PerformanceOverlay({
   }, [enabled]);
 
   useEffect(() => {
+    if (!enabled) return;
+    const read = () => {
+      const dataset = windCanvasRef.current?.dataset;
+      const frameMs = Number(dataset?.averageFrameMs ?? 0);
+      setWindMetrics({
+        fps: frameMs > 0 ? Math.round(1000 / frameMs) : 0,
+        renderMs: Number(dataset?.averageRenderMs ?? 0),
+        particles: Number(dataset?.activeParticleCount ?? 0),
+        quality: Number(dataset?.qualityScale ?? 0)
+      });
+    };
+    read();
+    const timer = window.setInterval(read, 1000);
+    return () => window.clearInterval(timer);
+  }, [enabled, windCanvasRef]);
+
+  useEffect(() => {
     if (!enabled || typeof PerformanceObserver === "undefined") return;
     try {
       const observer = new PerformanceObserver((list) => {
@@ -1102,7 +1012,9 @@ function PerformanceOverlay({
   return (
     <div className="performance-overlay" aria-live="polite">
       <b>PERF</b>
-      <span>{fps || "--"} FPS</span>
+      <span>{fps || "--"} RAF FPS</span>
+      <span>{windMetrics.fps || "--"} wind FPS / {windMetrics.renderMs || "--"} ms</span>
+      <span>{windMetrics.particles || "--"} particles / Q{windMetrics.quality || "--"}</span>
       <span>{fetchDurationMs ?? "--"} ms fetch</span>
       <span>{windPointCount} wind pts</span>
       <span>{longTasks} long tasks</span>
@@ -1111,18 +1023,238 @@ function PerformanceOverlay({
   );
 }
 
-function MapLabelLayer({ labels }: { labels: ScreenRegionLabel[] }) {
-  if (labels.length === 0) return null;
+function ProjectedMapOverlays({
+  map,
+  storm,
+  storms,
+  regionLabels,
+  showPathTimes
+}: {
+  map: MapLibreMap | null;
+  storm: Storm | null;
+  storms: Storm[];
+  regionLabels: MapRegionLabel[];
+  showPathTimes: boolean;
+}) {
+  const regionNodesRef = useRef<Map<string, HTMLDivElement>>(new Map());
+  const pathNodesRef = useRef<Map<string, HTMLDivElement>>(new Map());
+  const centerNodesRef = useRef<Map<string, HTMLDivElement>>(new Map());
+  const trackNodesRef = useRef<Map<string, SVGSVGElement>>(new Map());
+  const regionLayerRef = useRef<HTMLDivElement | null>(null);
+  const pathLayerRef = useRef<HTMLDivElement | null>(null);
+  const trackLayerRef = useRef<HTMLDivElement | null>(null);
+  const centerLayerRef = useRef<HTMLDivElement | null>(null);
+  const pathCandidates = useMemo(() => {
+    if (!storm || !showPathTimes) return [];
+    const candidates = storm.forecast.length > 0 ? storm.forecast : storm.track.slice(-6);
+    return candidates
+      .filter((_, index) => index % 2 === 0)
+      .map((point, index) => ({
+        id: `${point.time}-${index}`,
+        coordinate: [point.lon, point.lat] as [number, number],
+        label: formatPathTime(point.time)
+      }));
+  }, [showPathTimes, storm]);
+
+  useLayoutEffect(() => {
+    if (!map) return;
+    let frame = 0;
+    let cameraMoving = false;
+    let cameraAnchors: CanvasCameraAnchors | null = null;
+    const mapStage = map.getContainer().closest<HTMLElement>(".map-stage");
+    const layerNodes = () => [regionLayerRef.current, pathLayerRef.current, trackLayerRef.current, centerLayerRef.current].filter((node): node is HTMLDivElement => Boolean(node));
+    const setLayerTransform = (transform: string) => {
+      layerNodes().forEach((node) => {
+        node.style.transformOrigin = "0 0";
+        node.style.transform = transform;
+      });
+    };
+    const sync = () => {
+      frame = 0;
+      setLayerTransform("none");
+      const canvas = map.getCanvas();
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      const center = map.getCenter();
+      const centerLongitude = ((center.lng + 180) % 360 + 360) % 360 - 180;
+      const showProvinceLabels = polygonContainsCoordinate(CHINA_LABEL_FOCUS_POLYGON, [centerLongitude, center.lat]);
+
+      regionLabels.forEach((label) => {
+        const node = regionNodesRef.current.get(label.id);
+        if (!node) return;
+        const point = map.project(label.coordinate);
+        const visible = showProvinceLabels && point.x > 16 && point.y > 16 && point.x < width - 16 && point.y < height - 16;
+        node.hidden = !visible;
+        if (visible) {
+          node.style.left = `${Math.round(point.x)}px`;
+          node.style.top = `${Math.round(point.y)}px`;
+        }
+      });
+
+      const stormPoint = storm ? map.project([storm.position.lon, storm.position.lat]) : null;
+      const safeBox = {
+        left: width <= 760 ? 18 : 230,
+        top: 126,
+        right: width - 230,
+        bottom: height - 126
+      };
+      pathCandidates.forEach((candidate) => {
+        const node = pathNodesRef.current.get(candidate.id);
+        if (!node) return;
+        const point = map.project(candidate.coordinate);
+        const x = Math.round(point.x + 16);
+        const y = Math.round(point.y - 18);
+        const visible = Boolean(
+          stormPoint &&
+          Math.hypot(point.x - stormPoint.x, point.y - stormPoint.y) > 110 &&
+          x > safeBox.left && x < safeBox.right && y > safeBox.top && y < safeBox.bottom
+        );
+        node.hidden = !visible;
+        if (visible) {
+          node.style.left = `${x}px`;
+          node.style.top = `${y}px`;
+        }
+      });
+
+      storms.forEach((item) => {
+        const trackNode = trackNodesRef.current.get(item.id);
+        if (trackNode) {
+          const points = item.track
+            .filter((point) => Number.isFinite(point.lon) && Number.isFinite(point.lat))
+            .map((point) => map.project([point.lon, point.lat]));
+          trackNode.style.display = points.length < 2 ? "none" : "";
+          if (points.length >= 2) {
+            trackNode.setAttribute("viewBox", `0 0 ${width} ${height}`);
+            const serialized = points.map((point) => `${point.x},${point.y}`).join(" ");
+            trackNode.querySelectorAll("polyline").forEach((polyline) => polyline.setAttribute("points", serialized));
+          }
+        }
+
+        const centerNode = centerNodesRef.current.get(item.id);
+        if (!centerNode) return;
+        const latest = item.track.at(-1) ?? item.position;
+        const valid = Number.isFinite(latest.lon) && Number.isFinite(latest.lat);
+        centerNode.hidden = !valid;
+        if (!valid) return;
+        const point = map.project([latest.lon, latest.lat]);
+        const hudOffset = Math.max(0, 122 - point.y);
+        centerNode.style.left = `${point.x}px`;
+        centerNode.style.top = `${point.y + hudOffset}px`;
+        centerNode.style.setProperty("--hud-offset", `${hudOffset}px`);
+        if (hudOffset > 0) centerNode.dataset.hudOffset = "true";
+        else delete centerNode.dataset.hudOffset;
+      });
+    };
+    const schedule = () => {
+      if (cameraMoving || frame) return;
+      frame = window.requestAnimationFrame(sync);
+    };
+    const beginCameraMove = () => {
+      if (cameraMoving) return;
+      cameraMoving = true;
+      if (mapStage) mapStage.dataset.cameraMoving = "true";
+      window.cancelAnimationFrame(frame);
+      frame = 0;
+      setLayerTransform("none");
+      cameraAnchors = captureCanvasCameraAnchors(map, map.getCanvas());
+    };
+    const followCamera = () => {
+      if (!cameraMoving) beginCameraMove();
+      if (!cameraAnchors) return;
+      const transform = canvasCameraTransform(map, cameraAnchors);
+      setLayerTransform(`matrix(${transform.a}, ${transform.b}, ${transform.c}, ${transform.d}, ${transform.e}, ${transform.f})`);
+    };
+    const finishCameraMove = () => {
+      cameraMoving = false;
+      if (mapStage) delete mapStage.dataset.cameraMoving;
+      cameraAnchors = null;
+      schedule();
+    };
+
+    sync();
+    map.on("movestart", beginCameraMove);
+    map.on("move", followCamera);
+    map.on("moveend", finishCameraMove);
+    map.on("resize", schedule);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      map.off("movestart", beginCameraMove);
+      map.off("move", followCamera);
+      map.off("moveend", finishCameraMove);
+      map.off("resize", schedule);
+      if (mapStage) delete mapStage.dataset.cameraMoving;
+      setLayerTransform("none");
+    };
+  }, [map, pathCandidates, regionLabels, storm, storms]);
 
   return (
-    <div className="map-label-layer" aria-hidden="true">
-      {labels.map((label) => (
-        <div className="map-region-label" key={label.id} style={{ left: label.x, top: label.y }}>
-          <b>{label.zh}</b>
-          <span>{label.en}</span>
+    <>
+      <div className="map-label-layer" aria-hidden="true" ref={regionLayerRef}>
+        {regionLabels.map((label) => (
+          <div
+            className="map-region-label"
+            key={label.id}
+            ref={(node) => {
+              if (node) regionNodesRef.current.set(label.id, node);
+              else regionNodesRef.current.delete(label.id);
+            }}
+          >
+            <b>{label.zh}</b>
+          </div>
+        ))}
+      </div>
+      {showPathTimes ? (
+        <div className="path-time-layer" aria-hidden="true" ref={pathLayerRef}>
+          {pathCandidates.map((candidate) => (
+            <div
+              className="path-time-label"
+              key={candidate.id}
+              ref={(node) => {
+                if (node) pathNodesRef.current.set(candidate.id, node);
+                else pathNodesRef.current.delete(candidate.id);
+              }}
+            >
+              {candidate.label}
+            </div>
+          ))}
         </div>
-      ))}
-    </div>
+      ) : null}
+      <div className="historical-track-layer" ref={trackLayerRef} aria-hidden="true">
+        {storms.map((item) => (
+          <svg
+            className="historical-track-overlay"
+            key={`track-${item.id}`}
+            preserveAspectRatio="none"
+            style={{ "--track-color": stormTrackColor(item.id) } as CSSProperties}
+            ref={(node) => {
+              if (node) trackNodesRef.current.set(item.id, node);
+              else trackNodesRef.current.delete(item.id);
+            }}
+          >
+            <polyline className="historical-track-shadow" />
+            <polyline className="historical-track-line" />
+          </svg>
+        ))}
+      </div>
+      <div className="latest-track-center-layer" ref={centerLayerRef}>
+        {storms.map((item) => (
+          <div
+            className="latest-path-center-marker"
+            key={`center-${item.id}`}
+            style={{ "--track-color": stormTrackColor(item.id), "--hud-offset": "0px" } as CSSProperties}
+            aria-label={`${item.nameZh} 最新路径中心 ${formatBeijingTime(item.updatedAt)} 北京时间`}
+            ref={(node) => {
+              if (node) centerNodesRef.current.set(item.id, node);
+              else centerNodesRef.current.delete(item.id);
+            }}
+          >
+            <span aria-hidden="true">☠</span>
+            <small>{item.nameZh} · 最新路径中心</small>
+            <em>{formatBeijingTime(item.updatedAt)} BJT</em>
+          </div>
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -1411,20 +1543,6 @@ function cameraCenterForStorm(storm: Storm, viewportWidth = 1200, theme: RadarTh
   }
 
   return [storm.position.lon - 0.9, storm.position.lat - 0.45];
-}
-
-function PathTimeOverlay({ labels }: { labels: Array<{ id: string; x: number; y: number; label: string }> }) {
-  if (labels.length === 0) return null;
-
-  return (
-    <div className="path-time-layer" aria-hidden="true">
-      {labels.map((item) => (
-        <div className="path-time-label" key={item.id} style={{ left: item.x, top: item.y }}>
-          {item.label}
-        </div>
-      ))}
-    </div>
-  );
 }
 
 function TopCommandBar({
@@ -2000,10 +2118,10 @@ function addStormLayers(map: MapLibreMap) {
     id: "fleet-track-lines",
     type: "line",
     source: "fleetRoutes",
-    filter: ["all", ["==", ["get", "active"], false], ["==", ["get", "routeKind"], "track"]],
+    filter: ["==", ["get", "routeKind"], "track"],
     paint: {
-      "line-color": "#31d6f4",
-      "line-width": 2.2,
+      "line-color": ["coalesce", ["get", "trackColor"], "#31d6f4"],
+      "line-width": 2.6,
       "line-opacity": 0.82
     }
   });
@@ -2023,11 +2141,11 @@ function addStormLayers(map: MapLibreMap) {
     id: "fleet-track-points",
     type: "circle",
     source: "fleetPoints",
-    filter: ["==", ["get", "active"], false],
+    filter: ["==", ["get", "routeKind"], "track"],
     paint: {
       "circle-radius": 3.2,
       "circle-color": "#071015",
-      "circle-stroke-color": "#31d6f4",
+      "circle-stroke-color": ["coalesce", ["get", "trackColor"], "#31d6f4"],
       "circle-stroke-width": 1.5,
       "circle-opacity": 0.9
     }
@@ -2076,7 +2194,7 @@ function addStormLayers(map: MapLibreMap) {
       "circle-color": "#071015",
       "circle-stroke-color": "#ff4b3e",
       "circle-stroke-width": 2.4,
-      "circle-opacity": 0.96
+      "circle-opacity": 0
     }
   });
   map.addLayer({
@@ -2148,221 +2266,6 @@ function setLayerVisibility(map: MapLibreMap, layerIds: string[], visible: boole
   });
 }
 
-function startTerrainElevationRenderer(map: MapLibreMap, canvas: HTMLCanvasElement) {
-  const context = canvas.getContext("2d", { alpha: true });
-  if (!context) return undefined;
-
-  let cancelled = false;
-  let renderId = 0;
-  let frame = 0;
-  let debounceTimer: number | undefined;
-  let lastRenderedViewport = "";
-
-  const resizeCanvas = () => {
-    const dpr = Math.min(window.devicePixelRatio || 1, CANVAS_DPR_CAP);
-    const rect = canvas.getBoundingClientRect();
-    const width = Math.max(1, Math.floor(rect.width * dpr));
-    const height = Math.max(1, Math.floor(rect.height * dpr));
-    if (canvas.width !== width || canvas.height !== height) {
-      canvas.width = width;
-      canvas.height = height;
-    }
-    context.setTransform(dpr, 0, 0, dpr, 0, 0);
-  };
-
-  const clear = () => {
-    context.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
-  };
-
-  const render = async () => {
-    if (document.visibilityState !== "visible") return;
-    const currentRender = ++renderId;
-    resizeCanvas();
-
-    const zoom = Math.max(TERRAIN_TILE_ZOOM_MIN, Math.min(TERRAIN_TILE_ZOOM_MAX, Math.round(map.getZoom())));
-    const tiles = terrainTilesForViewport(map, zoom, canvas.clientWidth, canvas.clientHeight).slice(0, MAX_TERRAIN_TILES_PER_RENDER);
-    const center = map.getCenter();
-    const viewportKey = [
-      zoom,
-      Math.round(center.lng * 100),
-      Math.round(center.lat * 100),
-      canvas.width,
-      canvas.height,
-      tiles.map((tile) => `${tile.z}/${tile.x}/${tile.y}`).join(",")
-    ].join("|");
-    if (viewportKey === lastRenderedViewport) return;
-    const renderedTiles = await Promise.all(
-      tiles.map(async (tile) => ({
-        ...tile,
-        canvas: await getColoredTerrainTile(tile.z, tile.x, tile.y)
-      }))
-    );
-    if (cancelled || currentRender !== renderId) return;
-
-    clear();
-    renderedTiles.forEach((tile) => {
-      if (!tile.canvas) return;
-      const northwest = map.project(tileLonLat(tile.x, tile.y, tile.z));
-      const southeast = map.project(tileLonLat(tile.x + 1, tile.y + 1, tile.z));
-      const x = Math.floor(Math.min(northwest.x, southeast.x));
-      const y = Math.floor(Math.min(northwest.y, southeast.y));
-      const width = Math.ceil(Math.abs(southeast.x - northwest.x));
-      const height = Math.ceil(Math.abs(southeast.y - northwest.y));
-      context.drawImage(tile.canvas, x, y, width, height);
-    });
-    lastRenderedViewport = viewportKey;
-  };
-
-  const scheduleRender = () => {
-    window.cancelAnimationFrame(frame);
-    frame = window.requestAnimationFrame(() => {
-      void render();
-    });
-  };
-
-  const scheduleRenderDebounced = () => {
-    if (debounceTimer !== undefined) {
-      window.clearTimeout(debounceTimer);
-    }
-    debounceTimer = window.setTimeout(scheduleRender, TERRAIN_RENDER_DEBOUNCE_MS);
-  };
-
-  const invalidateRender = () => {
-    renderId += 1;
-    lastRenderedViewport = "";
-    window.cancelAnimationFrame(frame);
-    resizeCanvas();
-    clear();
-  };
-
-  const invalidateForResize = () => {
-    invalidateRender();
-    scheduleRenderDebounced();
-  };
-
-  scheduleRender();
-  map.on("movestart", invalidateRender);
-  map.on("zoomstart", invalidateRender);
-  map.on("moveend", scheduleRenderDebounced);
-  map.on("zoomend", scheduleRenderDebounced);
-  map.on("resize", invalidateForResize);
-  window.addEventListener("resize", scheduleRenderDebounced);
-
-  return () => {
-    cancelled = true;
-    window.cancelAnimationFrame(frame);
-    if (debounceTimer !== undefined) {
-      window.clearTimeout(debounceTimer);
-    }
-    map.off("movestart", invalidateRender);
-    map.off("zoomstart", invalidateRender);
-    map.off("moveend", scheduleRenderDebounced);
-    map.off("zoomend", scheduleRenderDebounced);
-    map.off("resize", invalidateForResize);
-    window.removeEventListener("resize", scheduleRenderDebounced);
-    clear();
-  };
-}
-
-function terrainTilesForViewport(map: MapLibreMap, z: number, width: number, height: number) {
-  const corners = [
-    map.unproject([0, 0]),
-    map.unproject([width, 0]),
-    map.unproject([width, height]),
-    map.unproject([0, height])
-  ];
-  const west = Math.max(-180, Math.min(...corners.map((corner) => corner.lng)));
-  const east = Math.min(180, Math.max(...corners.map((corner) => corner.lng)));
-  const south = Math.max(-85, Math.min(...corners.map((corner) => corner.lat)));
-  const north = Math.min(85, Math.max(...corners.map((corner) => corner.lat)));
-  const minTile = lngLatToTile(west, north, z);
-  const maxTile = lngLatToTile(east, south, z);
-  const maxIndex = 2 ** z - 1;
-  const xStart = clampInteger(Math.min(minTile.x, maxTile.x), 0, maxIndex);
-  const xEnd = clampInteger(Math.max(minTile.x, maxTile.x), 0, maxIndex);
-  const yStart = clampInteger(Math.min(minTile.y, maxTile.y), 0, maxIndex);
-  const yEnd = clampInteger(Math.max(minTile.y, maxTile.y), 0, maxIndex);
-  const tiles: Array<{ z: number; x: number; y: number }> = [];
-
-  for (let x = xStart; x <= xEnd; x += 1) {
-    for (let y = yStart; y <= yEnd; y += 1) {
-      tiles.push({ z, x, y });
-    }
-  }
-
-  return tiles;
-}
-
-function lngLatToTile(lon: number, lat: number, z: number) {
-  const clampedLat = Math.max(-85.05112878, Math.min(85.05112878, lat));
-  const latRad = (clampedLat * Math.PI) / 180;
-  const scale = 2 ** z;
-  return {
-    x: Math.floor(((lon + 180) / 360) * scale),
-    y: Math.floor(((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) * scale)
-  };
-}
-
-function tileLonLat(x: number, y: number, z: number): [number, number] {
-  const scale = 2 ** z;
-  const lon = (x / scale) * 360 - 180;
-  const latRad = Math.atan(Math.sinh(Math.PI * (1 - (2 * y) / scale)));
-  return [lon, (latRad * 180) / Math.PI];
-}
-
-function clampInteger(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, Math.trunc(value)));
-}
-
-function getColoredTerrainTile(z: number, x: number, y: number) {
-  const key = `${z}/${x}/${y}`;
-  if (!terrainTileCache.has(key)) {
-    if (terrainTileCache.size > 240) terrainTileCache.clear();
-    terrainTileCache.set(key, loadColoredTerrainTile(z, x, y));
-  }
-  return terrainTileCache.get(key) ?? Promise.resolve(null);
-}
-
-async function loadColoredTerrainTile(z: number, x: number, y: number) {
-  try {
-    const url = TERRAIN_TILE_URL.replace("{z}", String(z)).replace("{x}", String(x)).replace("{y}", String(y));
-    const response = await fetch(url, { cache: "force-cache", mode: "cors" });
-    if (!response.ok) return null;
-    const bitmap = await createImageBitmap(await response.blob());
-    const source = document.createElement("canvas");
-    source.width = TERRAIN_TILE_SIZE;
-    source.height = TERRAIN_TILE_SIZE;
-    const sourceContext = source.getContext("2d", { willReadFrequently: true });
-    if (!sourceContext) return null;
-    sourceContext.drawImage(bitmap, 0, 0, TERRAIN_TILE_SIZE, TERRAIN_TILE_SIZE);
-
-    const image = sourceContext.getImageData(0, 0, TERRAIN_TILE_SIZE, TERRAIN_TILE_SIZE);
-    const pixels = image.data;
-    for (let index = 0; index < pixels.length; index += 4) {
-      const elevation = pixels[index] * 256 + pixels[index + 1] + pixels[index + 2] / 256 - 32768;
-      const color = terrainBandColor(elevation);
-      pixels[index] = color[0];
-      pixels[index + 1] = color[1];
-      pixels[index + 2] = color[2];
-      pixels[index + 3] = color[3];
-    }
-    sourceContext.putImageData(image, 0, 0);
-    bitmap.close();
-    return source;
-  } catch {
-    return null;
-  }
-}
-
-function terrainBandColor(elevation: number): [number, number, number, number] {
-  if (elevation <= 5) return [0, 0, 0, 0];
-  if (elevation < 80) return [39, 151, 127, 116];
-  if (elevation < 250) return [92, 164, 94, 132];
-  if (elevation < 700) return [188, 164, 70, 148];
-  if (elevation < 1400) return [213, 116, 50, 164];
-  if (elevation < 2600) return [181, 67, 55, 178];
-  return [238, 220, 184, 192];
-}
 
 function updateStormFleetSources(map: MapLibreMap, fleetGeo: ReturnType<typeof buildStormFleetGeo>) {
   (map.getSource("fleetRoutes") as GeoJSONSource | undefined)?.setData(fleetGeo.routes);
@@ -2906,15 +2809,15 @@ function startWindColorFieldRenderer(
     if (!visible || points.length === 0) return;
     drawGfsWindBackdrop(context, map, createWindVectorIndex(points), visibleWindBounds(map), 0.48);
   };
-  let cameraAnchors: WindCanvasCameraAnchors | null = null;
+  let cameraAnchors: CanvasCameraAnchors | null = null;
   const beginCameraMove = () => {
     canvas.style.transform = "none";
-    cameraAnchors = captureWindCanvasCameraAnchors(map, canvas);
+    cameraAnchors = captureCanvasCameraAnchors(map, canvas);
   };
   const followCamera = () => {
     if (!cameraAnchors) beginCameraMove();
     if (!cameraAnchors) return;
-    const transform = windCanvasCameraTransform(map, cameraAnchors);
+    const transform = canvasCameraTransform(map, cameraAnchors);
     canvas.style.transformOrigin = "0 0";
     canvas.style.transform = `matrix(${transform.a}, ${transform.b}, ${transform.c}, ${transform.d}, ${transform.e}, ${transform.f})`;
   };
@@ -2939,7 +2842,7 @@ function startWindColorFieldRenderer(
   };
 }
 
-interface WindCanvasCameraAnchors {
+interface CanvasCameraAnchors {
   width: number;
   height: number;
   topLeft: { lng: number; lat: number };
@@ -2947,7 +2850,7 @@ interface WindCanvasCameraAnchors {
   bottomLeft: { lng: number; lat: number };
 }
 
-function captureWindCanvasCameraAnchors(map: MapLibreMap, canvas: HTMLCanvasElement): WindCanvasCameraAnchors {
+function captureCanvasCameraAnchors(map: MapLibreMap, canvas: HTMLCanvasElement): CanvasCameraAnchors {
   const width = Math.max(1, canvas.clientWidth);
   const height = Math.max(1, canvas.clientHeight);
   const topLeft = map.unproject([0, 0]);
@@ -2962,7 +2865,7 @@ function captureWindCanvasCameraAnchors(map: MapLibreMap, canvas: HTMLCanvasElem
   };
 }
 
-function windCanvasCameraTransform(map: MapLibreMap, anchors: WindCanvasCameraAnchors) {
+function canvasCameraTransform(map: MapLibreMap, anchors: CanvasCameraAnchors) {
   const topLeft = map.project([anchors.topLeft.lng, anchors.topLeft.lat]);
   const topRight = map.project([anchors.topRight.lng, anchors.topRight.lat]);
   const bottomLeft = map.project([anchors.bottomLeft.lng, anchors.bottomLeft.lat]);
@@ -2993,15 +2896,23 @@ function startWindFieldRenderer(
   let frameTimingTotal = 0;
   let frameTimingMax = 0;
   let frameTimingSamples = 0;
+  let renderTimingTotal = 0;
+  let renderTimingMax = 0;
+  let renderTimingSamples = 0;
+  let adaptiveQuality = livePerformanceMode ? 0.78 : 0.62;
   let canvasWidth = 1;
   let canvasHeight = 1;
   let cameraRevision = 1;
   let fieldHotSwapCount = 0;
+  let cameraMoving = false;
+  let cameraAnchors: CanvasCameraAnchors | null = null;
+  let pendingCameraRedraw = false;
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-  // Browser RAF commonly lands just below 33.3 ms on every second tick. A
-  // 30 ms gate therefore produces a stable two-RAF cadence instead of
-  // accidentally slipping to three RAFs (about 20 fps).
-  const targetFrameIntervalMs = 30;
+  // Let the browser present at display cadence. The adaptive particle budget
+  // below controls work per frame; a 30 ms gate permanently capped even a
+  // high-end GPU system near 30 fps and made interaction feel discontinuous.
+  const targetFrameIntervalMs = 14;
+  const targetRenderBudgetMs = livePerformanceMode ? 18 : 15;
   let observedWindField: WindFieldPayload | null = null;
   let observedCoreSignature = "";
   let cycloneCore: CycloneCoreAnalysis | null = null;
@@ -3103,7 +3014,7 @@ function startWindFieldRenderer(
   canvas.dataset.renderer = renderMode === "gfs" ? "ncep-gfs-wind-barbs" : "ncep-gfs-streamlines";
   canvas.dataset.vectorInterpolation = "structured-grid-bilinear-raw-uv";
   canvas.dataset.backgroundMode = "raw-ncep-gfs-grid";
-  canvas.dataset.cameraContinuity = "geographic-state-with-live-reprojection";
+  canvas.dataset.cameraContinuity = "frozen-frame-affine-transform-then-geographic-redraw";
   canvas.dataset.particleCount = String(particleCount);
   canvas.dataset.trailPoints = String(trailPointLimit);
   canvas.dataset.particleJourney = "model-grid-streamlines";
@@ -3137,6 +3048,11 @@ function startWindFieldRenderer(
       frame = window.requestAnimationFrame(render);
       return;
     }
+    if (cameraMoving) {
+      lastFrameTime = timeMs;
+      frame = window.requestAnimationFrame(render);
+      return;
+    }
     if (timeMs - lastFrameTime < targetFrameIntervalMs) {
       frame = window.requestAnimationFrame(render);
       return;
@@ -3155,7 +3071,13 @@ function startWindFieldRenderer(
         frameTimingSamples = 0;
       }
     }
+    const renderStartedAt = performance.now();
     lastFrameTime = timeMs;
+
+    if (pendingCameraRedraw) {
+      canvas.style.transform = "none";
+      pendingCameraRedraw = false;
+    }
 
     syncWindField();
     syncCycloneCore();
@@ -3167,14 +3089,27 @@ function startWindFieldRenderer(
     }
     context.globalCompositeOperation = "source-over";
     const zoomSignal = smoothStep(3.25, 5.65, map.getZoom());
-    const requestedActiveParticleCount = livePerformanceMode
-      ? Math.max(760, Math.min(1_040, Math.round(particles.length * (0.72 + zoomSignal * 0.16))))
-      : 1_380;
-    const activeParticleCount = Math.min(particles.length, requestedActiveParticleCount);
+    const maximumActiveParticleCount = Math.min(
+      particles.length,
+      livePerformanceMode
+        ? Math.min(1_040, Math.round(particles.length * (0.84 + zoomSignal * 0.12)))
+        : 1_380
+    );
+    const minimumActiveParticleCount = Math.min(
+      maximumActiveParticleCount,
+      livePerformanceMode
+        ? canvas.clientWidth <= 760 ? 360 : 520
+        : canvas.clientWidth <= 760 ? 480 : 620
+    );
+    const activeParticleCount = Math.max(
+      minimumActiveParticleCount,
+      Math.min(maximumActiveParticleCount, Math.round(maximumActiveParticleCount * adaptiveQuality))
+    );
     const trailScale = 1.08 + zoomSignal * 0.38;
     const strokeScale = 0.84 + zoomSignal * 0.24;
     const opacityScale = 0.9 + zoomSignal * 0.08;
     canvas.dataset.activeParticleCount = String(activeParticleCount);
+    canvas.dataset.qualityScale = adaptiveQuality.toFixed(2);
     canvas.dataset.zoomSignal = zoomSignal.toFixed(2);
     const paths = WIND_PARTICLE_STYLES.map(() => WIND_RIBBON_LAYERS.map(() => new Path2D()));
     let rawTrailLengthTotal = 0;
@@ -3188,8 +3123,9 @@ function startWindFieldRenderer(
     // permanently released tracer.  That keeps a real closed or weak-wind
     // circulation from collecting every particle on its innermost orbit.
     const simulationSeconds = 14_000 * deltaSeconds;
-    const visibleAmbientHeads = new Map<string, number>();
-    const visibleCoreHeads = new Map<string, number>();
+    const visibleAmbientHeads = new Map<number, number>();
+    const visibleCoreHeads = new Map<number, number>();
+    const windSample = { u: 0, v: 0 };
     const ambientHeadCellSize = Math.max(34, Math.min(46, canvas.clientWidth / 35));
     const coreHeadCellSize = Math.max(24, Math.min(34, canvas.clientWidth / 52));
     for (let index = 0; index < activeParticleCount; index += 1) {
@@ -3201,8 +3137,7 @@ function startWindFieldRenderer(
         particle.trailScreen = particle.trail.map((point) => map.project([point.lon, point.lat]));
         particle.projectionRevision = cameraRevision;
       }
-      const vector = lookupWindVector(vectorIndex, particle.lon, particle.lat);
-      if (!vector) {
+      if (!sampleWindVector(vectorIndex, particle.lon, particle.lat, windSample)) {
         if (reseedCount < reseedBudget) {
           Object.assign(particle, randomWindParticle(bounds, cameraRevision));
           reseedCount += 1;
@@ -3211,14 +3146,14 @@ function startWindFieldRenderer(
       }
 
       if (particle.trail.length === 0) {
-        particle.u = vector.u;
-        particle.v = vector.v;
+        particle.u = windSample.u;
+        particle.v = windSample.v;
         particle.trail.push({ lon: particle.lon, lat: particle.lat });
         particle.trailScreen.push(map.project([particle.lon, particle.lat]));
       } else {
         const response = 1 - Math.exp(-deltaSeconds * 5.4);
-        particle.u += (vector.u - particle.u) * response;
-        particle.v += (vector.v - particle.v) * response;
+        particle.u += (windSample.u - particle.u) * response;
+        particle.v += (windSample.v - particle.v) * response;
       }
 
       // This is streamline integration distance, not a playback-speed trick:
@@ -3250,7 +3185,6 @@ function startWindFieldRenderer(
       particle.trailScreen.push(map.project([particle.lon, particle.lat]));
       if (particle.trailScreen.length > trailPointLimit) particle.trailScreen.shift();
       const projectedTrail = particle.trailScreen;
-      const rawTrailLength = windTrailLength(projectedTrail);
       const displayTrail = projectedTrail;
       const head = displayTrail.at(-1);
       if (!head) continue;
@@ -3258,15 +3192,16 @@ function startWindFieldRenderer(
       const headCellSize = isCoreParticle ? coreHeadCellSize : ambientHeadCellSize;
       const visibleHeads = isCoreParticle ? visibleCoreHeads : visibleAmbientHeads;
       const maximumHeads = isCoreParticle ? 3 : 5;
-      const headCell = `${Math.floor(head.x / headCellSize)}:${Math.floor(head.y / headCellSize)}`;
+      const headCell = Math.floor(head.x / headCellSize) + Math.floor(head.y / headCellSize) * 4096;
       const visibleHeadsInCell = visibleHeads.get(headCell) ?? 0;
       visibleHeads.set(headCell, visibleHeadsInCell + 1);
       if (visibleHeadsInCell >= maximumHeads) {
         densitySuppressedCount += 1;
         continue;
       }
-      rawTrailLengthTotal += rawTrailLength;
-      renderedTrailLengthTotal += windTrailLength(displayTrail);
+      const trailLength = windTrailLength(displayTrail);
+      rawTrailLengthTotal += trailLength;
+      renderedTrailLengthTotal += trailLength;
       measuredTrailCount += 1;
       const bucket = windParticleStyleIndex(Math.hypot(particle.u, particle.v));
       impactTintCounts.none += 1;
@@ -3295,30 +3230,72 @@ function startWindFieldRenderer(
     context.globalAlpha = 1;
     context.shadowBlur = 0;
     context.globalCompositeOperation = "source-over";
+    const renderWorkMs = performance.now() - renderStartedAt;
+    renderTimingTotal += renderWorkMs;
+    renderTimingMax = Math.max(renderTimingMax, renderWorkMs);
+    renderTimingSamples += 1;
+    if (renderTimingSamples >= 20) {
+      const averageRenderMs = renderTimingTotal / renderTimingSamples;
+      const minimumQuality = maximumActiveParticleCount > 0 ? minimumActiveParticleCount / maximumActiveParticleCount : 1;
+      if (averageRenderMs > targetRenderBudgetMs * 1.08) adaptiveQuality = Math.max(minimumQuality, adaptiveQuality - 0.08);
+      else if (averageRenderMs < targetRenderBudgetMs * 0.72) adaptiveQuality = Math.min(1, adaptiveQuality + 0.04);
+      canvas.dataset.averageRenderMs = averageRenderMs.toFixed(1);
+      canvas.dataset.maxRenderMs = renderTimingMax.toFixed(1);
+      canvas.dataset.targetRenderMs = String(targetRenderBudgetMs);
+      renderTimingTotal = 0;
+      renderTimingMax = 0;
+      renderTimingSamples = 0;
+    }
     frame = window.requestAnimationFrame(render);
   };
 
+  const beginCameraMove = () => {
+    if (cameraMoving) return;
+    cameraMoving = true;
+    canvas.style.transform = "none";
+    cameraAnchors = captureCanvasCameraAnchors(map, canvas);
+    canvas.dataset.cameraInteraction = "affine-transform";
+  };
   const followCamera = () => {
+    if (!cameraMoving || !cameraAnchors) return;
+    const transform = canvasCameraTransform(map, cameraAnchors);
+    canvas.style.transformOrigin = "0 0";
+    canvas.style.transform = `matrix(${transform.a}, ${transform.b}, ${transform.c}, ${transform.d}, ${transform.e}, ${transform.f})`;
+  };
+  const finishCameraMove = () => {
+    if (!cameraMoving) return;
+    cameraMoving = false;
+    cameraAnchors = null;
     bounds = visibleWindBounds(map, 0.16);
     cameraRevision += 1;
     canvas.dataset.cameraRevision = String(cameraRevision);
+    canvas.dataset.cameraInteraction = "geographic-redraw";
     syncCycloneCoreScreen();
+    pendingCameraRedraw = true;
   };
   const resetForResize = () => {
     resizeCanvas();
-    followCamera();
+    bounds = visibleWindBounds(map, 0.16);
+    cameraRevision += 1;
+    canvas.dataset.cameraRevision = String(cameraRevision);
+    pendingCameraRedraw = true;
   };
 
   frame = window.requestAnimationFrame(render);
+  map.on("movestart", beginCameraMove);
   map.on("move", followCamera);
+  map.on("moveend", finishCameraMove);
   map.on("resize", resetForResize);
-  window.addEventListener("resize", resizeCanvas);
+  window.addEventListener("resize", resetForResize);
 
   return () => {
     window.cancelAnimationFrame(frame);
+    map.off("movestart", beginCameraMove);
     map.off("move", followCamera);
+    map.off("moveend", finishCameraMove);
     map.off("resize", resetForResize);
-    window.removeEventListener("resize", resizeCanvas);
+    window.removeEventListener("resize", resetForResize);
+    canvas.style.transform = "none";
     clear();
   };
 }
@@ -3666,19 +3643,102 @@ interface WindVectorIndex {
   longitudes: number[];
   latitudes: number[];
   grid: Map<string, WindFieldPoint>;
+  width: number;
+  height: number;
+  west: number;
+  south: number;
+  longitudeStep: number;
+  latitudeStep: number;
+  u: Float32Array;
+  v: Float32Array;
+  regular: boolean;
 }
 
 function createWindVectorIndex(points: WindFieldPoint[]): WindVectorIndex {
   const longitudes = [...new Set(points.map((point) => point.lon))].sort((left, right) => left - right);
   const latitudes = [...new Set(points.map((point) => point.lat))].sort((left, right) => left - right);
   const grid = new Map(points.map((point) => [windGridKey(point.lon, point.lat), point]));
-  return { points, longitudes, latitudes, grid };
+  const width = longitudes.length;
+  const height = latitudes.length;
+  const west = longitudes[0] ?? 0;
+  const south = latitudes[0] ?? 0;
+  const longitudeStep = width > 1 ? (longitudes[width - 1] - west) / (width - 1) : 0;
+  const latitudeStep = height > 1 ? (latitudes[height - 1] - south) / (height - 1) : 0;
+  const regular = width > 1 && height > 1 && longitudeStep > 0 && latitudeStep > 0 && width * height <= points.length * 1.08;
+  const u = new Float32Array(width * height);
+  const v = new Float32Array(width * height);
+  u.fill(Number.NaN);
+  v.fill(Number.NaN);
+  if (regular) {
+    points.forEach((point) => {
+      const x = Math.round((point.lon - west) / longitudeStep);
+      const y = Math.round((point.lat - south) / latitudeStep);
+      if (x < 0 || x >= width || y < 0 || y >= height) return;
+      const offset = y * width + x;
+      u[offset] = point.u;
+      v[offset] = point.v;
+    });
+  }
+  return { points, longitudes, latitudes, grid, width, height, west, south, longitudeStep, latitudeStep, u, v, regular };
+}
+
+interface WindVectorSample {
+  u: number;
+  v: number;
+}
+
+function sampleWindVector(index: WindVectorIndex, lon: number, lat: number, sample: WindVectorSample) {
+  if (!index.regular) {
+    const vector = bilinearWindVector(index, lon, lat);
+    if (!vector) return false;
+    sample.u = vector.u;
+    sample.v = vector.v;
+    return true;
+  }
+  const gridX = (lon - index.west) / index.longitudeStep;
+  const gridY = (lat - index.south) / index.latitudeStep;
+  if (gridX < 0 || gridY < 0 || gridX > index.width - 1 || gridY > index.height - 1) return false;
+  const x0 = Math.min(index.width - 2, Math.floor(gridX));
+  const y0 = Math.min(index.height - 2, Math.floor(gridY));
+  const x1 = x0 + 1;
+  const y1 = y0 + 1;
+  const tx = Math.max(0, Math.min(1, gridX - x0));
+  const ty = Math.max(0, Math.min(1, gridY - y0));
+  const southwest = y0 * index.width + x0;
+  const southeast = y0 * index.width + x1;
+  const northwest = y1 * index.width + x0;
+  const northeast = y1 * index.width + x1;
+  const uSouthwest = index.u[southwest];
+  const uSoutheast = index.u[southeast];
+  const uNorthwest = index.u[northwest];
+  const uNortheast = index.u[northeast];
+  const vSouthwest = index.v[southwest];
+  const vSoutheast = index.v[southeast];
+  const vNorthwest = index.v[northwest];
+  const vNortheast = index.v[northeast];
+  if (
+    !Number.isFinite(uSouthwest) || !Number.isFinite(uSoutheast) || !Number.isFinite(uNorthwest) || !Number.isFinite(uNortheast) ||
+    !Number.isFinite(vSouthwest) || !Number.isFinite(vSoutheast) || !Number.isFinite(vNorthwest) || !Number.isFinite(vNortheast)
+  ) return false;
+  sample.u =
+    uSouthwest * (1 - tx) * (1 - ty) +
+    uSoutheast * tx * (1 - ty) +
+    uNorthwest * (1 - tx) * ty +
+    uNortheast * tx * ty;
+  sample.v =
+    vSouthwest * (1 - tx) * (1 - ty) +
+    vSoutheast * tx * (1 - ty) +
+    vNorthwest * (1 - tx) * ty +
+    vNortheast * tx * ty;
+  return true;
 }
 
 function lookupWindVector(index: WindVectorIndex, lon: number, lat: number) {
   if (index.points.length === 0) return null;
-  const bilinear = bilinearWindVector(index, lon, lat);
-  if (bilinear) return bilinear;
+  const sample = { u: 0, v: 0 };
+  if (sampleWindVector(index, lon, lat, sample)) {
+    return { lon, lat, u: sample.u, v: sample.v, speed: Math.hypot(sample.u, sample.v), direction: (Math.atan2(-sample.u, -sample.v) * 180) / Math.PI };
+  }
   const outsideStructuredGrid =
     lon < index.longitudes[0] ||
     lon > index.longitudes[index.longitudes.length - 1] ||
@@ -3808,13 +3868,17 @@ function stormAtGfsAnalysisCenter(storm: Storm | null, windField: WindFieldPaylo
 }
 
 function stormMarkerRenderKey(storm: Storm, satelliteLayer?: SatelliteLayerPayload | null, bossProfile?: BossProfile | null) {
+  // Position and provider timestamps are camera/data concerns, not texture
+  // concerns. Including them here rebuilt the expensive 336px procedural
+  // texture after every viewport wind refresh, causing a hitch just after a
+  // drag or zoom. Marker position and dimensions are updated by the fast path.
   return [
     storm.id,
-    storm.position.lon,
-    storm.position.lat,
-    storm.updatedAt,
+    storm.stage,
     storm.maxWind,
     storm.minPressure,
+    storm.position.lat >= 0 ? "north" : "south",
+    stormVisualBearingDeg(storm).toFixed(1),
     satelliteLayer?.imageUrl ?? "no-satellite",
     bossProfile?.ahi?.slot ?? "no-ahi",
     bossProfile?.structure?.bulletinId ?? "no-structure",
@@ -3965,89 +4029,6 @@ function stormVisualBearingDeg(storm: Storm) {
     }
   }
   return -52;
-}
-
-function projectPathLabels(map: MapLibreMap, storm: Storm | null) {
-  if (!storm) return [];
-  const canvas = map.getCanvas();
-  const stormPoint = map.project([storm.position.lon, storm.position.lat]);
-  const safeBox = {
-    left: 320,
-    top: 132,
-    right: canvas.clientWidth - 230,
-    bottom: canvas.clientHeight - 126
-  };
-  const candidates = storm.forecast.length > 0 ? storm.forecast : storm.track.slice(-6);
-  return candidates
-    .filter((_, index) => index % 2 === 0)
-    .map((point, index) => {
-      const projected = map.project([point.lon, point.lat]);
-      return {
-        id: `${point.time}-${index}`,
-        x: Math.round(projected.x + 16),
-        y: Math.round(projected.y - 18),
-        label: formatPathTime(point.time),
-        distanceFromStorm: Math.hypot(projected.x - stormPoint.x, projected.y - stormPoint.y)
-      };
-    })
-    .filter(
-      (item) =>
-        item.distanceFromStorm > 110 &&
-        item.x > safeBox.left &&
-        item.x < safeBox.right &&
-        item.y > safeBox.top &&
-        item.y < safeBox.bottom
-    )
-    .slice(0, 4);
-}
-
-function projectRegionLabels(map: MapLibreMap, labels: MapRegionLabel[]): ScreenRegionLabel[] {
-  const canvas = map.getCanvas();
-  return labels
-    .map((label) => {
-      const point = map.project(label.coordinate);
-      return {
-        id: label.id,
-        zh: label.zh,
-        en: label.en,
-        x: Math.round(point.x),
-        y: Math.round(point.y)
-      };
-    })
-    .filter((label) => label.x > 16 && label.y > 16 && label.x < canvas.clientWidth - 16 && label.y < canvas.clientHeight - 16);
-}
-
-function syncMapOverlays(
-  map: MapLibreMap,
-  storm: Storm | null,
-  setPathLabels: Dispatch<SetStateAction<PathScreenLabel[]>>,
-  regionLabels: MapRegionLabel[],
-  setRegionLabels: Dispatch<SetStateAction<ScreenRegionLabel[]>>
-) {
-  const nextPathLabels = projectPathLabels(map, storm);
-  const nextRegionLabels = projectRegionLabels(map, regionLabels);
-  setPathLabels((current) => (pathLabelsEqual(current, nextPathLabels) ? current : nextPathLabels));
-  setRegionLabels((current) => (regionLabelsEqual(current, nextRegionLabels) ? current : nextRegionLabels));
-}
-
-function pathLabelsEqual(current: PathScreenLabel[], next: PathScreenLabel[]) {
-  return (
-    current.length === next.length &&
-    current.every((item, index) => {
-      const other = next[index];
-      return item.id === other.id && item.x === other.x && item.y === other.y && item.label === other.label;
-    })
-  );
-}
-
-function regionLabelsEqual(current: ScreenRegionLabel[], next: ScreenRegionLabel[]) {
-  return (
-    current.length === next.length &&
-    current.every((item, index) => {
-      const other = next[index];
-      return item.id === other.id && item.x === other.x && item.y === other.y && item.zh === other.zh && item.en === other.en;
-    })
-  );
 }
 
 function rafThrottle(callback: () => void) {
@@ -4206,11 +4187,9 @@ function buildMapRegionLabels(collection: GeoJSON.FeatureCollection): MapRegionL
       const propertyCenter = readPropertyCenter(feature.properties);
       const coordinate = propertyCenter ?? geometryCenter(feature.geometry);
       if (!zh || !coordinate) return null;
-      if (!(zh in REGION_EN_NAMES)) return null;
       return {
         id: `${rawName || zh}-${index}`,
         zh,
-        en: REGION_EN_NAMES[zh] ?? zh.toUpperCase(),
         coordinate
       };
     })
@@ -4248,6 +4227,22 @@ function readPropertyCenter(properties: GeoJSON.GeoJsonProperties): [number, num
 
 function shortRegionName(name: string) {
   return name.replace(/特别行政区|壮族自治区|回族自治区|维吾尔自治区|自治区|省|市/g, "").trim();
+}
+
+function polygonContainsCoordinate(
+  polygon: ReadonlyArray<readonly [number, number]>,
+  coordinate: readonly [number, number]
+) {
+  const [x, y] = coordinate;
+  let inside = false;
+  for (let current = 0, previous = polygon.length - 1; current < polygon.length; previous = current, current += 1) {
+    const [currentX, currentY] = polygon[current];
+    const [previousX, previousY] = polygon[previous];
+    if ((currentY > y) === (previousY > y)) continue;
+    const intersectionX = ((previousX - currentX) * (y - currentY)) / (previousY - currentY) + currentX;
+    if (x < intersectionX) inside = !inside;
+  }
+  return inside;
 }
 
 function geometryCenter(geometry: GeoJSON.Geometry): [number, number] | null {
@@ -4358,28 +4353,6 @@ function WindFieldTimeBadge({ windField, currentStorm }: { windField: WindFieldP
       <small>{formatGfsTime(windField.updatedAt)} · {windField.cycle ?? "F000"}</small>
       {currentStorm ? <em>最新路径 {formatBeijingTime(currentStorm.updatedAt)} BJT{lagHours !== null ? ` · 相差 ${lagHours} 小时` : ""}</em> : null}
     </aside>
-  );
-}
-
-function LatestPathCenterMarker({ point, storm }: { point: ScreenPoint | null; storm: Storm | null }) {
-  if (!point || !storm) return null;
-  return (
-    <div className="latest-path-center-marker" style={{ left: point.x, top: point.y }} aria-label={`最新路径中心 ${formatBeijingTime(storm.updatedAt)} 北京时间`}>
-      <span aria-hidden="true">☠</span>
-      <small>最新路径中心</small>
-      <em>{formatBeijingTime(storm.updatedAt)} BJT</em>
-    </div>
-  );
-}
-
-function HistoricalTrackOverlay({ path }: { path: ScreenPath | null }) {
-  if (!path || path.points.length < 2) return null;
-  const points = path.points.map((point) => `${point.x},${point.y}`).join(" ");
-  return (
-    <svg className="historical-track-overlay" viewBox={`0 0 ${path.width} ${path.height}`} preserveAspectRatio="none" aria-hidden="true">
-      <polyline className="historical-track-shadow" points={points} />
-      <polyline className="historical-track-line" points={points} />
-    </svg>
   );
 }
 

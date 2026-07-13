@@ -127,18 +127,6 @@ a:focus-visible {
   inset: 0;
 }
 
-.terrain-elevation-canvas {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  opacity: 0.9;
-  mix-blend-mode: multiply;
-  filter: saturate(1.35) contrast(1.08);
-}
-
 .satellite-cloud-overlay {
   position: absolute;
   z-index: 2;
@@ -290,10 +278,27 @@ a:focus-visible {
   gap: 2px;
   min-width: 76px;
   transform: translate(-50%, -50%);
-  color: #ff382f;
+  color: var(--track-color, #ff382f);
   pointer-events: none;
   text-align: center;
-  text-shadow: 0 0 5px rgba(255, 34, 28, 0.98), 0 0 15px rgba(255, 50, 44, 0.72), 0 0 26px rgba(255, 50, 44, 0.52);
+  text-shadow: 0 0 5px color-mix(in srgb, var(--track-color, #ff382f) 96%, white), 0 0 15px color-mix(in srgb, var(--track-color, #ff382f) 72%, transparent), 0 0 26px color-mix(in srgb, var(--track-color, #ff382f) 52%, transparent);
+}
+
+/* A center can legitimately sit beneath the fixed top HUD. Move its label
+   below the HUD while retaining a short leader to the true map coordinate. */
+.latest-path-center-marker[data-hud-offset="true"] {
+  transform: translate(-50%, 0);
+}
+
+.latest-path-center-marker[data-hud-offset="true"]::before {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  width: 1px;
+  height: var(--hud-offset);
+  background: linear-gradient(to top, var(--track-color, #ff382f), color-mix(in srgb, var(--track-color, #ff382f) 20%, transparent));
+  box-shadow: 0 0 5px var(--track-color, #ff382f);
+  content: "";
 }
 
 .historical-track-overlay {
@@ -306,6 +311,23 @@ a:focus-visible {
   pointer-events: none;
 }
 
+.historical-track-layer,
+.latest-track-center-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.historical-track-layer {
+  z-index: 8;
+}
+
+.latest-track-center-layer {
+  z-index: 24;
+}
+
 .historical-track-shadow,
 .historical-track-line {
   fill: none;
@@ -314,12 +336,12 @@ a:focus-visible {
 }
 
 .historical-track-shadow {
-  stroke: rgba(37, 10, 8, 0.72);
+  stroke: color-mix(in srgb, var(--track-color, #ff5447) 35%, #02080c);
   stroke-width: 6.6;
 }
 
 .historical-track-line {
-  stroke: #ff5447;
+  stroke: var(--track-color, #ff5447);
   stroke-width: 3.2;
   stroke-linecap: round;
   filter: none;
@@ -328,14 +350,14 @@ a:focus-visible {
 .latest-path-center-marker span {
   font-size: 32px;
   line-height: 26px;
-  filter: drop-shadow(0 0 7px rgba(255, 46, 38, 0.96));
+  filter: drop-shadow(0 0 7px var(--track-color, #ff382f));
 }
 
 .latest-path-center-marker small {
   padding: 2px 4px;
-  border: 1px solid rgba(255, 71, 60, 0.7);
+  border: 1px solid color-mix(in srgb, var(--track-color, #ff382f) 70%, white);
   background: rgba(35, 5, 4, 0.82);
-  color: #ffd2ca;
+  color: color-mix(in srgb, var(--track-color, #ff382f) 42%, white);
   font-size: 9px;
   font-weight: 800;
   line-height: 1;
@@ -345,7 +367,7 @@ a:focus-visible {
 .latest-path-center-marker em {
   padding: 1px 3px;
   background: rgba(35, 5, 4, 0.7);
-  color: #ffb4ab;
+  color: color-mix(in srgb, var(--track-color, #ff382f) 58%, white);
   font-size: 9px;
   font-style: normal;
   white-space: nowrap;
@@ -433,9 +455,7 @@ a:focus-visible {
 
 .map-region-label {
   position: absolute;
-  display: grid;
-  gap: 1px;
-  min-width: 74px;
+  min-width: 42px;
   color: rgba(12, 45, 54, 0.78);
   text-align: center;
   text-shadow:
@@ -446,13 +466,8 @@ a:focus-visible {
 
 .map-region-label b {
   color: rgba(9, 44, 52, 0.9);
-  font-size: 18px;
+  font-size: 16px;
   line-height: 1;
-}
-
-.map-region-label span {
-  font-size: 11px;
-  letter-spacing: 0.08em;
 }
 
 .forecast-badge {
@@ -3481,6 +3496,21 @@ a:focus-visible {
     drop-shadow(0 0 var(--storm-glow-radius, 22px) rgba(0, 216, 255, 0.18));
   transform-origin: center;
   transition: width 80ms linear, height 80ms linear;
+}
+
+/* All camera gestures share one cheap composition mode. Geographic content
+   still moves continuously; decorative storm work resumes after moveend. */
+.map-stage[data-camera-moving="true"] .storm-map-marker,
+.map-stage[data-camera-moving="true"] .storm-map-marker *,
+.map-stage[data-camera-moving="true"] .storm-map-marker *::before,
+.map-stage[data-camera-moving="true"] .storm-map-marker *::after {
+  animation-play-state: paused !important;
+  transition: none !important;
+}
+
+.map-stage[data-camera-moving="true"] .storm-map-marker,
+.map-stage[data-camera-moving="true"] .wind-particle-canvas {
+  filter: none;
 }
 
 .storm-satellite-core {

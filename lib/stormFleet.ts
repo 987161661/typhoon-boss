@@ -9,6 +9,17 @@ export const FORECAST_ROUTE_COLORS: Record<string, string> = {
   HKO: "#ff985d"
 };
 
+// These colors identify a storm's observed route, rather than its forecast
+// provider. The mapping is stable for a storm id, so changing the locked
+// target never recolors the fleet.
+export const STORM_TRACK_COLORS = ["#ff5b4d", "#31d6f4", "#c98cff", "#ffd166", "#6ee7a8"];
+
+export function stormTrackColor(stormId: string) {
+  let hash = 0;
+  for (const character of stormId) hash = (hash * 31 + character.charCodeAt(0)) >>> 0;
+  return STORM_TRACK_COLORS[hash % STORM_TRACK_COLORS.length];
+}
+
 export interface StormFleetGeo {
   routes: GeoJSON.FeatureCollection;
   points: GeoJSON.FeatureCollection;
@@ -37,7 +48,8 @@ export function buildStormFleetGeo(storms: Storm[], activeStormId: string | null
       stormId: storm.id,
       code: storm.code,
       nameZh: storm.nameZh,
-      active: storm.id === activeStormId
+      active: storm.id === activeStormId,
+      trackColor: stormTrackColor(storm.id)
     };
     const track = storm.track.map((point) => [point.lon, point.lat]);
 

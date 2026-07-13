@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { alignStormToWindCenter, buildStormFleetGeo, FORECAST_ROUTE_COLORS, stormFleetBounds, windFieldMatchesStorm } from "../lib/stormFleet";
+import { alignStormToWindCenter, buildStormFleetGeo, FORECAST_ROUTE_COLORS, stormFleetBounds, stormTrackColor, windFieldMatchesStorm } from "../lib/stormFleet";
 import type { Storm } from "../lib/types";
 
 function storm(id: string, lon: number, lat: number): Storm {
@@ -50,6 +50,20 @@ test("fleet geo keeps every storm while identifying the locked target", () => {
   assert.deepEqual(new Set(geo.routes.features.map((feature) => feature.properties?.stormId)), new Set(["202609", "202611"]));
   assert.equal(geo.routes.features.filter((feature) => feature.properties?.active).length, 2);
   assert.equal(geo.routes.features.filter((feature) => feature.properties?.routeKind === "forecast").length, 2);
+  assert.deepEqual(
+    geo.routes.features.filter((feature) => feature.properties?.routeKind === "track").map((feature) => feature.properties?.trackColor),
+    storms.map((item) => stormTrackColor(item.id))
+  );
+});
+
+test("storm track colors stay stable when the locked target changes", () => {
+  const storms = [storm("202609", 118, 33), storm("202611", 136, 10)];
+  const first = buildStormFleetGeo(storms, "202609");
+  const second = buildStormFleetGeo(storms, "202611");
+  assert.deepEqual(
+    first.routes.features.filter((feature) => feature.properties?.routeKind === "track").map((feature) => feature.properties?.trackColor),
+    second.routes.features.filter((feature) => feature.properties?.routeKind === "track").map((feature) => feature.properties?.trackColor)
+  );
 });
 
 test("fleet bounds include current, historical, and forecast positions", () => {
