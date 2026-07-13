@@ -19,3 +19,19 @@ test("JTWC bulletin must match the storm identity", () => {
   const parsed = parseJtwcStructureBulletin("WDPN31 PGTW 120900 PROGNOSTIC REASONING FOR TYPHOON 09W (BAVI) WITH A STABLE EYE", storm, "https://example.invalid");
   assert.equal(parsed.source, "jtwc");
 });
+
+test("JTWC final warning takes precedence over eyewall interpretation", () => {
+  const parsed = parseJtwcStructureBulletin(
+    "SUBJ: TROPICAL STORM 09W (BAVI) WARNING NR 044 WTPN31 PGTW 112100 " +
+      "TROPICAL STORM 09W (BAVI) DOWNGRADED FROM TYPHOON. " +
+      "DISSIPATING AS A SIGNIFICANT TROPICAL CYCLONE OVER LAND. " +
+      "THIS IS THE FINAL WARNING ON THIS SYSTEM.",
+    storm,
+    "https://science.nrlmry.navy.mil/atcf/docs/current_storms/wp092026.wrn"
+  );
+  assert.equal(parsed.state, "overland-dissipation");
+  assert.equal(parsed.stateLabel, "登陆后内核衰减");
+  assert.match(parsed.detail, /眼墙置换判读结束/);
+  assert.equal(parsed.sourceLabel, "JTWC 警报（NRL ATCF 镜像）");
+  assert.equal(parsed.observedAt, "2026-07-11T21:00:00.000Z");
+});

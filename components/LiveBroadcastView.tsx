@@ -853,16 +853,18 @@ function buildStructureBrief(bossProfile?: BossProfile | null): LiveStructureBri
     return {
       mode: "structure",
       eyebrow: "核心结构判读",
-      title: structure.state === "unknown" && isHistoryFallback ? "历史结构记录保留中" : structure.stateLabel,
+      // A retained bulletin is still the last valid structural conclusion. Do
+      // not replace that conclusion with a source-health message just because
+      // a newer bulletin has not arrived yet.
+      title: structure.stateLabel,
       detail: [
-        structure.cycleLabel,
+        isHistoryFallback ? "保留最后一次有效结构判读" : structure.cycleLabel,
         hasRetainedHistory ? `已记录 ${structure.historyCount} 份 JTWC 通报` : "",
-        structure.detail,
-        isHistoryFallback ? "实时源待恢复，继续保留最后结构结论。" : ""
+        structure.detail
       ].filter(Boolean).join(" · "),
-      evidenceLabel: isHistoryFallback ? "历史结构记录" : evidenceLabel(structure.evidenceLevel),
+      evidenceLabel: isHistoryFallback ? "最后有效结构通报" : evidenceLabel(structure.evidenceLevel),
       evidenceLevel: structure.evidenceLevel,
-      confidenceLabel: isHistoryFallback ? "等待实时更新" : `置信 ${Math.round(structure.confidence * 100)}%`,
+      confidenceLabel: isHistoryFallback ? "等待后续通报" : `置信 ${Math.round(structure.confidence * 100)}%`,
       sourceLabel: structure.sourceLabel,
       observedAt: formatCompactTime(structure.observedAt)
     };

@@ -21,7 +21,7 @@ const SOURCE_POLICY = {
   canonicalAuthority: "权威口径以中央气象台 / 国家气象中心和属地气象应急部门为准",
   machineReadableTrackSource: "浙江省水利厅公开台风路径接口",
   regionalWarningAuthority: "国家海洋预报台 / 属地气象台与应急部门",
-  structureAnalysisSource: "JTWC结构分析；JAXA / NOAA微波交叉验证待接入"
+  structureAnalysisSource: "JTWC 推理/警报（NRL ATCF 镜像回退）；JAXA / NOAA 微波交叉验证待接入"
 };
 
 export async function buildBossProfiles(storms: Storm[]): Promise<BossProfile[]> {
@@ -37,7 +37,7 @@ export async function buildBossProfile(storm: Storm): Promise<BossProfile> {
     boundedEvidence((signal) => getHimawariProductsForStorm(storm, signal), unavailableSatellite("卫星产品超过快速生成预算。")),
     boundedEvidence((signal) => getAhiEvidenceForStorm(storm, signal), unavailableAhi("AHI 元数据超过快速生成预算。")),
     boundedEvidence(
-      (signal) => getStormStructureIntelligence(storm, signal),
+      () => getStormStructureIntelligence(storm),
       retainedStructure ?? unavailableStructure(storm, "JTWC structure request exceeded the fast response budget.")
     )
   ]);
@@ -366,7 +366,7 @@ function chooseArchetype(
 ): BossArchetype {
   const scores: Record<BossArchetype, number> = {
     "wind-core": scoreWindCore(storm),
-    "eyewall-shifter": structure.state === "unknown" || structure.state === "stable-eye" ? 0 : 10.5,
+    "eyewall-shifter": structure.state === "unknown" || structure.state === "stable-eye" || structure.state === "overland-dissipation" ? 0 : 10.5,
     "rain-bulk": scoreRainBulk(environment),
     "giant-radius": clamp((storm.windRadiiKm.r7 || 0) / 70, 0, 9),
     "track-trickster": storm.forecast.length >= 7 ? 3.2 : 1.4,
@@ -386,6 +386,7 @@ function choosePhase(
   structure: BossStructureSummary
 ): BossPhase {
   if (isArchived(storm)) return "archived";
+  if (structure.state === "overland-dissipation") return "weakening";
   if (structure.state !== "unknown" && structure.state !== "stable-eye") return "restructuring-hint";
   if (landfall.isLandfallPressure) return "landfall-pressure";
   if (intensity.isRapidIntensifying) return "intensifying";
@@ -447,7 +448,7 @@ function chooseSkills(candidates: Array<BossSkill | null>) {
 }
 
 function eyewallTransformationSkill(structure: BossStructureSummary): BossSkill | null {
-  if (structure.state === "unknown" || structure.state === "stable-eye") return null;
+  if (structure.state === "unknown" || structure.state === "stable-eye" || structure.state === "overland-dissipation") return null;
   const severityByState: Partial<Record<BossStructureSummary["state"], number>> = {
     "secondary-ring-forming": 7,
     "replacement-active": 9,
@@ -742,7 +743,8 @@ function buildEvents(
       "replacement-active": "眼壁置换进行中",
       "replacement-stalled": "眼壁蜕变受阻",
       "replacement-completed": "外环继位完成",
-      "replacement-collapsed": "置换结构崩解"
+      "replacement-collapsed": "置换结构崩解",
+      "overland-dissipation": "登陆后内核衰减"
     };
     events.push({
       id: `event-structure-${structure.bulletinId ?? structure.observedAt}-${structure.state}`,

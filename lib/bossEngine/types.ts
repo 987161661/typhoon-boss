@@ -28,7 +28,8 @@ export type CoreStructureState =
   | "replacement-active"
   | "replacement-stalled"
   | "replacement-completed"
-  | "replacement-collapsed";
+  | "replacement-collapsed"
+  | "overland-dissipation";
 
 export type BossIntensityPhase = "forming" | "intensifying" | "mature" | "weakening" | "archived";
 export type BossThreatPhase = "open-ocean" | "landfall-pressure" | "archived";

@@ -13,6 +13,7 @@ const LEDGER_VERSION = 1;
 const CACHE_TTL_MS = 8 * 60 * 1000;
 const FAILURE_CACHE_TTL_MS = 45 * 1000;
 const MAX_TRANSITIONS_PER_STORM = 80;
+const STRUCTURE_CACHE_VERSION = "lifecycle-v1";
 const RUNTIME_DIR = process.env.BOSS_RUNTIME_DIR
   ? path.resolve(process.env.BOSS_RUNTIME_DIR)
   : path.join(process.cwd(), ".runtime");
@@ -31,7 +32,8 @@ const STRUCTURE_LABELS: Record<CoreStructureState, string> = {
   "replacement-active": "眼壁置换进行中",
   "replacement-stalled": "眼壁蜕变受阻",
   "replacement-completed": "外环继位完成",
-  "replacement-collapsed": "置换结构崩解"
+  "replacement-collapsed": "置换结构崩解",
+  "overland-dissipation": "登陆后内核衰减"
 };
 
 interface StructureTransition {
@@ -64,16 +66,18 @@ const structureInFlight = new Map<string, Promise<BossStructureSummary>>();
 let ledgerReadPromise: Promise<StructureLedger> | null = null;
 let ledgerWriteQueue: Promise<void> = Promise.resolve();
 
-export async function getStormStructureIntelligence(storm: Storm, signal?: AbortSignal): Promise<BossStructureSummary> {
+export async function getStormStructureIntelligence(storm: Storm): Promise<BossStructureSummary> {
   const source = jtwcSourceForStorm(storm);
-  if (signal) return loadStormStructure(storm, source, signal);
-  const cacheKey = `${storm.id}:${source.url}`;
+  const cacheKey = `${STRUCTURE_CACHE_VERSION}:${storm.id}:${source.url}`;
   const cached = structureCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
 
   const inFlight = structureInFlight.get(cacheKey);
   if (inFlight) return inFlight;
 
+  // This request intentionally outlives the rendering budget. A slow source
+  // must refresh the local ledger in the background instead of being aborted
+  // on every live-page render and never becoming the next valid snapshot.
   const request = loadStormStructure(storm, source)
     .then((value) => {
       const ttl = value.source === "unavailable" ? FAILURE_CACHE_TTL_MS : value.stale ? 2 * 60 * 1000 : CACHE_TTL_MS;
@@ -89,10 +93,10 @@ export async function getStormStructureIntelligence(storm: Storm, signal?: Abort
   return request;
 }
 
-async function loadStormStructure(storm: Storm, source: ReturnType<typeof jtwcSourceForStorm>, signal?: AbortSignal) {
+async function loadStormStructure(storm: Storm, source: ReturnType<typeof jtwcSourceForStorm>) {
   try {
-    const bulletin = await fetchJtwcBulletin(source.url, signal);
-    const observation = parseJtwcStructureBulletin(bulletin, storm, source.url);
+    const bulletin = await fetchJtwcBulletin(source);
+    const observation = parseJtwcStructureBulletin(bulletin.text, storm, bulletin.url);
     return persistObservation(storm.id, observation);
   } catch (error) {
     const reason = error instanceof Error ? error.message : "JTWC structure request failed.";
@@ -126,37 +130,44 @@ export async function getPersistedStormStructure(stormId: string): Promise<BossS
   };
 }
 
-async function fetchJtwcBulletin(url: string, outerSignal?: AbortSignal) {
-  let lastReason = "JTWC structure bulletin unavailable.";
-  for (let attempt = 0; attempt < 1; attempt += 1) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2_500);
-    try {
-      const response = await fetch(url, {
-        headers: {
-          Accept: "text/plain",
-          "User-Agent": "TyphoonBossRadar/1.0"
-        },
-        cache: "no-store",
-        signal: outerSignal ? AbortSignal.any([controller.signal, outerSignal]) : controller.signal
-      });
-      if (!response.ok) {
-        lastReason = `JTWC structure bulletin HTTP ${response.status}.`;
-        continue;
-      }
-      const text = await response.text();
-      if (!text.includes("PROGNOSTIC REASONING")) {
-        lastReason = "JTWC response did not contain a prognostic reasoning bulletin.";
-        continue;
-      }
-      return text;
-    } catch (error) {
-      lastReason = describeFetchError(error, lastReason);
-    } finally {
-      clearTimeout(timeout);
+async function fetchJtwcBulletin(source: ReturnType<typeof jtwcSourceForStorm>) {
+  // The official reasoning message is the preferred source for an active
+  // eyewall cycle. NRL's ATCF mirror is fetched in parallel because it
+  // retains the official warning, final-warning and dissipation lifecycle
+  // statements when the JTWC product endpoint blocks this runtime.
+  const [reasoning, warning] = await Promise.allSettled([
+    fetchTextBulletin(source.url, "PROGNOSTIC REASONING"),
+    fetchTextBulletin(source.warningUrl, "WARNING NR")
+  ]);
+  if (reasoning.status === "fulfilled") return { text: reasoning.value, url: source.url };
+  if (warning.status === "fulfilled") return { text: warning.value, url: source.warningUrl };
+  const reasons = [reasoning, warning]
+    .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+    .map((result) => result.reason instanceof Error ? result.reason.message : String(result.reason));
+  throw new Error(reasons.join("; ") || "JTWC structure bulletin unavailable.");
+}
+
+async function fetchTextBulletin(url: string, expectedText: string) {
+  const controller = new AbortController();
+  const timeoutMs = url.includes("nrlmry.navy.mil") ? 8_000 : 2_000;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      headers: { Accept: "text/plain", "User-Agent": "TyphoonBossRadar/1.0" },
+      cache: "no-store",
+      signal: controller.signal
+    });
+    if (!response.ok) throw new Error(`JTWC text bulletin HTTP ${response.status}.`);
+    const text = await response.text();
+    if (!text.toUpperCase().includes(expectedText)) {
+      throw new Error(`JTWC response did not contain ${expectedText}.`);
     }
+    return text;
+  } catch (error) {
+    throw new Error(describeFetchError(error, "JTWC text bulletin unavailable."));
+  } finally {
+    clearTimeout(timeout);
   }
-  throw new Error(lastReason);
 }
 
 function describeFetchError(error: unknown, fallback: string) {
@@ -175,9 +186,10 @@ export function parseJtwcStructureBulletin(text: string, storm: Storm, sourceUrl
   const warningNumber = /WARNING NR\s+(\d+)/.exec(normalized)?.[1] ?? null;
   const bulletinId = warningNumber ? `JTWC-W${Number(warningNumber)}` : "JTWC-CURRENT";
   const observedAt = parseJtwcObservedAt(text) ?? new Date().toISOString();
+  const lifecycleState = classifyLifecycleState(normalized);
   const mentionsReplacement = /EYEWALL REPLACEMENT|CONCENTRIC EYEWALL|\bERC\b/.test(normalized);
-  const state = mentionsReplacement ? classifyReplacementState(normalized) : classifyNonReplacementState(normalized);
-  const signals = extractStructureSignals(normalized);
+  const state = lifecycleState ?? (mentionsReplacement ? classifyReplacementState(normalized) : classifyNonReplacementState(normalized));
+  const signals = lifecycleState ? emptyStructureSignals() : extractStructureSignals(normalized);
   const confidence = state === "unknown" ? 0.28 : state === "stable-eye" ? 0.72 : 0.94;
   const evidenceLevel: BossEvidenceLevel = state === "unknown" ? "visualHint" : "confirmed";
 
@@ -190,7 +202,7 @@ export function parseJtwcStructureBulletin(text: string, storm: Storm, sourceUrl
     confidence,
     evidenceLevel,
     source: "jtwc",
-    sourceLabel: JTWC_LABEL,
+    sourceLabel: sourceUrl.includes("nrlmry.navy.mil") ? "JTWC 警报（NRL ATCF 镜像）" : JTWC_LABEL,
     sourceUrl,
     bulletinId,
     observedAt,
@@ -202,6 +214,11 @@ export function parseJtwcStructureBulletin(text: string, storm: Storm, sourceUrl
         ? [`${bulletinId} 未包含可归一化的眼墙结构结论。`]
         : ["结构状态来自JTWC业务分析，不等同中国气象部门预警等级。"]
   };
+}
+
+function classifyLifecycleState(text: string): CoreStructureState | null {
+  const terminalOverland = /FINAL WARNING|DISSIPATED AS A SIGNIFICANT TROPICAL CYCLONE OVER LAND|DISSIPATING AS A SIGNIFICANT TROPICAL CYCLONE OVER LAND/;
+  return terminalOverland.test(text) ? "overland-dissipation" : null;
 }
 
 function classifyReplacementState(text: string): CoreStructureState {
@@ -255,6 +272,10 @@ function extractStructureSignals(text: string): BossStructureSignals {
   };
 }
 
+function emptyStructureSignals(): BossStructureSignals {
+  return { innerEyewall: "unknown", outerEyewall: "unknown", innerRadiusNm: null, outerRadiusNm: null };
+}
+
 function buildStructureDetail(state: CoreStructureState, signals: BossStructureSignals, bulletinId: string) {
   const radiusText =
     signals.innerRadiusNm && signals.outerRadiusNm
@@ -269,7 +290,8 @@ function buildStructureDetail(state: CoreStructureState, signals: BossStructureS
     "replacement-active": `${bulletinId} 确认眼壁置换正在进行。`,
     "replacement-stalled": `${bulletinId} 确认眼壁置换受阻，外环尚未完成接管。`,
     "replacement-completed": `${bulletinId} 确认外眼壁已完成接管。`,
-    "replacement-collapsed": `${bulletinId} 显示外围置换结构已经瓦解。`
+    "replacement-collapsed": `${bulletinId} 显示外围置换结构已经瓦解。`,
+    "overland-dissipation": `${bulletinId} 确认系统已登陆并在陆地上衰减，眼墙置换判读结束。`
   };
   return `${details[state]}${radiusText}`;
 }
@@ -288,7 +310,9 @@ async function persistObservation(stormId: string, observation: BossStructureSum
       monitoredCycle = previous?.monitoredCycle ?? monitoredCycle;
     }
 
-    const cycleLabel =
+    const cycleLabel = observation.state === "overland-dissipation"
+      ? "登陆后衰减 · 眼墙判读结束"
+      :
       observation.cycleOrdinal !== null
         ? `第 ${observation.cycleOrdinal} 轮`
         : monitoredCycle > 0
@@ -374,17 +398,19 @@ function unknownStructure(storm: Storm, reason: string, sourceUrl: string): Boss
 
 function jtwcSourceForStorm(storm: Storm) {
   const digits = String(storm.code || storm.id).replace(/\D/g, "");
-  const year = (digits.slice(0, 4) || String(new Date().getUTCFullYear())).slice(-2);
+  const fullYear = digits.slice(0, 4) || String(new Date().getUTCFullYear());
+  const year = fullYear.slice(-2);
   const stormNumber = (digits.slice(-2) || "00").padStart(2, "0");
   const basinId = `wp${stormNumber}${year}`;
   return {
     basinId,
-    url: `https://www.metoc.navy.mil/jtwc/products/${basinId}prog.txt`
+    url: `https://www.metoc.navy.mil/jtwc/products/${basinId}prog.txt`,
+    warningUrl: `https://science.nrlmry.navy.mil/atcf/docs/current_storms/wp${stormNumber}${fullYear}.wrn`
   };
 }
 
 function parseJtwcObservedAt(text: string) {
-  const stamp = /^WDPN\d+\s+PGTW\s+(\d{2})(\d{2})(\d{2})/m.exec(text);
+  const stamp = /(?:WDPN|WTPN)\d+\s+PGTW\s+(\d{2})(\d{2})(\d{2})/.exec(text);
   if (!stamp) return null;
   const now = new Date();
   let date = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), Number(stamp[1]), Number(stamp[2]), Number(stamp[3])));
