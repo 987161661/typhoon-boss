@@ -1,22 +1,28 @@
 param(
   [int]$Port = 3038,
-  [switch]$OpenBrowser
+  [switch]$OpenBrowser,
+  [switch]$NoLinglan
 )
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $vtuberRoot = 'D:\LocalToolset\vtuber\aituber-onair-main'
-$linglanLauncher = Join-Path $vtuberRoot 'Start-Linglan-Bilibili.ps1'
+$linglanLauncher = Join-Path $vtuberRoot 'Start-AITuber.ps1'
 $runtimeDir = Join-Path $projectRoot '.runtime'
 $serviceLogDir = Join-Path $projectRoot 'runtime\logs'
 
-if (-not (Test-Path -LiteralPath $linglanLauncher)) {
-  throw "Linglan runtime was not found: $linglanLauncher"
-}
+if (-not $NoLinglan) {
+  if (-not (Test-Path -LiteralPath $linglanLauncher)) {
+    throw "Linglan runtime was not found: $linglanLauncher"
+  }
 
-# Starts the Bilibili supervisor and the avatar/TTS runtime only when their
-# ports are not already occupied. The launcher is intentionally idempotent.
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $linglanLauncher
+  # Start the avatar runtime itself, not the Bilibili supervisor. The latter
+  # requires a room ID and must never prevent the local radar from launching.
+  Start-Process -FilePath 'powershell.exe' `
+    -ArgumentList @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $linglanLauncher) `
+    -WorkingDirectory $vtuberRoot `
+    -WindowStyle Hidden
+}
 
 $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
 if (-not $listener) {
@@ -67,26 +73,30 @@ if (-not $agentStatus.settings.evolutionAgentEnabled -or -not $agentStatus.sched
   throw 'Typhoon evolution agent was not enabled. Check TYPHOON_EVOLUTION_AGENT_ENABLED and the live-control settings.'
 }
 
-$hostReady = $false
-for ($attempt = 0; $attempt -lt 30; $attempt += 1) {
-  try {
-    $hostHealth = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/api/digital-host/health" -UseBasicParsing -TimeoutSec 2
-    if ($hostHealth.StatusCode -eq 200) {
-      $hostReady = $true
-      break
-    }
-  } catch {
-    Start-Sleep -Milliseconds 500
-  }
-}
-
-if (-not $hostReady) {
-  throw "Linglan runtime did not connect through http://127.0.0.1:$Port/api/digital-host/health"
-}
-
 Write-Host "Typhoon live page: $liveUrl"
-Write-Host 'Linglan runtime: http://127.0.0.1:5173/?overlay=1'
 Write-Host "Evolution agent: enabled (every $($agentStatus.scheduler.intervalMinutes) minutes)"
+
+if (-not $NoLinglan) {
+  $hostReady = $false
+  for ($attempt = 0; $attempt -lt 30; $attempt += 1) {
+    try {
+      $hostHealth = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/api/digital-host/health" -UseBasicParsing -TimeoutSec 2
+      if ($hostHealth.StatusCode -eq 200) {
+        $hostReady = $true
+        break
+      }
+    } catch {
+      Start-Sleep -Milliseconds 500
+    }
+  }
+
+  if (-not $hostReady) {
+    throw "Linglan runtime did not connect through http://127.0.0.1:$Port/api/digital-host/health"
+  }
+  Write-Host 'Linglan runtime: http://127.0.0.1:5173/?overlay=1'
+} else {
+  Write-Host 'Linglan runtime: skipped by -NoLinglan'
+}
 
 if ($OpenBrowser) {
   Start-Process $liveUrl

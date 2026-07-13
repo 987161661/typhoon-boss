@@ -4,10 +4,10 @@
 
 ## 权威启动入口
 
-双击 [Start-Typhoon-Live.cmd](Start-Typhoon-Live.cmd)。它会验证以下两条真实链路后才返回成功：
+双击 [Start-Typhoon-Live.cmd](Start-Typhoon-Live.cmd)。它会自动启动并验证雷达直播页和凌岚数字人：
 
 - 雷达直播页：`http://127.0.0.1:3038/live`
-- 凌岚数字人：通过 `http://127.0.0.1:3038/api/digital-host/health` 验证，默认上游为 `5173`
+- 凌岚数字人：通过 `http://127.0.0.1:3038/api/digital-host/health` 验证，默认上游为 `5173`。数字人本体不依赖 B 站房间号；如需仅启动雷达，可在 PowerShell 执行 `scripts/start_live_with_linglan.ps1 -NoLinglan`。
 
 该入口当前以 Next 开发模式启动，适合本机直播和值守。不要同时再用 `npm run dev` 或 `npm run start` 占用 3038。
 

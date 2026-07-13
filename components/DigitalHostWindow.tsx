@@ -14,6 +14,8 @@ type DirectorScene = "briefing" | "analysis";
 export type HostChatRequest = {
   id: string;
   text: string;
+  viewerId?: string;
+  viewerName?: string;
 };
 
 type HostHealth = {
@@ -37,6 +39,7 @@ const HOST_WINDOW_MIN_HEIGHT = 220;
 const HOST_WINDOW_PADDING = 8;
 const CHAT_RETRY_INTERVAL_MS = 750;
 const CHAT_MAX_ATTEMPTS = 8;
+const DEFAULT_RADAR_VIEWER = "001号人类";
 
 type HostWindowBounds = {
   left: number;
@@ -87,6 +90,8 @@ export function DigitalHostWindow({
   const pendingChatRef = useRef<{
     id: string;
     text: string;
+    viewerId: string;
+    viewerName: string;
     attempts: number;
     acknowledged: boolean;
   } | null>(null);
@@ -208,6 +213,11 @@ export function DigitalHostWindow({
     pendingChatRef.current = {
       id: chatRequest.id,
       text: chatRequest.text.trim(),
+      viewerId: chatRequest.viewerId?.trim() || DEFAULT_RADAR_VIEWER,
+      viewerName:
+        chatRequest.viewerName?.trim() ||
+        chatRequest.viewerId?.trim() ||
+        DEFAULT_RADAR_VIEWER,
       attempts: 0,
       acknowledged: false
     };
@@ -232,6 +242,8 @@ export function DigitalHostWindow({
           type: "linglan:chat",
           requestId: pending.id,
           text: pending.text,
+          viewerId: pending.viewerId,
+          viewerName: pending.viewerName,
           requestedAt: Date.now()
         },
         hostOrigin
@@ -251,7 +263,12 @@ export function DigitalHostWindow({
       void fetch("/api/digital-host/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ requestId: pending.id, text: pending.text })
+        body: JSON.stringify({
+          requestId: pending.id,
+          text: pending.text,
+          viewerId: pending.viewerId,
+          viewerName: pending.viewerName
+        })
       })
         .then((response) => {
           if (!response.ok || pending.acknowledged) return;
