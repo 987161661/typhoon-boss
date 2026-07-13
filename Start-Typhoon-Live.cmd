@@ -2,7 +2,7 @@
 setlocal
 
 cd /d "%~dp0"
-powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start_live_with_linglan.ps1" -OpenBrowser
+powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\start_live_with_linglan.ps1" -Port 3038 -OpenBrowser
 set "exitCode=%ERRORLEVEL%"
 
 if not "%exitCode%"=="0" (

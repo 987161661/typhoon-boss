@@ -56,7 +56,6 @@ import {
 
 const MAP_STYLE = {
   version: 8,
-  glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
   sources: {
     basemap: {
       type: "raster",
@@ -134,11 +133,14 @@ const TERRAIN_TILE_URL = "https://s3.amazonaws.com/elevation-tiles-prod/terrariu
 const TERRAIN_RENDER_DEBOUNCE_MS = 140;
 const MAX_TERRAIN_TILES_PER_RENDER = 40;
 const CANVAS_DPR_CAP = 1.5;
+const REGIONAL_SATELLITE_SOURCE_ID = "regional-satellite-source";
+const REGIONAL_SATELLITE_LAYER_ID = "regional-satellite-layer";
 const GLOBAL_SATELLITE_SOURCE_ID = "global-satellite-source";
 const GLOBAL_SATELLITE_LAYER_ID = "global-satellite-layer";
 const CWA_RADAR_SOURCE_ID = "cwa-radar-source";
 const CWA_RADAR_LAYER_ID = "cwa-radar-layer";
 const terrainTileCache = new Map<string, Promise<HTMLCanvasElement | null>>();
+const regionalSatelliteImageUrls = new WeakMap<MapLibreMap, string>();
 const globalSatelliteImageUrls = new WeakMap<MapLibreMap, string>();
 const cwaRadarImageUrls = new WeakMap<MapLibreMap, string>();
 let windFlowRendererSequence = 0;
@@ -195,15 +197,19 @@ interface PathScreenLabel {
   label: string;
 }
 
-interface DefenseResponse {
-  defense: ProvinceDefenseStatus;
-}
-
-interface ScreenBox {
+interface ScreenPoint {
   x: number;
   y: number;
+}
+
+interface ScreenPath {
+  points: ScreenPoint[];
   width: number;
   height: number;
+}
+
+interface DefenseResponse {
+  defense: ProvinceDefenseStatus;
 }
 
 const DEFAULT_ENVIRONMENT_LAYERS: EnvironmentLayerToggles = {
@@ -240,6 +246,8 @@ export function TyphoonMap({
   const [mapReady, setMapReady] = useState(false);
   const [pathScreenLabels, setPathScreenLabels] = useState<PathScreenLabel[]>([]);
   const [regionScreenLabels, setRegionScreenLabels] = useState<ScreenRegionLabel[]>([]);
+  const [latestPathCenterScreenPoint, setLatestPathCenterScreenPoint] = useState<ScreenPoint | null>(null);
+  const [historicalTrackScreenPath, setHistoricalTrackScreenPath] = useState<ScreenPath | null>(null);
   const [environmentLayers, setEnvironmentLayers] = useState<EnvironmentLayerToggles>(DEFAULT_ENVIRONMENT_LAYERS);
   // The operational default is a station-style, decoded view. Flow animation
   // remains available, but is intentionally an opt-in model visualisation.
@@ -252,7 +260,6 @@ export function TyphoonMap({
   const [observationsVisible, setObservationsVisible] = useState(false);
   const [cwaRadarVisible, setCwaRadarVisible] = useState(false);
   const [impactArea, setImpactArea] = useState<ImpactAreaPayload | null>(null);
-  const [satelliteScreenBox, setSatelliteScreenBox] = useState<ScreenBox | null>(null);
   const [watchRegions, setWatchRegions] = useState<ProvinceAlertPoint[]>([]);
   useEffect(() => {
     if (view === "live" || typeof window === "undefined") return;
@@ -359,6 +366,10 @@ export function TyphoonMap({
     latestWindFieldRef.current = pendingWindFieldRef.current;
     setStableWindField(pendingWindFieldRef.current);
   }, [windFieldSignature]);
+  const gfsAlignedStorm = useMemo(
+    () => stormAtGfsAnalysisCenter(storm, stableWindField),
+    [storm, stableWindField]
+  );
   const {
     snapshot,
     error: snapshotError,
@@ -616,7 +627,7 @@ export function TyphoonMap({
     const map = mapRef.current;
     if (!map || !mapReady) return;
     updateStormSources(map, stormGeo);
-    renderStormOnMap(map, storm, markerRef, satelliteLayer, bossProfile);
+    renderStormOnMap(map, gfsAlignedStorm, markerRef, satelliteLayer, bossProfile);
     syncMapOverlays(map, storm, setPathScreenLabels, regionLabelsRef.current, setRegionScreenLabels);
     if (storm) {
       // The live deck changes every five seconds. It must not be treated as a
@@ -645,11 +656,45 @@ export function TyphoonMap({
       setPathScreenLabels([]);
       setRegionScreenLabels(projectRegionLabels(map, regionLabelsRef.current));
     }
-  }, [storm, stormGeo, mapReady, theme, satelliteLayer, bossProfile, view]);
+  }, [storm, stormGeo, mapReady, theme, satelliteLayer, bossProfile, view, gfsAlignedStorm]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const shouldShowLatestCenter = Boolean(storm && stableWindField?.source === "NOAA/NCEP NOMADS Grib Filter" && stableWindField.analysisCenter);
+    if (!map || !mapReady || !storm) {
+      setLatestPathCenterScreenPoint(null);
+      setHistoricalTrackScreenPath(null);
+      return;
+    }
+    const sync = () => {
+      const point = map.project([storm.position.lon, storm.position.lat]);
+      const canvas = map.getCanvas();
+      const width = canvas.clientWidth;
+      const height = canvas.clientHeight;
+      const trackCoordinates = storm.track.map((item) => map.project([item.lon, item.lat]));
+      const lastTrackPoint = trackCoordinates[trackCoordinates.length - 1];
+      if (!lastTrackPoint || Math.hypot(lastTrackPoint.x - point.x, lastTrackPoint.y - point.y) > 0.5) trackCoordinates.push(point);
+      setHistoricalTrackScreenPath({
+        points: trackCoordinates.map((item) => ({ x: item.x, y: item.y })),
+        width,
+        height
+      });
+      setLatestPathCenterScreenPoint(shouldShowLatestCenter ? { x: point.x, y: point.y } : null);
+    };
+    const syncThrottled = rafThrottle(sync);
+    sync();
+    map.on("move", syncThrottled);
+    map.on("resize", syncThrottled);
+    return () => {
+      map.off("move", syncThrottled);
+      map.off("resize", syncThrottled);
+    };
+  }, [mapReady, storm, stableWindField]);
 
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
+    syncRegionalSatelliteLayer(map, satelliteLayer, environmentLayers.satellite);
     syncGlobalSatelliteLayer(map, satelliteLayer, environmentLayers.satellite);
   }, [satelliteLayer, environmentLayers.satellite, mapReady]);
 
@@ -658,27 +703,6 @@ export function TyphoonMap({
     if (!map || !mapReady) return;
     syncCwaRadarLayer(map, cwaRadarLayer, cwaRadarVisible);
   }, [cwaRadarLayer, cwaRadarVisible, mapReady]);
-
-  useEffect(() => {
-    const map = mapRef.current;
-    if (!map || !mapReady) return;
-    const syncSatellite = () => {
-      const nextBox =
-        satelliteLayer?.status === "available" && environmentLayers.satellite
-          ? projectSatelliteBox(map, satelliteLayer.bounds)
-          : null;
-      setSatelliteScreenBox((current) => (screenBoxesEqual(current, nextBox) ? current : nextBox));
-    };
-    syncSatellite();
-    map.on("move", syncSatellite);
-    map.on("zoom", syncSatellite);
-    map.on("resize", syncSatellite);
-    return () => {
-      map.off("move", syncSatellite);
-      map.off("zoom", syncSatellite);
-      map.off("resize", syncSatellite);
-    };
-  }, [satelliteLayer, environmentLayers.satellite, mapReady]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -750,7 +774,6 @@ export function TyphoonMap({
       <section className="map-stage" aria-label="台风 Boss 雷达地图">
         {mapFailed ? <FallbackMap storm={storm} /> : <div className="map-canvas" ref={mapNode} />}
         {!mapFailed ? <canvas className="terrain-elevation-canvas" ref={terrainCanvasRef} aria-hidden="true" /> : null}
-        <SatelliteCloudOverlay layer={satelliteLayer} box={satelliteScreenBox} />
         {!mapFailed ? <canvas className="gfs-scalar-canvas" ref={gfsScalarCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed ? <canvas className="gfs-wave-canvas" ref={gfsWaveCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed ? <canvas className="ecmwf-track-canvas" ref={ecmwfTrackCanvasRef} aria-hidden="true" /> : null}
@@ -758,6 +781,9 @@ export function TyphoonMap({
         {!mapFailed ? <canvas className="wind-color-canvas" ref={windColorCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed ? <canvas className="wind-particle-canvas" ref={windCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed ? <canvas className="forecast-route-canvas" ref={forecastCanvasRef} aria-hidden="true" /> : null}
+        {!mapFailed ? <WindFieldTimeBadge windField={stableWindField} currentStorm={storm} /> : null}
+        {!mapFailed ? <HistoricalTrackOverlay path={historicalTrackScreenPath} /> : null}
+        {!mapFailed ? <LatestPathCenterMarker point={latestPathCenterScreenPoint} storm={storm} /> : null}
         {isLiveView && liveDeck === "briefing" ? <LiveRouteLegend storm={storm} /> : null}
         <PerformanceOverlay
           enabled={showPerfOverlay}
@@ -1111,24 +1137,50 @@ function MapLabelLayer({ labels }: { labels: ScreenRegionLabel[] }) {
   );
 }
 
-function SatelliteCloudOverlay({ layer, box }: { layer: SatelliteLayerPayload | null; box: ScreenBox | null }) {
-  if (!layer?.imageUrl || layer.status !== "available" || !box) return null;
+function syncRegionalSatelliteLayer(map: MapLibreMap, layer: SatelliteLayerPayload | null, visible: boolean) {
+  const imageUrl = layer?.status === "available" ? layer.imageUrl : null;
+  if (!imageUrl || !layer) {
+    if (map.getLayer(REGIONAL_SATELLITE_LAYER_ID)) map.removeLayer(REGIONAL_SATELLITE_LAYER_ID);
+    if (map.getSource(REGIONAL_SATELLITE_SOURCE_ID)) map.removeSource(REGIONAL_SATELLITE_SOURCE_ID);
+    regionalSatelliteImageUrls.delete(map);
+    return;
+  }
 
-  return (
-    // eslint-disable-next-line @next/next/no-img-element
-    <img
-      className="satellite-cloud-overlay"
-      src={layer.imageUrl}
-      alt=""
-      aria-hidden="true"
-      style={{
-        left: box.x,
-        top: box.y,
-        width: box.width,
-        height: box.height
-      }}
-    />
-  );
+  const { bounds } = layer;
+  const coordinates: [[number, number], [number, number], [number, number], [number, number]] = [
+    [bounds.west, bounds.north],
+    [bounds.east, bounds.north],
+    [bounds.east, bounds.south],
+    [bounds.west, bounds.south]
+  ];
+  const existingSource = map.getSource(REGIONAL_SATELLITE_SOURCE_ID) as ImageSource | undefined;
+  const previousImageUrl = regionalSatelliteImageUrls.get(map);
+  if (!existingSource) {
+    map.addSource(REGIONAL_SATELLITE_SOURCE_ID, { type: "image", url: imageUrl, coordinates });
+  } else if (previousImageUrl !== imageUrl) {
+    existingSource.updateImage({ url: imageUrl, coordinates });
+  }
+  regionalSatelliteImageUrls.set(map, imageUrl);
+
+  if (!map.getLayer(REGIONAL_SATELLITE_LAYER_ID)) {
+    const beforeLayer = map.getLayer("province-fill") ? "province-fill" : undefined;
+    map.addLayer(
+      {
+        id: REGIONAL_SATELLITE_LAYER_ID,
+        type: "raster",
+        source: REGIONAL_SATELLITE_SOURCE_ID,
+        paint: {
+          "raster-opacity": 0.52,
+          "raster-saturation": 0.32,
+          "raster-contrast": 0.1,
+          "raster-fade-duration": 420,
+          "raster-resampling": "linear"
+        }
+      },
+      beforeLayer
+    );
+  }
+  map.setLayoutProperty(REGIONAL_SATELLITE_LAYER_ID, "visibility", visible ? "visible" : "none");
 }
 
 function syncGlobalSatelliteLayer(map: MapLibreMap, layer: SatelliteLayerPayload | null, visible: boolean) {
@@ -1956,7 +2008,9 @@ function addStormLayers(map: MapLibreMap) {
     paint: {
       "line-color": "#ff4b3e",
       "line-width": 4,
-      "line-opacity": 0.92,
+      // The same route is rendered once by the screen overlay so it can sit
+      // above weather visuals while remaining below HUD controls.
+      "line-opacity": 0,
       "line-blur": 1.2
     }
   });
@@ -2024,19 +2078,6 @@ function setLayerVisibility(map: MapLibreMap, layerIds: string[], visible: boole
       map.setLayoutProperty(layerId, "visibility", visible ? "visible" : "none");
     }
   });
-}
-
-function projectSatelliteBox(map: MapLibreMap, bounds: SatelliteLayerPayload["bounds"]): ScreenBox {
-  const northwest = map.project([bounds.west, bounds.north]);
-  const southeast = map.project([bounds.east, bounds.south]);
-  const x = Math.min(northwest.x, southeast.x);
-  const y = Math.min(northwest.y, southeast.y);
-  return {
-    x: Math.round(x),
-    y: Math.round(y),
-    width: Math.round(Math.abs(southeast.x - northwest.x)),
-    height: Math.round(Math.abs(southeast.y - northwest.y))
-  };
 }
 
 function startTerrainElevationRenderer(map: MapLibreMap, canvas: HTMLCanvasElement) {
@@ -3678,6 +3719,15 @@ function renderStormOnMap(
     .addTo(map);
 }
 
+function stormAtGfsAnalysisCenter(storm: Storm | null, windField: WindFieldPayload | null) {
+  const center = windField?.source === "NOAA/NCEP NOMADS Grib Filter" ? windField.analysisCenter : undefined;
+  if (!storm || !center || !windField?.updatedAt) return storm;
+  // The model vortex is the only location the GFS streamlines can truthfully
+  // converge on. Move the visual there rather than claiming its best-track
+  // location is the same object.
+  return { ...storm, position: { lon: center.lon, lat: center.lat }, updatedAt: windField.updatedAt };
+}
+
 function stormMarkerRenderKey(storm: Storm, satelliteLayer?: SatelliteLayerPayload | null, bossProfile?: BossProfile | null) {
   return [
     storm.id,
@@ -3698,13 +3748,18 @@ function createStormMarkerElement(
   bossProfile?: BossProfile | null
 ) {
   const intensity = Math.max(0.56, Math.min(1, (storm.maxWind || 32) / 72));
+  const forceLevel = windForceLevel(storm.maxWind);
+  const textureOpacity = windForceTextureOpacity(forceLevel);
   const kinematics = cycloneVisualKinematics(storm.position.lat);
 
   const root = document.createElement("div");
   root.className = `storm-map-marker structure-${bossProfile?.structure.state ?? "unknown"}`;
   root.dataset.rotationDirection = kinematics.direction;
+  root.dataset.windForceLevel = String(forceLevel);
   root.style.setProperty("--storm-core-intensity", String(intensity));
   root.style.setProperty("--storm-spin-duration", `${Math.max(7.5, 16 - intensity * 7)}s`);
+  root.style.setProperty("--storm-texture-spin-duration", `${Math.max(30, 56 - forceLevel * 1.45)}s`);
+  root.style.setProperty("--storm-texture-opacity", String(textureOpacity));
   root.style.setProperty("--storm-pulse-duration", `${Math.max(1.8, 3.6 - intensity * 1.3)}s`);
   root.style.setProperty("--storm-wave-opacity", String(0.2 + intensity * 0.26));
   root.style.setProperty("--storm-bearing", `${stormVisualBearingDeg(storm)}deg`);
@@ -3876,11 +3931,6 @@ function regionLabelsEqual(current: ScreenRegionLabel[], next: ScreenRegionLabel
       return item.id === other.id && item.x === other.x && item.y === other.y && item.zh === other.zh && item.en === other.en;
     })
   );
-}
-
-function screenBoxesEqual(current: ScreenBox | null, next: ScreenBox | null) {
-  if (!current || !next) return current === next;
-  return current.x === next.x && current.y === next.y && current.width === next.width && current.height === next.height;
 }
 
 function rafThrottle(callback: () => void) {
@@ -4157,6 +4207,84 @@ function formatClock(value: string) {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
+    hour12: false
+  });
+}
+
+function windForceLevel(speedMps: number) {
+  // China Beaufort force scale: 2 corresponds to 1.6–3.3 m/s and force 17
+  // begins at 56.1 m/s; 17+ remains at the maximum visual level.
+  const lowerBounds = [0, 0.3, 1.6, 3.4, 5.5, 8, 10.8, 13.9, 17.2, 20.8, 24.5, 28.5, 32.7, 37, 41.5, 46.2, 51, 56.1];
+  const speed = Number.isFinite(speedMps) ? Math.max(0, speedMps) : 0;
+  let level = 0;
+  for (let index = 1; index < lowerBounds.length; index += 1) {
+    if (speed >= lowerBounds[index]) level = index;
+  }
+  return Math.min(17, level);
+}
+
+function windForceTextureOpacity(forceLevel: number) {
+  if (forceLevel <= 2) return 1;
+  if (forceLevel >= 17) return 0;
+  return Math.max(0, Math.min(1, 1 - (forceLevel - 2) / 15));
+}
+
+function WindFieldTimeBadge({ windField, currentStorm }: { windField: WindFieldPayload | null; currentStorm: Storm | null }) {
+  if (windField?.status !== "available" || windField.source !== "NOAA/NCEP NOMADS Grib Filter") return null;
+  const fieldTime = Date.parse(windField.updatedAt);
+  const currentTime = currentStorm ? Date.parse(currentStorm.updatedAt) : Number.NaN;
+  const lagHours = Number.isFinite(fieldTime) && Number.isFinite(currentTime) ? Math.max(0, Math.round((currentTime - fieldTime) / 3_600_000)) : null;
+  return (
+    <aside className="wind-field-time-badge" aria-label="GFS 风场数据时次">
+      <span>GFS 风场有效时刻</span>
+      <strong>{formatBeijingTime(windField.updatedAt)} BJT</strong>
+      <small>{formatGfsTime(windField.updatedAt)} · {windField.cycle ?? "F000"}</small>
+      {currentStorm ? <em>最新路径 {formatBeijingTime(currentStorm.updatedAt)} BJT{lagHours !== null ? ` · 相差 ${lagHours} 小时` : ""}</em> : null}
+    </aside>
+  );
+}
+
+function LatestPathCenterMarker({ point, storm }: { point: ScreenPoint | null; storm: Storm | null }) {
+  if (!point || !storm) return null;
+  return (
+    <div className="latest-path-center-marker" style={{ left: point.x, top: point.y }} aria-label={`最新路径中心 ${formatBeijingTime(storm.updatedAt)} 北京时间`}>
+      <span aria-hidden="true">☠</span>
+      <small>最新路径中心</small>
+      <em>{formatBeijingTime(storm.updatedAt)} BJT</em>
+    </div>
+  );
+}
+
+function HistoricalTrackOverlay({ path }: { path: ScreenPath | null }) {
+  if (!path || path.points.length < 2) return null;
+  const points = path.points.map((point) => `${point.x},${point.y}`).join(" ");
+  return (
+    <svg className="historical-track-overlay" viewBox={`0 0 ${path.width} ${path.height}`} preserveAspectRatio="none" aria-hidden="true">
+      <polyline className="historical-track-shadow" points={points} />
+      <polyline className="historical-track-line" points={points} />
+    </svg>
+  );
+}
+
+function formatGfsTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
+  const hour = String(date.getUTCHours()).padStart(2, "0");
+  const minute = String(date.getUTCMinutes()).padStart(2, "0");
+  return `${month}/${day} ${hour}:${minute}Z`;
+}
+
+function formatBeijingTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
     hour12: false
   });
 }

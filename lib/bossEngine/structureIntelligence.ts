@@ -96,16 +96,34 @@ async function loadStormStructure(storm: Storm, source: ReturnType<typeof jtwcSo
     return persistObservation(storm.id, observation);
   } catch (error) {
     const reason = error instanceof Error ? error.message : "JTWC structure request failed.";
-    const previous = (await readLedger()).storms[storm.id]?.lastSummary;
+    const previousEntry = (await readLedger()).storms[storm.id];
+    const previous = previousEntry?.lastSummary;
     if (previous) {
       return {
         ...previous,
+        historyCount: previousEntry.transitions.length,
         stale: true,
         warnings: [...previous.warnings, reason]
       };
     }
     return unknownStructure(storm, reason, source.url);
   }
+}
+
+/**
+ * Returns the most recent locally retained JTWC structure record immediately.
+ * The live request is deliberately allowed to refresh it separately, so a slow
+ * or blocked upstream does not erase an already observed eyewall timeline.
+ */
+export async function getPersistedStormStructure(stormId: string): Promise<BossStructureSummary | null> {
+  const entry = (await readLedger()).storms[stormId];
+  if (!entry) return null;
+  return {
+    ...entry.lastSummary,
+    historyCount: entry.transitions.length,
+    stale: true,
+    warnings: [...entry.lastSummary.warnings, "实时 JTWC 结构源正在刷新；当前展示本地已记录通报。"]
+  };
 }
 
 async function fetchJtwcBulletin(url: string, outerSignal?: AbortSignal) {
@@ -292,6 +310,7 @@ async function persistObservation(stormId: string, observation: BossStructureSum
         monitoredCycle: summary.monitoredCycle
       });
     }
+    summary.historyCount = transitions.length;
 
     ledger.storms[stormId] = {
       lastState: observation.state,

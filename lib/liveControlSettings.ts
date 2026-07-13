@@ -13,7 +13,9 @@ export const DEFAULT_LIVE_CONTROL_SETTINGS: LiveControlSettings = {
   sceneRotationEnabled: true,
   briefingDurationSeconds: 7,
   analysisDurationSeconds: 5,
-  evolutionAgentEnabled: true,
+  // Generating an evolution report can write runtime state and invoke the
+  // configured document model. It must be explicitly enabled by an operator.
+  evolutionAgentEnabled: false,
   evolutionAgentIntervalMinutes: 30
 };
 

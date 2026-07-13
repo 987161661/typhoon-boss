@@ -201,7 +201,9 @@ export async function fetchJmaImage(region: string, product: string, frame: stri
   const remoteUrl = `${NOAA_HIMAWARI_BASE_URL}/img/${frame}.jpg`;
   let image: CachedSatelliteImage;
   try {
-    image = await getCachedSatelliteImage(`regional:${frame}`, "regional", remoteUrl, prepareRegionalCloudOverlay);
+    // Version the cache key when changing the image geometry: older cached
+    // payloads were vertically cropped but still advertised full-frame bounds.
+    image = await getCachedSatelliteImage(`regional-georef-v2:${frame}`, "regional", remoteUrl, prepareRegionalCloudOverlay);
   } catch (error) {
     return satelliteUnavailableResponse("regional", error);
   }
@@ -569,7 +571,7 @@ async function loadWindField(stormId?: string | null, viewportBounds?: WindField
 
   let ncepReason = "";
   try {
-    return await loadNcepGfsWindField(sampleBounds, Boolean(viewportBounds));
+    return await loadNcepGfsWindField(sampleBounds, Boolean(viewportBounds), storm?.position ?? null);
   } catch (error) {
     ncepReason = error instanceof Error ? error.message : "NCEP GFS GRIB2 decoding failed.";
   }
@@ -803,7 +805,11 @@ async function loadNcepGfsWaveLayer(bounds: WindFieldBounds): Promise<GfsWaveLay
   throw new Error(`NCEP GFS Wave unavailable (${errors.join(" | ")})`);
 }
 
-async function loadNcepGfsWindField(sampleBounds: WindFieldBounds, viewportSampling: boolean): Promise<WindFieldPayload> {
+async function loadNcepGfsWindField(
+  sampleBounds: WindFieldBounds,
+  viewportSampling: boolean,
+  analysisReference: Storm["position"] | null
+): Promise<WindFieldPayload> {
   const bounds = snapNcepBounds(sampleBounds);
   const errors: string[] = [];
 
@@ -847,7 +853,8 @@ async function loadNcepGfsWindField(sampleBounds: WindFieldBounds, viewportSampl
         displayResolutionDegrees: decoded.displayResolutionDegrees,
         cycle: `${cycle.date} ${cycle.hour}Z`,
         sampling: viewportSampling ? "viewport" : "storm",
-        coverage: bounds
+        coverage: bounds,
+        analysisCenter: findCyclonicVorticityCenter(decoded.points, analysisReference)
       };
     } catch (error) {
       errors.push(`${cycle.date}${cycle.hour}: ${error instanceof Error ? error.message : "unknown error"}`);
@@ -1046,6 +1053,40 @@ function parseNcepWindCsv(csv: string) {
     displayResolutionDegrees: NCEP_GFS_NATIVE_RESOLUTION_DEGREES * stride,
     points
   };
+}
+
+function findCyclonicVorticityCenter(
+  points: WindFieldPoint[],
+  reference: Storm["position"] | null
+): WindFieldPayload["analysisCenter"] {
+  if (!reference || points.length < 9) return undefined;
+  const longitudes = [...new Set(points.map((point) => point.lon))].sort((left, right) => left - right);
+  const latitudes = [...new Set(points.map((point) => point.lat))].sort((left, right) => left - right);
+  if (longitudes.length < 3 || latitudes.length < 3) return undefined;
+  const lonStep = longitudes[1] - longitudes[0];
+  const latStep = latitudes[1] - latitudes[0];
+  if (!Number.isFinite(lonStep) || !Number.isFinite(latStep) || lonStep <= 0 || latStep <= 0) return undefined;
+
+  const index = new Map(points.map((point) => [windSampleKey(point.lon, point.lat), point]));
+  let strongest: { lon: number; lat: number; vorticity: number } | null = null;
+  for (const point of points) {
+    // The field can cover East Asia. Restrict the diagnostic to this storm's
+    // synoptic neighbourhood, otherwise another weather system could win.
+    if (Math.abs(point.lon - reference.lon) > 5 || Math.abs(point.lat - reference.lat) > 5) continue;
+    const west = index.get(windSampleKey(point.lon - lonStep, point.lat));
+    const east = index.get(windSampleKey(point.lon + lonStep, point.lat));
+    const south = index.get(windSampleKey(point.lon, point.lat - latStep));
+    const north = index.get(windSampleKey(point.lon, point.lat + latStep));
+    if (!west || !east || !south || !north) continue;
+    const dx = 2 * lonStep * 111_320 * Math.max(0.1, Math.cos((point.lat * Math.PI) / 180));
+    const dy = 2 * latStep * 111_320;
+    const vorticity = (east.v - west.v) / dx - (north.u - south.u) / dy;
+    if (!strongest || vorticity > strongest.vorticity) {
+      strongest = { lon: point.lon, lat: point.lat, vorticity };
+    }
+  }
+  if (!strongest || strongest.vorticity <= 0) return undefined;
+  return { lon: strongest.lon, lat: strongest.lat, method: "peak-cyclonic-vorticity" };
 }
 
 function ncepCycleCandidates(now = new Date()) {
@@ -1446,8 +1487,10 @@ async function prepareRegionalCloudOverlay(bytes: Uint8Array) {
   const metadata = await sharp(Buffer.from(bytes)).metadata();
   const width = metadata.width ?? 1120;
   const height = metadata.height ?? 640;
-  const cropHeight = Math.max(1, Math.min(height, Math.round(height * 0.944)));
-  return renderCloudMask(bytes, { left: 0, top: 0, width, height: cropHeight }, 88, 205);
+  // Preserve every source row. Cropping the southern edge while retaining the
+  // original geographic bounds stretched the cloud field and displaced it
+  // relative to the track and wind layers.
+  return renderCloudMask(bytes, { left: 0, top: 0, width, height }, 88, 205);
 }
 
 async function prepareGlobalCloudOverlay(bytes: Uint8Array) {

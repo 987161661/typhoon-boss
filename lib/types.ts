@@ -218,6 +218,11 @@ export interface WindFieldPayload extends EnvironmentLayerMeta {
   isStale?: boolean;
   lastSuccessfulAt?: string;
   sampling?: "storm" | "viewport";
+  analysisCenter?: {
+    lon: number;
+    lat: number;
+    method: "peak-cyclonic-vorticity";
+  };
   coverage?: {
     west: number;
     south: number;

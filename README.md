@@ -1,38 +1,39 @@
 # 台风 BOSS 雷达
 
-面向直播与值守场景的本地台风态势页面。项目同时提供：主雷达页、Boss 图鉴、直播导播页、凌岚数字人窗口，以及台风实时演进整理任务。
+面向直播和值守场景的本地台风态势页，提供主雷达、Boss 图鉴、`/live` 导播页和凌岚数字人窗口。
 
-## 页面与入口
+## 权威启动入口
 
-- `/`：主雷达页。
-- `/dex`：台风 Boss 图鉴。
-- `/live`：双场景直播导播页；左侧为控制面板，底栏可向凌岚发送消息。
+双击 [Start-Typhoon-Live.cmd](Start-Typhoon-Live.cmd)。它会验证以下两条真实链路后才返回成功：
 
-## 启动
+- 雷达直播页：`http://127.0.0.1:3038/live`
+- 凌岚数字人：通过 `http://127.0.0.1:3038/api/digital-host/health` 验证，默认上游为 `5173`
+
+该入口当前以 Next 开发模式启动，适合本机直播和值守。不要同时再用 `npm run dev` 或 `npm run start` 占用 3038。
+
+生产式手动验证仅在需要构建产物时使用：
 
 ```powershell
-cd "D:\typhoon boss radar"
 npm.cmd run build
 npm.cmd run start -- -H 127.0.0.1 -p 3038
 ```
 
-若需同时检查凌岚服务与本项目的直播入口：
-
-```powershell
-npm.cmd run live:with-host
-```
-
-完整的运行、配置和故障处理说明见 [运维手册](docs/OPERATIONS.md)。
+完整的运行、清理和故障边界见 [运维手册](docs/OPERATIONS.md)。
 
 ## 常用命令
 
 ```powershell
 npm.cmd run typecheck
-npm.cmd run build
+npm.cmd run lint
+npm.cmd run test
 npm.cmd run agent:run
 npm.cmd run clean:local
 ```
 
-控制台无需管理员登录。网页进程启动时会自动调用 MiniMax 完成一次演进整理，并按直播设置中的间隔持续运行。
+`agent:run` 是一次性的演进报告生成。周期性自动整理默认关闭，必须在直播页的运行设置中明确打开；它可能调用已配置的文档模型并更新 `台风实时演进分析.md`。
 
-`clean:local` 只删除本地调试缓存、日志、浏览器自动化配置和构建中间物；不删除 `.runtime` 里的直播设置与演进状态。
+`clean:local` 会清除构建物和已知诊断遗留；需要在服务仍运行时只清理安全的运行诊断，可执行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/clean_local_artifacts.ps1 -RuntimeOnly
+```

@@ -206,8 +206,8 @@ function drawProceduralStorm(context: CanvasRenderingContext2D, storm: Storm, me
       );
       const outerEnvelope = 1 - smoothstep(organicBoundary - 0.1, Math.min(0.985, organicBoundary + 0.075), radius);
       const cdo = gaussian(warpedRadius, 0.2 + metrics.compactness * 0.08, 0.14 + metrics.intensity * 0.035);
-      const eyeNx = nx - metrics.eyeOffsetX - Math.cos(phase * 0.8 + metrics.seed) * 0.003;
-      const eyeNy = ny - metrics.eyeOffsetY - Math.sin(phase * 0.8 + metrics.seed) * 0.003;
+      const eyeNx = nx - metrics.eyeOffsetX;
+      const eyeNy = ny - metrics.eyeOffsetY;
       const eyeRadius = Math.sqrt(eyeNx * eyeNx + eyeNy * eyeNy);
       const eyeAngle = Math.atan2(eyeNy, eyeNx);
       const raggedEyeRadius = metrics.eyeRadius * (2.05 + Math.sin(eyeAngle * 4.0 + coarse * 4.2) * 0.18);
@@ -400,13 +400,9 @@ async function buildSatelliteTexture(
 }
 
 function drawSatelliteTexture(context: CanvasRenderingContext2D, texture: HTMLCanvasElement, metrics: RenderMetrics, phase = 0) {
-  const center = INTERNAL_SIZE * 0.5;
   context.save();
   context.globalCompositeOperation = "screen";
   context.globalAlpha = 0.34 + metrics.ahiCompleteness * 0.14;
-  context.translate(center, center);
-  context.rotate(phase * 0.025);
-  context.translate(-center, -center);
   context.drawImage(texture, 0, 0);
   context.restore();
   drawStormEye(context, metrics, phase);
@@ -415,8 +411,8 @@ function drawSatelliteTexture(context: CanvasRenderingContext2D, texture: HTMLCa
 function drawStormEye(context: CanvasRenderingContext2D, metrics: RenderMetrics, phase = 0) {
   if (metrics.eyeStrength <= 0.06) return;
   const center = INTERNAL_SIZE * 0.5;
-  const eyeCenterX = center + (metrics.eyeOffsetX + Math.cos(phase * 0.8 + metrics.seed) * 0.003) * INTERNAL_SIZE * 0.5;
-  const eyeCenterY = center + (metrics.eyeOffsetY + Math.sin(phase * 0.8 + metrics.seed) * 0.003) * INTERNAL_SIZE * 0.5;
+  const eyeCenterX = center + metrics.eyeOffsetX * INTERNAL_SIZE * 0.5;
+  const eyeCenterY = center + metrics.eyeOffsetY * INTERNAL_SIZE * 0.5;
   const eyePx = INTERNAL_SIZE * metrics.eyeRadius * (1.05 + metrics.eyeStrength * 0.24);
   const gradient = context.createRadialGradient(eyeCenterX, eyeCenterY, eyePx * 0.1, eyeCenterX, eyeCenterY, eyePx * 1.8);
   gradient.addColorStop(0, `rgba(0, 8, 12, ${0.95 * metrics.eyeStrength})`);

@@ -4,7 +4,7 @@ import { distanceBetweenKm, distanceToPathKm, parseBeijingTime, windForceFromSpe
 import { getAhiEvidenceForStorm, type AhiEvidenceSummary } from "./ahiEvidence";
 import { sampleBossEnvironment, type EnvironmentFeatures } from "./environmentSampler";
 import { getHimawariProductsForStorm, type SatelliteProductsSummary } from "./satelliteProducts";
-import { getStormStructureIntelligence } from "./structureIntelligence";
+import { getPersistedStormStructure, getStormStructureIntelligence } from "./structureIntelligence";
 import type {
   BossArchetype,
   BossEvent,
@@ -31,11 +31,15 @@ export async function buildBossProfiles(storms: Storm[]): Promise<BossProfile[]>
 export async function buildBossProfile(storm: Storm): Promise<BossProfile> {
   const intensity = buildIntensityFeatures(storm);
   const landfall = buildLandfallFeatures(storm);
+  const retainedStructure = await getPersistedStormStructure(storm.id);
   const [environment, satellite, ahi, structure] = await Promise.all([
     boundedEvidence((signal) => sampleBossEnvironment(storm, signal), unavailableEnvironment("环境证据超过快速生成预算。")),
     boundedEvidence((signal) => getHimawariProductsForStorm(storm, signal), unavailableSatellite("卫星产品超过快速生成预算。")),
     boundedEvidence((signal) => getAhiEvidenceForStorm(storm, signal), unavailableAhi("AHI 元数据超过快速生成预算。")),
-    boundedEvidence((signal) => getStormStructureIntelligence(storm, signal), unavailableStructure(storm, "JTWC 结构证据超过快速生成预算。"))
+    boundedEvidence(
+      (signal) => getStormStructureIntelligence(storm, signal),
+      retainedStructure ?? unavailableStructure(storm, "JTWC structure request exceeded the fast response budget.")
+    )
   ]);
   const archetype = chooseArchetype(storm, intensity, landfall, environment, structure);
   const phase = choosePhase(storm, intensity, landfall, structure);

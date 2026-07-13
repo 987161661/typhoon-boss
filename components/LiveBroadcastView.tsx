@@ -559,46 +559,26 @@ export function LiveBottomBar({
   secondsToSwitch: number;
 }) {
   const [tickerIndex, setTickerIndex] = useState(0);
-  const [showCityTicker, setShowCityTicker] = useState(false);
   const tickerItems = model.cityTickerItems;
   const tickerSignature = tickerItems.map((item) => item.id).join("|");
 
   useEffect(() => {
-    if (tickerItems.length === 0) {
-      setShowCityTicker(false);
-      return;
-    }
-    let disposed = false;
-    let showTimer: number | null = null;
-    let hideTimer: number | null = null;
-    const schedule = (delayMs: number) => {
-      showTimer = window.setTimeout(() => {
-        if (disposed) return;
-        setShowCityTicker(true);
-        hideTimer = window.setTimeout(() => {
-          if (disposed) return;
-          setShowCityTicker(false);
-          setTickerIndex((current) => (current + 1) % tickerItems.length);
-          schedule(22_000);
-        }, 8_000);
-      }, delayMs);
-    };
-    schedule(3_000);
-    return () => {
-      disposed = true;
-      if (showTimer !== null) window.clearTimeout(showTimer);
-      if (hideTimer !== null) window.clearTimeout(hideTimer);
-    };
+    setTickerIndex(0);
+    if (tickerItems.length < 2) return;
+    const timer = window.setInterval(() => {
+      setTickerIndex((current) => (current + 1) % tickerItems.length);
+    }, 12_000);
+    return () => window.clearInterval(timer);
   }, [tickerItems.length, tickerSignature]);
 
   const cityTicker = tickerItems[tickerIndex % Math.max(1, tickerItems.length)] ?? null;
   return (
     <footer className={`live-bottom-bar live-fact-rail status-${model.status}`}>
       <div><Zap aria-hidden="true" /><span>当前强度</span><strong>{model.windForceLevel}级 · {model.stageLabel}</strong></div>
-      <div><MapPin aria-hidden="true" /><span>{model.landfall.label}</span><strong>{model.landfall.time} · {model.landfall.place}</strong></div>
-      {showCityTicker && cityTicker && <div className="live-arrival-ticker"><Route aria-hidden="true" /><span>城市台风动态</span><strong>{cityTicker.message}</strong></div>}
-      <div><BatteryCharging aria-hidden="true" /><span>BOSS 能量</span><strong>{model.energy}%</strong></div>
-      <div><TimerReset aria-hidden="true" /><span>当前：{deck === "briefing" ? "观众态势" : "专业分析"}</span><strong>{secondsToSwitch > 0 ? `${secondsToSwitch} 秒后自动换屏` : "独立场景 · 导播切换"}</strong></div>
+      <div className="live-landfall-fact"><MapPin aria-hidden="true" /><span>{model.landfall.label}</span><strong>{model.landfall.time} · {model.landfall.place}</strong></div>
+      {cityTicker && <div className="live-city-ticker-slot"><Route aria-hidden="true" /><span>城市台风动态</span><strong key={cityTicker.id}>{cityTicker.message}</strong></div>}
+      <div className="live-energy-fact"><BatteryCharging aria-hidden="true" /><span>BOSS 能量</span><strong>{model.energy}%</strong></div>
+      <div className="live-deck-status"><TimerReset aria-hidden="true" /><span>当前：{deck === "briefing" ? "观众态势" : "专业分析"}</span><strong>{secondsToSwitch > 0 ? `${secondsToSwitch} 秒后自动换屏` : "独立场景 · 导播切换"}</strong></div>
     </footer>
   );
 }
@@ -720,12 +700,15 @@ function buildLandingPriority(storm: Storm | null, bossProfile?: BossProfile | n
 function buildCityTickerItems(storm: Storm | null): LiveCityTickerItem[] {
   if (!storm) return [];
   const now = Date.now();
-  const oneHour = 60 * 60 * 1000;
+  // Provider city descriptions arrive with the public track update. Keep an
+  // explicit city report on-air across a normal upstream publication gap;
+  // this is still provider text, never a coordinate-derived city guess.
+  const cityReportWindowMs = 3 * 60 * 60 * 1000;
   return storm.track
     .map((point) => {
       const city = point.locationDescription ? cityFromPlace(point.locationDescription) : null;
       const timestamp = parseStormTime(point.time);
-      if (!city || !Number.isFinite(timestamp) || Math.abs(timestamp - now) > oneHour) return null;
+      if (!city || !Number.isFinite(timestamp) || Math.abs(timestamp - now) > cityReportWindowMs) return null;
       const minutes = Math.max(0, Math.ceil((timestamp - now) / 60_000));
       const level = windForceFromSpeed(point.wind);
       return {
@@ -864,15 +847,22 @@ function selectStrongestRadius(storm: Storm) {
 
 function buildStructureBrief(bossProfile?: BossProfile | null): LiveStructureBrief {
   const structure = bossProfile?.structure;
-  if (structure && structure.state !== "unknown") {
+  const hasRetainedHistory = Boolean(structure?.historyCount);
+  if (structure && (structure.state !== "unknown" || hasRetainedHistory)) {
+    const isHistoryFallback = structure.stale && hasRetainedHistory;
     return {
       mode: "structure",
       eyebrow: "核心结构判读",
-      title: structure.stateLabel,
-      detail: [structure.cycleLabel, structure.detail].filter(Boolean).join(" · "),
-      evidenceLabel: evidenceLabel(structure.evidenceLevel),
+      title: structure.state === "unknown" && isHistoryFallback ? "历史结构记录保留中" : structure.stateLabel,
+      detail: [
+        structure.cycleLabel,
+        hasRetainedHistory ? `已记录 ${structure.historyCount} 份 JTWC 通报` : "",
+        structure.detail,
+        isHistoryFallback ? "实时源待恢复，继续保留最后结构结论。" : ""
+      ].filter(Boolean).join(" · "),
+      evidenceLabel: isHistoryFallback ? "历史结构记录" : evidenceLabel(structure.evidenceLevel),
       evidenceLevel: structure.evidenceLevel,
-      confidenceLabel: `置信 ${Math.round(structure.confidence * 100)}%`,
+      confidenceLabel: isHistoryFallback ? "等待实时更新" : `置信 ${Math.round(structure.confidence * 100)}%`,
       sourceLabel: structure.sourceLabel,
       observedAt: formatCompactTime(structure.observedAt)
     };
@@ -898,9 +888,9 @@ function buildStructureBrief(bossProfile?: BossProfile | null): LiveStructureBri
   return {
     mode: "unavailable",
     eyebrow: "核心结构判读",
-    title: "结构资料待更新",
-    detail: "当前没有可用于确认眼壁状态的权威结构资料。",
-    evidenceLabel: "资料不足",
+    title: "结构信源待恢复",
+    detail: "当前未取得可确认眼壁状态的实时结构通报；路径、强度和风圈仍按各自信源显示。",
+    evidenceLabel: "实时源不可用",
     evidenceLevel: "unavailable",
     confidenceLabel: "不作推断",
     sourceLabel: "--",

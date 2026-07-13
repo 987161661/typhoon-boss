@@ -46,6 +46,8 @@ export interface BossStructureSummary {
   cycleOrdinal: number | null;
   monitoredCycle: number | null;
   cycleLabel: string;
+  /** Number of JTWC structure observations retained for this storm locally. */
+  historyCount?: number;
   confidence: number;
   evidenceLevel: BossEvidenceLevel;
   source: "jtwc" | "track-inference" | "unavailable";
