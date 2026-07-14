@@ -10709,3 +10709,80 @@ a:focus-visible {
     transition-duration: 1ms;
   }
 }
+
+/* Live composition: both decks share a fixed left information rail. The map
+   therefore keeps one viewport and one camera anchor while the content rail
+   changes from audience-facing context to professional analysis. */
+@media (min-width: 1000px) {
+  .radar-shell[data-view="live"],
+  .radar-shell[data-live-deck="briefing"],
+  .radar-shell[data-live-deck="analysis"] {
+    --live-info-rail-width: clamp(420px, 30vw, 560px);
+    grid-template-columns: var(--live-info-rail-width) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) 64px;
+  }
+
+  .radar-shell[data-view="live"] .map-stage {
+    grid-column: 2;
+    grid-row: 1;
+    border-right: 0;
+    border-left: 1px solid rgba(0, 216, 255, 0.48);
+  }
+
+  .radar-shell[data-view="live"] .live-audience-panel,
+  .radar-shell[data-view="live"] .live-intel-panel,
+  .radar-shell[data-view="live"] .live-professional-panel {
+    grid-column: 1;
+    grid-row: 1;
+    width: auto;
+    justify-self: stretch;
+    border-right: 1px solid rgba(0, 216, 255, 0.34);
+    border-left: 0;
+  }
+
+  .radar-shell[data-view="live"] .live-professional-panel {
+    z-index: auto;
+    box-shadow: 22px 0 36px rgba(0, 0, 0, 0.42);
+  }
+
+  .radar-shell[data-view="live"] .live-bottom-bar {
+    grid-column: 2;
+    grid-row: 2;
+  }
+}
+
+/* GFS provenance is operational information, not a fixed decoration. Keep
+   the contents click-through while exposing a clear, keyboard-accessible drag
+   handle for the broadcast operator. */
+.wind-field-time-badge {
+  pointer-events: none;
+  will-change: transform;
+}
+
+.wind-field-time-badge-handle {
+  width: max-content;
+  max-width: 100%;
+  padding: 0;
+  color: rgba(190, 255, 220, 0.7);
+  background: transparent;
+  border: 0;
+  cursor: grab;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.wind-field-time-badge-handle:active {
+  cursor: grabbing;
+}
+
+.wind-field-time-badge-handle:focus-visible {
+  outline: 1px solid #a9efd1;
+  outline-offset: 3px;
+}
+
+.wind-field-time-badge[data-stale="true"] .wind-field-time-badge-handle {
+  color: #ffd98b;
+}

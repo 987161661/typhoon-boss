@@ -9,7 +9,9 @@ import {
   useState,
   type CSSProperties,
   type ComponentType,
-  type MutableRefObject
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MutableRefObject,
+  type PointerEvent as ReactPointerEvent
 } from "react";
 import maplibregl, { type GeoJSONSource, type ImageSource, type Map as MapLibreMap } from "maplibre-gl";
 import { AlertTriangle, ChevronLeft, ChevronRight, Database, Palette, RadioTower, Satellite, Settings2, Shield, Wind } from "lucide-react";
@@ -4732,13 +4734,95 @@ function windForceTextureOpacity(forceLevel: number) {
 }
 
 function WindFieldTimeBadge({ windField, currentStorm }: { windField: WindFieldPayload | null; currentStorm: Storm | null }) {
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const badgeRef = useRef<HTMLElement | null>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    originX: number;
+    originY: number;
+    offsetX: number;
+    offsetY: number;
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+  } | null>(null);
+  const resetPosition = useCallback(() => setOffset({ x: 0, y: 0 }), []);
+  const onDragStart = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    const badge = badgeRef.current;
+    const stage = badge?.closest<HTMLElement>(".map-stage");
+    if (!badge || !stage) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const badgeRect = badge.getBoundingClientRect();
+    const stageRect = stage.getBoundingClientRect();
+    dragRef.current = {
+      pointerId: event.pointerId,
+      originX: event.clientX,
+      originY: event.clientY,
+      offsetX: offset.x,
+      offsetY: offset.y,
+      minX: offset.x + stageRect.left - badgeRect.left,
+      maxX: offset.x + stageRect.right - badgeRect.right,
+      minY: offset.y + stageRect.top - badgeRect.top,
+      maxY: offset.y + stageRect.bottom - badgeRect.bottom
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }, [offset.x, offset.y]);
+  const onDragMove = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    setOffset({
+      x: Math.min(drag.maxX, Math.max(drag.minX, drag.offsetX + event.clientX - drag.originX)),
+      y: Math.min(drag.maxY, Math.max(drag.minY, drag.offsetY + event.clientY - drag.originY))
+    });
+  }, []);
+  const onDragEnd = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
+    if (dragRef.current?.pointerId !== event.pointerId) return;
+    dragRef.current = null;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+  }, []);
+  const onHandleKeyDown = useCallback((event: ReactKeyboardEvent<HTMLButtonElement>) => {
+    const step = event.shiftKey ? 32 : 12;
+    const delta = event.key === "ArrowLeft" ? [-step, 0]
+      : event.key === "ArrowRight" ? [step, 0]
+        : event.key === "ArrowUp" ? [0, -step]
+          : event.key === "ArrowDown" ? [0, step]
+            : null;
+    if (event.key === "Home") {
+      event.preventDefault();
+      resetPosition();
+    } else if (delta) {
+      event.preventDefault();
+      setOffset((current) => ({ x: current.x + delta[0], y: current.y + delta[1] }));
+    }
+  }, [resetPosition]);
   if (windField?.status !== "available" || windField.source !== "NOAA/NCEP NOMADS Grib Filter") return null;
   const fieldTime = Date.parse(windField.updatedAt);
   const currentTime = currentStorm ? Date.parse(currentStorm.updatedAt) : Number.NaN;
   const lagHours = Number.isFinite(fieldTime) && Number.isFinite(currentTime) ? Math.max(0, Math.round((currentTime - fieldTime) / 3_600_000)) : null;
   return (
-    <aside className="wind-field-time-badge" data-stale={windField.isStale ? "true" : "false"} aria-label="GFS 风场数据时次">
-      <span>{windField.isStale ? "GFS 风场延迟保护" : "GFS 风场有效时刻"}</span>
+    <aside
+      className="wind-field-time-badge"
+      data-stale={windField.isStale ? "true" : "false"}
+      aria-label="GFS 风场数据时次"
+      ref={badgeRef}
+      style={{ transform: `translate3d(${offset.x}px, ${offset.y}px, 0)` }}
+    >
+      <button
+        className="wind-field-time-badge-handle"
+        type="button"
+        onPointerDown={onDragStart}
+        onPointerMove={onDragMove}
+        onPointerUp={onDragEnd}
+        onPointerCancel={onDragEnd}
+        onDoubleClick={resetPosition}
+        onKeyDown={onHandleKeyDown}
+        aria-label="拖动 GFS 风场有效时刻窗；方向键微调，Home 或双击复位"
+        title="拖动移动；方向键微调；双击复位"
+      >
+        {windField.isStale ? "GFS 风场延迟保护" : "GFS 风场有效时刻"}
+      </button>
       <strong>{formatBeijingTime(windField.updatedAt)} BJT</strong>
       <small>{formatGfsTime(windField.updatedAt)} · {windField.cycle ?? "F000"} · 显示 {windField.displayResolutionDegrees ?? "?"}° / 原生 {windField.nativeResolutionDegrees ?? "?"}°</small>
       {windField.isStale ? <em>最新刷新失败，当前为最后有效模式场</em> : null}
