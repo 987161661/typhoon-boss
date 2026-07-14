@@ -207,6 +207,9 @@ a:focus-visible {
 
 .wind-color-canvas {
   z-index: 4;
+  inset: -34%;
+  width: 168%;
+  height: 168%;
   mix-blend-mode: normal;
   opacity: 0.94;
   filter: saturate(1.2);
@@ -214,6 +217,9 @@ a:focus-visible {
 
 .wind-particle-canvas {
   z-index: 5;
+  inset: -20%;
+  width: 140%;
+  height: 140%;
   mix-blend-mode: normal;
   opacity: 0.98;
   filter: saturate(1.28) contrast(1.12) drop-shadow(0 0 1px rgba(120, 255, 194, 0.52));

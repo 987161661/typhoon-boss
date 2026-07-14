@@ -285,11 +285,14 @@ export function TyphoonMap({
     window.history.replaceState(window.history.state, "", url);
   }, [storms, view]);
   const viewportBoundsForMap = useCallback((map: MapLibreMap) => visibleWindBounds(map, 0.08), []);
+  const windRequestBoundsForMap = useCallback((map: MapLibreMap) => visibleWindBounds(map, 0.65), []);
+  const windRequiredBoundsForMap = useCallback((map: MapLibreMap) => visibleWindBounds(map, 0.24), []);
   const viewportWindField = useViewportWindField({
     map: mapReady ? mapRef.current : null,
     enabled: mapReady && environmentLayers.wind,
     stormId: storm?.id,
-    boundsForMap: viewportBoundsForMap
+    boundsForMap: windRequestBoundsForMap,
+    requiredBoundsForMap: windRequiredBoundsForMap
   });
   const viewportGfsLayer = useViewportGfsLayer({
     map: mapReady ? mapRef.current : null,
@@ -2785,16 +2788,11 @@ function startWindColorFieldRenderer(
   const context = canvas.getContext("2d", { alpha: true, desynchronized: true });
   if (!context) return undefined;
   const points = windField?.status === "available" ? windField.points : [];
+  const vectorIndex = createWindVectorIndex(points);
+  const backdropTexture = document.createElement("canvas");
+  let surface: ProjectedCanvasSurface | null = null;
   const resize = () => {
-    const dpr = Math.min(window.devicePixelRatio || 1, CANVAS_DPR_CAP);
-    const rect = canvas.getBoundingClientRect();
-    const width = Math.max(1, Math.floor(rect.width * dpr));
-    const height = Math.max(1, Math.floor(rect.height * dpr));
-    if (canvas.width !== width || canvas.height !== height) {
-      canvas.width = width;
-      canvas.height = height;
-    }
-    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    surface = resizeProjectedCanvas(map, canvas, context, 1);
   };
   const clear = () => {
     context.save();
@@ -2806,8 +2804,12 @@ function startWindColorFieldRenderer(
     canvas.style.transform = "none";
     resize();
     clear();
-    if (!visible || points.length === 0) return;
-    drawGfsWindBackdrop(context, map, createWindVectorIndex(points), visibleWindBounds(map), 0.48);
+    if (!visible || points.length === 0 || !surface) return;
+    const textureMetrics = drawGfsWindBackdrop(context, map, vectorIndex, surface, backdropTexture, 0.48);
+    canvas.dataset.cameraContinuity = "overscanned-affine-surface";
+    canvas.dataset.overscanCoverage = `${Math.round(surface.width)}x${Math.round(surface.height)}`;
+    canvas.dataset.backdropTexture = `${textureMetrics.width}x${textureMetrics.height}`;
+    canvas.dataset.backdropRenderMs = textureMetrics.renderMs.toFixed(1);
   };
   let cameraAnchors: CanvasCameraAnchors | null = null;
   const beginCameraMove = () => {
@@ -2845,20 +2847,28 @@ function startWindColorFieldRenderer(
 interface CanvasCameraAnchors {
   width: number;
   height: number;
+  offsetX: number;
+  offsetY: number;
   topLeft: { lng: number; lat: number };
   topRight: { lng: number; lat: number };
   bottomLeft: { lng: number; lat: number };
 }
 
 function captureCanvasCameraAnchors(map: MapLibreMap, canvas: HTMLCanvasElement): CanvasCameraAnchors {
-  const width = Math.max(1, canvas.clientWidth);
-  const height = Math.max(1, canvas.clientHeight);
-  const topLeft = map.unproject([0, 0]);
-  const topRight = map.unproject([width, 0]);
-  const bottomLeft = map.unproject([0, height]);
+  const rect = canvas.getBoundingClientRect();
+  const mapRect = map.getCanvas().getBoundingClientRect();
+  const width = Math.max(1, rect.width);
+  const height = Math.max(1, rect.height);
+  const offsetX = rect.left - mapRect.left;
+  const offsetY = rect.top - mapRect.top;
+  const topLeft = map.unproject([offsetX, offsetY]);
+  const topRight = map.unproject([offsetX + width, offsetY]);
+  const bottomLeft = map.unproject([offsetX, offsetY + height]);
   return {
     width,
     height,
+    offsetX,
+    offsetY,
     topLeft: { lng: topLeft.lng, lat: topLeft.lat },
     topRight: { lng: topRight.lng, lat: topRight.lat },
     bottomLeft: { lng: bottomLeft.lng, lat: bottomLeft.lat }
@@ -2874,8 +2884,59 @@ function canvasCameraTransform(map: MapLibreMap, anchors: CanvasCameraAnchors) {
     b: (topRight.y - topLeft.y) / anchors.width,
     c: (bottomLeft.x - topLeft.x) / anchors.height,
     d: (bottomLeft.y - topLeft.y) / anchors.height,
-    e: topLeft.x,
-    f: topLeft.y
+    e: topLeft.x - anchors.offsetX,
+    f: topLeft.y - anchors.offsetY
+  };
+}
+
+interface ProjectedCanvasSurface {
+  width: number;
+  height: number;
+  offsetX: number;
+  offsetY: number;
+  dpr: number;
+}
+
+function resizeProjectedCanvas(
+  map: MapLibreMap,
+  canvas: HTMLCanvasElement,
+  context: CanvasRenderingContext2D,
+  dprCap: number
+): ProjectedCanvasSurface {
+  const rect = canvas.getBoundingClientRect();
+  const mapRect = map.getCanvas().getBoundingClientRect();
+  const width = Math.max(1, rect.width);
+  const height = Math.max(1, rect.height);
+  const offsetX = rect.left - mapRect.left;
+  const offsetY = rect.top - mapRect.top;
+  const dpr = Math.min(window.devicePixelRatio || 1, dprCap);
+  const pixelWidth = Math.max(1, Math.floor(width * dpr));
+  const pixelHeight = Math.max(1, Math.floor(height * dpr));
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
+  }
+  context.setTransform(dpr, 0, 0, dpr, -offsetX * dpr, -offsetY * dpr);
+  return { width, height, offsetX, offsetY, dpr };
+}
+
+function projectedCanvasWindBounds(
+  map: MapLibreMap,
+  surface: ProjectedCanvasSurface,
+  paddingRatio = 0
+): WindParticleBounds {
+  const widthPadding = surface.width * paddingRatio;
+  const heightPadding = surface.height * paddingRatio;
+  const topLeft = map.unproject([surface.offsetX - widthPadding, surface.offsetY - heightPadding]);
+  const bottomRight = map.unproject([
+    surface.offsetX + surface.width + widthPadding,
+    surface.offsetY + surface.height + heightPadding
+  ]);
+  return {
+    west: Math.max(-180, Math.min(topLeft.lng, bottomRight.lng)),
+    east: Math.min(180, Math.max(topLeft.lng, bottomRight.lng)),
+    south: Math.max(-80, Math.min(topLeft.lat, bottomRight.lat)),
+    north: Math.min(80, Math.max(topLeft.lat, bottomRight.lat))
   };
 }
 
@@ -2902,6 +2963,7 @@ function startWindFieldRenderer(
   let adaptiveQuality = livePerformanceMode ? 0.78 : 0.62;
   let canvasWidth = 1;
   let canvasHeight = 1;
+  let surface: ProjectedCanvasSurface | null = null;
   let cameraRevision = 1;
   let fieldHotSwapCount = 0;
   let cameraMoving = false;
@@ -2919,7 +2981,7 @@ function startWindFieldRenderer(
   let points: WindFieldPoint[] = [];
   let vectorIndex = createWindVectorIndex(points);
   let particles: WindParticle[] = [];
-  const trailPointLimit = canvas.clientWidth <= 760 ? 72 : 96;
+  const trailPointLimit = map.getCanvas().clientWidth <= 760 ? 72 : 96;
 
   const syncWindField = () => {
     const nextField = windFieldRef.current;
@@ -2970,17 +3032,9 @@ function startWindFieldRenderer(
   };
 
   const resizeCanvas = () => {
-    const dpr = Math.min(window.devicePixelRatio || 1, CANVAS_DPR_CAP);
-    const rect = canvas.getBoundingClientRect();
-    canvasWidth = Math.max(1, Math.floor(rect.width));
-    canvasHeight = Math.max(1, Math.floor(rect.height));
-    const width = Math.max(1, Math.floor(rect.width * dpr));
-    const height = Math.max(1, Math.floor(rect.height * dpr));
-    if (canvas.width !== width || canvas.height !== height) {
-      canvas.width = width;
-      canvas.height = height;
-    }
-    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    surface = resizeProjectedCanvas(map, canvas, context, 1);
+    canvasWidth = Math.max(1, map.getCanvas().clientWidth);
+    canvasHeight = Math.max(1, map.getCanvas().clientHeight);
   };
 
   const clear = () => {
@@ -2997,12 +3051,12 @@ function startWindFieldRenderer(
   }
   syncWindField();
   syncCycloneCore();
-  let bounds = visibleWindBounds(map, 0.16);
+  let bounds = surface ? projectedCanvasWindBounds(map, surface, 0.04) : visibleWindBounds(map, 0.35);
   const particleCount = livePerformanceMode
-    ? canvas.clientWidth <= 760
+    ? canvasWidth <= 760
       ? 640
       : Math.min(1_320, Math.max(1_040, Math.round((canvasWidth * canvasHeight) / 650)))
-    : canvas.clientWidth <= 760
+    : canvasWidth <= 760
       ? 1_040
       : Math.min(1_760, Math.max(1_480, Math.round((canvasWidth * canvasHeight) / 430)));
   // Seed the whole layer from the observed/model grid. Injecting particles into
@@ -3014,7 +3068,7 @@ function startWindFieldRenderer(
   canvas.dataset.renderer = renderMode === "gfs" ? "ncep-gfs-wind-barbs" : "ncep-gfs-streamlines";
   canvas.dataset.vectorInterpolation = "structured-grid-bilinear-raw-uv";
   canvas.dataset.backgroundMode = "raw-ncep-gfs-grid";
-  canvas.dataset.cameraContinuity = "frozen-frame-affine-transform-then-geographic-redraw";
+  canvas.dataset.cameraContinuity = "overscanned-frozen-frame-affine-transform-then-geographic-redraw";
   canvas.dataset.particleCount = String(particleCount);
   canvas.dataset.trailPoints = String(trailPointLimit);
   canvas.dataset.particleJourney = "model-grid-streamlines";
@@ -3098,8 +3152,8 @@ function startWindFieldRenderer(
     const minimumActiveParticleCount = Math.min(
       maximumActiveParticleCount,
       livePerformanceMode
-        ? canvas.clientWidth <= 760 ? 360 : 520
-        : canvas.clientWidth <= 760 ? 480 : 620
+        ? canvasWidth <= 760 ? 360 : 520
+        : canvasWidth <= 760 ? 480 : 620
     );
     const activeParticleCount = Math.max(
       minimumActiveParticleCount,
@@ -3126,8 +3180,8 @@ function startWindFieldRenderer(
     const visibleAmbientHeads = new Map<number, number>();
     const visibleCoreHeads = new Map<number, number>();
     const windSample = { u: 0, v: 0 };
-    const ambientHeadCellSize = Math.max(34, Math.min(46, canvas.clientWidth / 35));
-    const coreHeadCellSize = Math.max(24, Math.min(34, canvas.clientWidth / 52));
+    const ambientHeadCellSize = Math.max(34, Math.min(46, canvasWidth / 35));
+    const coreHeadCellSize = Math.max(24, Math.min(34, canvasWidth / 52));
     for (let index = 0; index < activeParticleCount; index += 1) {
       const particle = particles[index];
       if (particle.kind === "core" && !cycloneCore) {
@@ -3266,7 +3320,7 @@ function startWindFieldRenderer(
     if (!cameraMoving) return;
     cameraMoving = false;
     cameraAnchors = null;
-    bounds = visibleWindBounds(map, 0.16);
+    bounds = surface ? projectedCanvasWindBounds(map, surface, 0.04) : visibleWindBounds(map, 0.35);
     cameraRevision += 1;
     canvas.dataset.cameraRevision = String(cameraRevision);
     canvas.dataset.cameraInteraction = "geographic-redraw";
@@ -3275,7 +3329,7 @@ function startWindFieldRenderer(
   };
   const resetForResize = () => {
     resizeCanvas();
-    bounds = visibleWindBounds(map, 0.16);
+    bounds = surface ? projectedCanvasWindBounds(map, surface, 0.04) : visibleWindBounds(map, 0.35);
     cameraRevision += 1;
     canvas.dataset.cameraRevision = String(cameraRevision);
     pendingCameraRedraw = true;
@@ -3435,33 +3489,68 @@ function drawGfsWindBackdrop(
   context: CanvasRenderingContext2D,
   map: MapLibreMap,
   index: WindVectorIndex,
-  bounds: WindParticleBounds,
+  surface: ProjectedCanvasSurface,
+  texture: HTMLCanvasElement,
   opacity: number
 ) {
-  const columns = 34;
-  const rows = 22;
-  context.save();
-  context.globalAlpha = opacity;
-  // The model samples are coarse while the display is full-screen. A soft
-  // blend removes cell seams without changing the underlying vectors.
-  context.filter = "blur(11px) saturate(1.2)";
-  for (let row = 0; row < rows; row += 1) {
-    const north = bounds.north - ((bounds.north - bounds.south) * row) / rows;
-    const south = bounds.north - ((bounds.north - bounds.south) * (row + 1)) / rows;
-    for (let column = 0; column < columns; column += 1) {
-      const west = bounds.west + ((bounds.east - bounds.west) * column) / columns;
-      const east = bounds.west + ((bounds.east - bounds.west) * (column + 1)) / columns;
-      const vector = lookupWindVector(index, (west + east) / 2, (north + south) / 2);
-      if (!vector) continue;
-      const topLeft = map.project([west, north]);
-      const bottomRight = map.project([east, south]);
-      context.fillStyle = gfsWindSpeedColor(vector.speed);
-      context.fillRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x + 1, bottomRight.y - topLeft.y + 1);
+  const renderStartedAt = performance.now();
+  const textureWidth = Math.max(240, Math.min(520, Math.round(surface.width / 4)));
+  const textureHeight = Math.max(180, Math.min(420, Math.round(surface.height / 4)));
+  if (texture.width !== textureWidth || texture.height !== textureHeight) {
+    texture.width = textureWidth;
+    texture.height = textureHeight;
+  }
+  const textureContext = texture.getContext("2d", { alpha: true });
+  if (!textureContext) return { width: 0, height: 0, renderMs: 0 };
+  const image = textureContext.createImageData(textureWidth, textureHeight);
+  const pixels = image.data;
+  const axisAligned = Math.abs(map.getBearing()) < 0.001 && Math.abs(map.getPitch()) < 0.001;
+  const longitudes = axisAligned ? new Float64Array(textureWidth) : null;
+  const latitudes = axisAligned ? new Float64Array(textureHeight) : null;
+  const centerX = surface.offsetX + surface.width / 2;
+  const centerY = surface.offsetY + surface.height / 2;
+  if (longitudes && latitudes) {
+    for (let x = 0; x < textureWidth; x += 1) {
+      const screenX = surface.offsetX + ((x + 0.5) * surface.width) / textureWidth;
+      longitudes[x] = map.unproject([screenX, centerY]).lng;
+    }
+    for (let y = 0; y < textureHeight; y += 1) {
+      const screenY = surface.offsetY + ((y + 0.5) * surface.height) / textureHeight;
+      latitudes[y] = map.unproject([centerX, screenY]).lat;
     }
   }
-  context.globalAlpha = 1;
-  context.filter = "none";
+  const sample = { u: 0, v: 0 };
+  for (let y = 0; y < textureHeight; y += 1) {
+    const screenY = surface.offsetY + ((y + 0.5) * surface.height) / textureHeight;
+    for (let x = 0; x < textureWidth; x += 1) {
+      const screenX = surface.offsetX + ((x + 0.5) * surface.width) / textureWidth;
+      const location = longitudes && latitudes
+        ? { lng: longitudes[x], lat: latitudes[y] }
+        : map.unproject([screenX, screenY]);
+      const offset = (y * textureWidth + x) * 4;
+      if (!sampleWindVector(index, location.lng, location.lat, sample)) {
+        pixels[offset + 3] = 0;
+        continue;
+      }
+      writeGfsWindSpeedColor(pixels, offset, Math.hypot(sample.u, sample.v));
+    }
+  }
+  textureContext.putImageData(image, 0, 0);
+  context.save();
+  context.globalAlpha = opacity;
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
+  context.filter = "blur(2px) saturate(1.2)";
+  const bleed = 3;
+  context.drawImage(
+    texture,
+    surface.offsetX - bleed,
+    surface.offsetY - bleed,
+    surface.width + bleed * 2,
+    surface.height + bleed * 2
+  );
   context.restore();
+  return { width: textureWidth, height: textureHeight, renderMs: performance.now() - renderStartedAt };
 }
 
 const GFS_WIND_COLOR_STOPS = [
@@ -3474,17 +3563,23 @@ const GFS_WIND_COLOR_STOPS = [
   [45, [166, 38, 122]]
 ] as const;
 
-function gfsWindSpeedColor(speed: number) {
+function writeGfsWindSpeedColor(pixels: Uint8ClampedArray, offset: number, speed: number) {
   for (let index = 1; index < GFS_WIND_COLOR_STOPS.length; index += 1) {
     const lower = GFS_WIND_COLOR_STOPS[index - 1];
     const upper = GFS_WIND_COLOR_STOPS[index];
     if (speed > upper[0]) continue;
     const progress = Math.max(0, Math.min(1, (speed - lower[0]) / (upper[0] - lower[0])));
-    const color = lower[1].map((channel, channelIndex) => Math.round(channel + (upper[1][channelIndex] - channel) * progress));
-    return `rgb(${color[0]}, ${color[1]}, ${color[2]})`;
+    pixels[offset] = Math.round(lower[1][0] + (upper[1][0] - lower[1][0]) * progress);
+    pixels[offset + 1] = Math.round(lower[1][1] + (upper[1][1] - lower[1][1]) * progress);
+    pixels[offset + 2] = Math.round(lower[1][2] + (upper[1][2] - lower[1][2]) * progress);
+    pixels[offset + 3] = 255;
+    return;
   }
   const strongest = GFS_WIND_COLOR_STOPS.at(-1)![1];
-  return `rgb(${strongest[0]}, ${strongest[1]}, ${strongest[2]})`;
+  pixels[offset] = strongest[0];
+  pixels[offset + 1] = strongest[1];
+  pixels[offset + 2] = strongest[2];
+  pixels[offset + 3] = 255;
 }
 
 function gfsWindBarbColor(speed: number) {
@@ -3731,54 +3826,6 @@ function sampleWindVector(index: WindVectorIndex, lon: number, lat: number, samp
     vNorthwest * (1 - tx) * ty +
     vNortheast * tx * ty;
   return true;
-}
-
-function lookupWindVector(index: WindVectorIndex, lon: number, lat: number) {
-  if (index.points.length === 0) return null;
-  const sample = { u: 0, v: 0 };
-  if (sampleWindVector(index, lon, lat, sample)) {
-    return { lon, lat, u: sample.u, v: sample.v, speed: Math.hypot(sample.u, sample.v), direction: (Math.atan2(-sample.u, -sample.v) * 180) / Math.PI };
-  }
-  const outsideStructuredGrid =
-    lon < index.longitudes[0] ||
-    lon > index.longitudes[index.longitudes.length - 1] ||
-    lat < index.latitudes[0] ||
-    lat > index.latitudes[index.latitudes.length - 1];
-  if (outsideStructuredGrid || index.points.length > 500) return null;
-  const cosLat = Math.max(0.2, Math.cos(degToRad(lat)));
-  const nearest: Array<{ point: WindFieldPoint; distanceSquared: number }> = [];
-  index.points.forEach((point) => {
-    const dx = (point.lon - lon) * cosLat;
-    const dy = point.lat - lat;
-    const distanceSquared = dx * dx + dy * dy;
-    let insertAt = nearest.findIndex((candidate) => distanceSquared < candidate.distanceSquared);
-    if (insertAt < 0) insertAt = nearest.length;
-    nearest.splice(insertAt, 0, { point, distanceSquared });
-    if (nearest.length > 4) nearest.pop();
-  });
-  if (nearest[0].distanceSquared < 0.000001) return nearest[0].point;
-
-  let totalWeight = 0;
-  let u = 0;
-  let v = 0;
-  nearest.forEach(({ point, distanceSquared }) => {
-    const weight = 1 / Math.pow(distanceSquared + 0.18, 1.18);
-    totalWeight += weight;
-    u += point.u * weight;
-    v += point.v * weight;
-  });
-  if (totalWeight <= 0) return nearest[0].point;
-  u /= totalWeight;
-  v /= totalWeight;
-  return {
-    ...nearest[0].point,
-    lon,
-    lat,
-    u,
-    v,
-    speed: Math.hypot(u, v),
-    direction: (Math.atan2(-u, -v) * 180) / Math.PI
-  };
 }
 
 function bilinearWindVector(index: WindVectorIndex, lon: number, lat: number): WindFieldPoint | null {
