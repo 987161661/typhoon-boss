@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import sharp from "sharp";
 import { makeQuadrantWindPolygon } from "@/lib/meteorology";
 import { getCurrentStorms } from "@/lib/realTyphoonData";
+import { findCyclonicVorticityCenter, resolveWindAnalysisReference } from "@/lib/windFieldDiagnostics";
 import type {
   ImpactAreaPayload,
   RadarMosaicLayerPayload,
@@ -493,26 +494,34 @@ export async function getImpactArea(stormId?: string | null): Promise<ImpactArea
 }
 
 export async function getWindField(stormId?: string | null, requestedBounds?: WindFieldBounds | null): Promise<WindFieldPayload> {
-  const bounds = requestedBounds ? normalizeWindFieldBounds(requestedBounds) : null;
   const requestedStormId = stormId ?? null;
-  const cacheKey = bounds ? `viewport:${requestedStormId ?? "default"}:${windBoundsCacheKey(bounds)}` : requestedStormId ?? "default";
+  const storms = await getCurrentStorms().catch(() => []);
+  const storm = stormId ? storms.find((item) => item.id === stormId) ?? null : storms[0] ?? null;
+  const sampling: NonNullable<WindFieldPayload["sampling"]> = requestedBounds ? "viewport" : "storm";
+  const bounds = requestedBounds
+    ? normalizeWindFieldBounds(requestedBounds)
+    : storm
+      ? normalizeWindFieldBounds(buildStormWindBounds(storm))
+      : null;
+  const cacheKey = bounds ? `field:${windBoundsCacheKey(bounds)}` : "field:unavailable";
+  const attachContext = (payload: WindFieldPayload) => withWindFieldContext(payload, requestedStormId, storm, sampling);
   const cached = windFieldCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
-    return withWindFieldStormId(cached.payload, requestedStormId);
+    return attachContext(cached.payload);
   }
   const inFlight = windFieldInFlight.get(cacheKey);
   if (inFlight) {
-    return inFlight;
+    return inFlight.then(attachContext);
   }
 
   const request = (async () => {
-    const persisted = shouldPersistWindField(bounds) ? await readPersistedWindField(cacheKey) : null;
+    const persisted = shouldPersistWindField(bounds, sampling) ? await readPersistedWindField(cacheKey) : null;
     const lastSuccess = windFieldLastSuccess.get(cacheKey) ?? persisted;
     if (persisted && !windFieldLastSuccess.has(cacheKey)) {
       windFieldLastSuccess.set(cacheKey, persisted);
     }
 
-    const payload = withWindFieldStormId(await loadWindField(stormId, bounds), requestedStormId);
+    const payload = stripWindFieldContext(await loadWindField(bounds, sampling));
     if (payload.status === "available" && payload.points.length > 0) {
       const freshPayload = {
         ...payload,
@@ -524,7 +533,7 @@ export async function getWindField(stormId?: string | null, requestedBounds?: Wi
         expiresAt: Date.now() + windFieldCacheTtl(bounds),
         payload: freshPayload
       });
-      if (shouldPersistWindField(bounds)) {
+      if (shouldPersistWindField(bounds, sampling)) {
         void persistWindField(cacheKey, freshPayload);
       }
       return freshPayload;
@@ -549,13 +558,14 @@ export async function getWindField(stormId?: string | null, requestedBounds?: Wi
     }
   );
   windFieldInFlight.set(cacheKey, request);
-  return request;
+  return request.then(attachContext);
 }
 
-async function loadWindField(stormId?: string | null, viewportBounds?: WindFieldBounds | null): Promise<WindFieldPayload> {
-  const storms = await getCurrentStorms().catch(() => []);
-  const storm = storms.find((item) => item.id === stormId) ?? storms[0] ?? null;
-  if (!storm && !viewportBounds) {
+async function loadWindField(
+  sampleBounds: WindFieldBounds | null,
+  sampling: NonNullable<WindFieldPayload["sampling"]>
+): Promise<WindFieldPayload> {
+  if (!sampleBounds) {
     return {
       source: OPEN_METEO_SOURCE,
       updatedAt: new Date().toISOString(),
@@ -567,12 +577,11 @@ async function loadWindField(stormId?: string | null, viewportBounds?: WindField
       points: []
     };
   }
-  const sampleBounds = viewportBounds ?? buildStormWindBounds(storm as Storm);
   const samplePoints = buildWindSampleGrid(sampleBounds);
 
   let ncepReason = "";
   try {
-    return await loadNcepGfsWindField(sampleBounds, Boolean(viewportBounds), storm?.position ?? null);
+    return await loadNcepGfsWindField(sampleBounds, sampling === "viewport");
   } catch (error) {
     ncepReason = error instanceof Error ? error.message : "NCEP GFS GRIB2 decoding failed.";
   }
@@ -608,7 +617,7 @@ async function loadWindField(stormId?: string | null, viewportBounds?: WindField
       model: "NCEP GFS global via Open-Meteo, 10m wind",
       unit: "m/s",
       points,
-      sampling: viewportBounds ? "viewport" : "storm",
+      sampling,
       coverage: sampleBounds
     };
   } catch (error) {
@@ -617,18 +626,30 @@ async function loadWindField(stormId?: string | null, viewportBounds?: WindField
     // viewport blank. The fallback is labeled separately in its payload.
     if (samplePoints.length > 0) {
       try {
-        return await loadMetNorwayWindField(samplePoints, sampleBounds);
+        return await loadMetNorwayWindField(samplePoints, sampleBounds, sampling);
       } catch (fallbackError) {
         const fallbackReason = fallbackError instanceof Error ? fallbackError.message : "MET Norway fallback failed.";
-        return unavailableWindField(viewportBounds ?? null, sampleBounds, `${openMeteoReason}；${fallbackReason}`);
+        return unavailableWindField(sampling, sampleBounds, `${openMeteoReason}；${fallbackReason}`);
       }
     }
-    return unavailableWindField(viewportBounds ?? null, sampleBounds, openMeteoReason);
+    return unavailableWindField(sampling, sampleBounds, openMeteoReason);
   }
 }
 
-function withWindFieldStormId(payload: WindFieldPayload, stormId: string | null): WindFieldPayload {
-  return payload.stormId === stormId ? payload : { ...payload, stormId };
+function withWindFieldContext(
+  payload: WindFieldPayload,
+  stormId: string | null,
+  storm: Storm | null,
+  sampling: NonNullable<WindFieldPayload["sampling"]>
+): WindFieldPayload {
+  const analysisCenter = payload.source === NCEP_GFS_SOURCE && storm
+    ? findCyclonicVorticityCenter(payload.points, resolveWindAnalysisReference(storm, payload.updatedAt))
+    : undefined;
+  return { ...payload, stormId, sampling, analysisCenter };
+}
+
+function stripWindFieldContext(payload: WindFieldPayload): WindFieldPayload {
+  return { ...payload, stormId: undefined, analysisCenter: undefined };
 }
 
 const GFS_SCALAR_LAYERS: Record<GfsScalarLayerId, {
@@ -812,8 +833,7 @@ async function loadNcepGfsWaveLayer(bounds: WindFieldBounds): Promise<GfsWaveLay
 
 async function loadNcepGfsWindField(
   sampleBounds: WindFieldBounds,
-  viewportSampling: boolean,
-  analysisReference: Storm["position"] | null
+  viewportSampling: boolean
 ): Promise<WindFieldPayload> {
   const bounds = snapNcepBounds(sampleBounds);
   const errors: string[] = [];
@@ -858,8 +878,7 @@ async function loadNcepGfsWindField(
         displayResolutionDegrees: decoded.displayResolutionDegrees,
         cycle: `${cycle.date} ${cycle.hour}Z`,
         sampling: viewportSampling ? "viewport" : "storm",
-        coverage: bounds,
-        analysisCenter: findCyclonicVorticityCenter(decoded.points, analysisReference)
+        coverage: bounds
       };
     } catch (error) {
       errors.push(`${cycle.date}${cycle.hour}: ${error instanceof Error ? error.message : "unknown error"}`);
@@ -1060,40 +1079,6 @@ function parseNcepWindCsv(csv: string) {
   };
 }
 
-function findCyclonicVorticityCenter(
-  points: WindFieldPoint[],
-  reference: Storm["position"] | null
-): WindFieldPayload["analysisCenter"] {
-  if (!reference || points.length < 9) return undefined;
-  const longitudes = [...new Set(points.map((point) => point.lon))].sort((left, right) => left - right);
-  const latitudes = [...new Set(points.map((point) => point.lat))].sort((left, right) => left - right);
-  if (longitudes.length < 3 || latitudes.length < 3) return undefined;
-  const lonStep = longitudes[1] - longitudes[0];
-  const latStep = latitudes[1] - latitudes[0];
-  if (!Number.isFinite(lonStep) || !Number.isFinite(latStep) || lonStep <= 0 || latStep <= 0) return undefined;
-
-  const index = new Map(points.map((point) => [windSampleKey(point.lon, point.lat), point]));
-  let strongest: { lon: number; lat: number; vorticity: number } | null = null;
-  for (const point of points) {
-    // The field can cover East Asia. Restrict the diagnostic to this storm's
-    // synoptic neighbourhood, otherwise another weather system could win.
-    if (Math.abs(point.lon - reference.lon) > 5 || Math.abs(point.lat - reference.lat) > 5) continue;
-    const west = index.get(windSampleKey(point.lon - lonStep, point.lat));
-    const east = index.get(windSampleKey(point.lon + lonStep, point.lat));
-    const south = index.get(windSampleKey(point.lon, point.lat - latStep));
-    const north = index.get(windSampleKey(point.lon, point.lat + latStep));
-    if (!west || !east || !south || !north) continue;
-    const dx = 2 * lonStep * 111_320 * Math.max(0.1, Math.cos((point.lat * Math.PI) / 180));
-    const dy = 2 * latStep * 111_320;
-    const vorticity = (east.v - west.v) / dx - (north.u - south.u) / dy;
-    if (!strongest || vorticity > strongest.vorticity) {
-      strongest = { lon: point.lon, lat: point.lat, vorticity };
-    }
-  }
-  if (!strongest || strongest.vorticity <= 0) return undefined;
-  return { lon: strongest.lon, lat: strongest.lat, method: "peak-cyclonic-vorticity" };
-}
-
 function ncepCycleCandidates(now = new Date()) {
   const delayed = new Date(now.getTime() - 4.5 * 60 * 60 * 1000);
   delayed.setUTCMinutes(0, 0, 0);
@@ -1121,7 +1106,7 @@ function windSampleKey(lon: number, lat: number) {
 }
 
 function unavailableWindField(
-  viewportBounds: WindFieldBounds | null,
+  sampling: NonNullable<WindFieldPayload["sampling"]>,
   sampleBounds: WindFieldBounds,
   reason: string
 ): WindFieldPayload {
@@ -1134,14 +1119,15 @@ function unavailableWindField(
       model: "NCEP GFS global via Open-Meteo, 10m wind",
       unit: "m/s",
       points: [],
-      sampling: viewportBounds ? "viewport" : "storm",
+      sampling,
       coverage: sampleBounds
     };
 }
 
 async function loadMetNorwayWindField(
   samplePoints: Array<{ lon: number; lat: number }>,
-  sampleBounds: WindFieldBounds
+  sampleBounds: WindFieldBounds,
+  sampling: NonNullable<WindFieldPayload["sampling"]>
 ): Promise<WindFieldPayload> {
   const results = await mapWithConcurrency(samplePoints, 4, async (point) => {
     const query = new URLSearchParams({
@@ -1190,7 +1176,7 @@ async function loadMetNorwayWindField(
     model: "MET Norway global location forecast, 10m wind",
     unit: "m/s",
     points: samples.map((sample) => sample.point),
-    sampling: "viewport",
+    sampling,
     coverage: sampleBounds
   };
 }
@@ -1273,8 +1259,11 @@ function isNationwideWindBounds(bounds: WindFieldBounds | null | undefined) {
   return Boolean(bounds && bounds.east - bounds.west >= 50 && bounds.north - bounds.south >= 30);
 }
 
-function shouldPersistWindField(bounds: WindFieldBounds | null) {
-  return bounds === null || isNationwideWindBounds(bounds);
+function shouldPersistWindField(
+  bounds: WindFieldBounds | null,
+  sampling: NonNullable<WindFieldPayload["sampling"]>
+) {
+  return sampling === "storm" || isNationwideWindBounds(bounds);
 }
 
 function staleWindField(payload: WindFieldPayload, reason: string): WindFieldPayload {
@@ -1302,7 +1291,7 @@ async function readPersistedWindField(cacheKey: string): Promise<WindFieldPayloa
     const savedAt = Date.parse(raw.savedAt ?? "");
     if (raw.version !== 1 || !raw.payload || raw.payload.status !== "available" || raw.payload.points.length < 42) return null;
     if (!Number.isFinite(savedAt) || Date.now() - savedAt > PERSISTED_WIND_FIELD_MAX_AGE_MS) return null;
-    return raw.payload;
+    return stripWindFieldContext(raw.payload);
   } catch {
     return null;
   }

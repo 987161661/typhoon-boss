@@ -25,6 +25,14 @@ export interface StormFleetGeo {
   points: GeoJSON.FeatureCollection;
 }
 
+export interface GfsAnalysisCenterMarkerModel {
+  stormId: string;
+  stormName: string;
+  active: boolean;
+  updatedAt: string;
+  center: NonNullable<WindFieldPayload["analysisCenter"]>;
+}
+
 export function alignStormToWindCenter(storm: Storm, windCenter?: StormWindCenter) {
   const center = windCenter?.source === "NOAA/NCEP NOMADS Grib Filter" ? windCenter.analysisCenter : null;
   if (windCenter?.status !== "available" || !center) return storm;
@@ -37,6 +45,59 @@ export function alignStormToWindCenter(storm: Storm, windCenter?: StormWindCente
 
 export function windFieldMatchesStorm(windField: WindFieldPayload | null, storm: Storm | null) {
   return Boolean(windField && storm && windField.stormId === storm.id);
+}
+
+export function selectCanonicalStormWindField(
+  storm: Storm | null,
+  coreWindField: WindFieldPayload | null,
+  snapshotWindField: WindFieldPayload | null
+) {
+  for (const candidate of [coreWindField, snapshotWindField]) {
+    if (
+      candidate?.status === "available" &&
+      candidate.source === "NOAA/NCEP NOMADS Grib Filter" &&
+      candidate.analysisCenter &&
+      windFieldMatchesStorm(candidate, storm)
+    ) return candidate;
+  }
+  return null;
+}
+
+export function buildGfsAnalysisCenterMarkerModels(
+  storms: Storm[],
+  activeStormId: string | null,
+  activeCanonicalField: WindFieldPayload | null,
+  windCenters?: Record<string, StormWindCenter> | null
+): GfsAnalysisCenterMarkerModel[] {
+  return storms.flatMap((storm) => {
+    const activeField = storm.id === activeStormId
+      && activeCanonicalField?.stormId === storm.id
+      && activeCanonicalField.status === "available"
+      && activeCanonicalField.source === "NOAA/NCEP NOMADS Grib Filter"
+      && activeCanonicalField.analysisCenter
+      ? {
+          updatedAt: activeCanonicalField.updatedAt,
+          center: activeCanonicalField.analysisCenter
+        }
+      : null;
+    const recordedCenter = windCenters?.[storm.id];
+    const fallback = recordedCenter?.status === "available"
+      && recordedCenter.source === "NOAA/NCEP NOMADS Grib Filter"
+      && recordedCenter.analysisCenter
+      ? {
+          updatedAt: recordedCenter.updatedAt,
+          center: recordedCenter.analysisCenter
+        }
+      : null;
+    const field = activeField ?? fallback;
+    if (!field) return [];
+    return [{
+      stormId: storm.id,
+      stormName: storm.nameZh,
+      active: storm.id === activeStormId,
+      ...field
+    }];
+  });
 }
 
 export function buildStormFleetGeo(storms: Storm[], activeStormId: string | null): StormFleetGeo {

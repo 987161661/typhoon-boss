@@ -223,6 +223,14 @@ export interface WindFieldPayload extends EnvironmentLayerMeta {
     lon: number;
     lat: number;
     method: "peak-cyclonic-vorticity";
+    confidence?: "medium" | "high";
+    referenceAt?: string;
+    referenceMethod?: "track-interpolated" | "track-nearest" | "current-position";
+    referencePosition?: { lon: number; lat: number };
+    offsetKm?: number;
+    vorticityPerSecond?: number;
+    circulationMs?: number;
+    circulationBalance?: number;
   };
   coverage?: {
     west: number;

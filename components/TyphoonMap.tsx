@@ -16,8 +16,21 @@ import { AlertTriangle, ChevronLeft, ChevronRight, Database, Palette, RadioTower
 import Link from "next/link";
 import { makeCircle } from "@/lib/provinceGeo";
 import { createStormVisualCanvas } from "@/lib/stormVisualRenderer";
-import { alignStormToWindCenter, buildStormFleetGeo, FORECAST_ROUTE_COLORS, stormFleetBounds, stormTrackColor, windFieldMatchesStorm } from "@/lib/stormFleet";
+import { alignStormToWindCenter, buildGfsAnalysisCenterMarkerModels, buildStormFleetGeo, FORECAST_ROUTE_COLORS, selectCanonicalStormWindField, stormFleetBounds, stormTrackColor, windFieldMatchesStorm, type GfsAnalysisCenterMarkerModel } from "@/lib/stormFleet";
 import { cycloneTangentialSign, cycloneVisualKinematics } from "@/lib/stormKinematics";
+import {
+  createCompositeWindVectorIndex,
+  mergeWindVectorPoints,
+  sampleCompositeWindVector,
+  windFieldsShareFrame,
+  type CompositeWindVectorIndex
+} from "@/lib/windVectorGrid";
+import {
+  createStableWindSeedPlan,
+  createStableWindSeeds,
+  type StableWindSeed,
+  type StableWindSeedPlan
+} from "@/lib/windParticleSeeding";
 import type { BossProfile } from "@/lib/bossEngine/types";
 import { useRadarSnapshot } from "./useRadarSnapshot";
 import type {
@@ -38,7 +51,7 @@ import type {
   WindFieldPoint
 } from "@/lib/types";
 import { DefenseDrawer } from "./DefenseDrawer";
-import { useViewportWindField } from "./map/useViewportWindField";
+import { useStormCoreWindField, useViewportWindField } from "./map/useViewportWindField";
 import { useViewportGfsLayer, useViewportGridLayer } from "./map/useViewportGfsLayer";
 import { usePollingEnvironmentLayer } from "./map/usePollingEnvironmentLayer";
 import { HudPanel, StatusPill } from "./HudPrimitives";
@@ -267,6 +280,7 @@ export function TyphoonMap({
   const windCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const forecastCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const markerRef = useRef<maplibregl.Marker | null>(null);
+  const gfsCenterMarkerRefs = useRef<Map<string, maplibregl.Marker>>(new Map());
   const fleetMarkerRefs = useRef<Map<string, maplibregl.Marker>>(new Map());
   const mapRef = useRef<MapLibreMap | null>(null);
   const stormRef = useRef<Storm | null>(null);
@@ -293,6 +307,15 @@ export function TyphoonMap({
     stormId: storm?.id,
     boundsForMap: windRequestBoundsForMap,
     requiredBoundsForMap: windRequiredBoundsForMap
+  });
+  const coreWindCenter = windFieldMatchesStorm(windField, storm)
+    ? windField?.analysisCenter ?? storm?.position
+    : storm?.position;
+  const coreWindField = useStormCoreWindField({
+    enabled: mapReady && environmentLayers.wind,
+    stormId: storm?.id,
+    center: coreWindCenter,
+    refreshKey: windField?.updatedAt
   });
   const viewportGfsLayer = useViewportGfsLayer({
     map: mapReady ? mapRef.current : null,
@@ -341,6 +364,7 @@ export function TyphoonMap({
   }, [scopedActiveWindField, storm?.id]);
   const pendingWindFieldRef = useRef<WindFieldPayload | null>(scopedActiveWindField);
   const latestWindFieldRef = useRef<WindFieldPayload | null>(scopedActiveWindField);
+  const latestCoreWindFieldRef = useRef<WindFieldPayload | null>(null);
   const [stableWindField, setStableWindField] = useState<WindFieldPayload | null>(scopedActiveWindField);
   pendingWindFieldRef.current = scopedActiveWindField;
   // Polling replaces payload objects every cycle. Only advance the renderer's
@@ -351,9 +375,15 @@ export function TyphoonMap({
     setStableWindField(pendingWindFieldRef.current);
   }, [windFieldSignature]);
   const stormWindField = windFieldMatchesStorm(stableWindField, storm) ? stableWindField : null;
+  const compatibleCoreWindField = windFieldsShareFrame(stormWindField, coreWindField) ? coreWindField : null;
+  latestCoreWindFieldRef.current = compatibleCoreWindField;
+  const canonicalStormWindField = useMemo(
+    () => selectCanonicalStormWindField(storm, compatibleCoreWindField, windField),
+    [compatibleCoreWindField, storm, windField]
+  );
   const gfsAlignedStorm = useMemo(
-    () => stormAtGfsAnalysisCenter(storm, stormWindField),
-    [storm, stormWindField]
+    () => stormAtGfsAnalysisCenter(storm, canonicalStormWindField),
+    [canonicalStormWindField, storm]
   );
   const {
     snapshot,
@@ -393,11 +423,20 @@ export function TyphoonMap({
     () => storms.map((item) => {
       const recordedCenterStorm = alignStormToWindCenter(item, snapshot?.environment.windCenters?.[item.id]);
       if (item.id !== storm?.id) return recordedCenterStorm;
-      return stormWindField?.analysisCenter
+      return canonicalStormWindField?.analysisCenter
         ? gfsAlignedStorm ?? recordedCenterStorm
         : recordedCenterStorm;
     }),
-    [gfsAlignedStorm, snapshot?.environment.windCenters, storm, storms, stormWindField?.analysisCenter]
+    [canonicalStormWindField?.analysisCenter, gfsAlignedStorm, snapshot?.environment.windCenters, storm, storms]
+  );
+  const gfsAnalysisCenterMarkers = useMemo(
+    () => buildGfsAnalysisCenterMarkerModels(
+      storms,
+      storm?.id ?? null,
+      canonicalStormWindField,
+      snapshot?.environment.windCenters
+    ),
+    [canonicalStormWindField, snapshot?.environment.windCenters, storm?.id, storms]
   );
   const activeMarkerStorm = markerStorms.find((item) => item.id === storm?.id) ?? null;
   const provinceAlerts = useMemo(() => buildProvinceAlerts(storm, watchRegions), [storm, watchRegions]);
@@ -477,6 +516,7 @@ export function TyphoonMap({
     if (!mapNode.current || mapRef.current) return;
     let resizeObserver: ResizeObserver | null = null;
     const fleetMarkers = fleetMarkerRefs.current;
+    const gfsCenterMarkers = gfsCenterMarkerRefs.current;
 
     try {
       const map = new maplibregl.Map({
@@ -572,6 +612,7 @@ export function TyphoonMap({
       return () => {
         resizeObserver?.disconnect();
       disposeStormMarker(markerRef.current);
+      disposeGfsAnalysisCenterMarkers(gfsCenterMarkers);
       disposeStormFleetMarkers(fleetMarkers);
       markerRef.current = null;
       focusedStormIdRef.current = null;
@@ -618,6 +659,12 @@ export function TyphoonMap({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
+    syncGfsAnalysisCenterMarkers(map, gfsCenterMarkerRefs.current, gfsAnalysisCenterMarkers);
+  }, [gfsAnalysisCenterMarkers, mapReady]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
     syncRegionalSatelliteLayer(map, satelliteLayer, environmentLayers.satellite);
     syncGlobalSatelliteLayer(map, satelliteLayer, environmentLayers.satellite);
   }, [satelliteLayer, environmentLayers.satellite, mapReady]);
@@ -632,8 +679,8 @@ export function TyphoonMap({
     const map = mapRef.current;
     const canvas = windColorCanvasRef.current;
     if (!map || !canvas || !mapReady) return;
-    return startWindColorFieldRenderer(map, canvas, stormWindField, environmentLayers.wind);
-  }, [environmentLayers.wind, mapReady, stormWindField, theme]);
+    return startWindColorFieldRenderer(map, canvas, stormWindField, compatibleCoreWindField, environmentLayers.wind);
+  }, [compatibleCoreWindField, environmentLayers.wind, mapReady, stormWindField, theme]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -671,6 +718,7 @@ export function TyphoonMap({
       map,
       canvas,
       latestWindFieldRef,
+      latestCoreWindFieldRef,
       cycloneCoreRef,
       environmentLayers.wind,
       windRenderMode,
@@ -764,8 +812,8 @@ export function TyphoonMap({
               layers={environmentLayers}
               satellite={satelliteLayer}
               windField={activeWindField}
+              detailWindField={compatibleCoreWindField}
               impactArea={impactArea}
-              cycloneCore={cycloneCoreAnalysis}
               gfsScalarLayer={gfsScalarLayer}
               gfsScalarPayload={viewportGfsLayer}
               cwaRadar={cwaRadarLayer}
@@ -794,8 +842,8 @@ export function TyphoonMap({
               layers={environmentLayers}
               satellite={satelliteLayer}
               windField={activeWindField}
+              detailWindField={compatibleCoreWindField}
               impactArea={impactArea}
-              cycloneCore={cycloneCoreAnalysis}
               gfsScalarLayer={gfsScalarLayer}
               gfsScalarPayload={viewportGfsLayer}
               cwaRadar={cwaRadarLayer}
@@ -1747,8 +1795,8 @@ function EnvironmentLayerPanel({
   layers,
   satellite,
   windField,
+  detailWindField,
   impactArea,
-  cycloneCore,
   gfsScalarLayer,
   gfsScalarPayload,
   cwaRadar,
@@ -1772,8 +1820,8 @@ function EnvironmentLayerPanel({
   layers: EnvironmentLayerToggles;
   satellite: SatelliteLayerPayload | null;
   windField: WindFieldPayload | null;
+  detailWindField: WindFieldPayload | null;
   impactArea: ImpactAreaPayload | null;
-  cycloneCore: CycloneCoreAnalysis | null;
   gfsScalarLayer: GfsScalarLayerId | null;
   gfsScalarPayload: GfsScalarLayerPayload | null;
   cwaRadar: RadarMosaicLayerPayload | null;
@@ -1795,6 +1843,12 @@ function EnvironmentLayerPanel({
   onWindRenderModeChange: (mode: WindRenderMode) => void;
 }) {
   const hasDirectNcepGfs = windField?.source === "NOAA/NCEP NOMADS Grib Filter";
+  const windResolution = windField?.status === "available"
+    ? `显示 ${windField.displayResolutionDegrees ?? "?"}° / 原生 ${windField.nativeResolutionDegrees ?? "?"}°`
+    : "";
+  const coreResolution = detailWindField?.status === "available" && detailWindField.points.length > 0
+    ? ` · 核心 ${detailWindField.displayResolutionDegrees ?? "?"}°`
+    : "";
   const rows: Array<{
     id: EnvironmentLayerKey;
     icon: ComponentType<{ size?: number }>;
@@ -1823,10 +1877,12 @@ function EnvironmentLayerPanel({
       status:
         windField?.status === "available"
           ? hasDirectNcepGfs
-            ? `${windField.points.length} 格点 · ${windField.displayResolutionDegrees ?? "?"}° · ${windField.cycle ?? "未知时次"}`
+            ? windField.points.length > 0
+              ? `${windField.isStale ? "延迟保护 · " : ""}${windField.points.length} 格点 · ${windResolution}${coreResolution} · ${windField.cycle ?? "未知时次"}`
+              : `视口格点加载中 · ${windField.cycle ?? "未知时次"}`
             : `${windField.model} · 未冒充 NCEP`
           : "官方模式格点暂不可用",
-      alert: windField?.status !== "available" || !hasDirectNcepGfs
+      alert: windField?.status !== "available" || !hasDirectNcepGfs || Boolean(windField?.isStale)
     }
   ];
 
@@ -1941,14 +1997,12 @@ function EnvironmentLayerPanel({
         </div>
         <small>
           {windRenderMode === "streamlines"
-            ? cycloneCore?.hasConfirmedEye
-              ? "GFS 环境风 + JTWC 确认眼墙的局地涡旋；风眼与官方路径中心锁定。"
-              : cycloneCore
-                ? "GFS 环境风 + 官方路径/风圈约束的局地核心旋转；当前无确认风眼。"
-                : "严格按模式 U/V 格点积分；当前无可用台风核心资料。"
+            ? hasDirectNcepGfs
+              ? "严格按当前 GFS U/V 格点积分；不叠加理想化台风核心。"
+              : "按已标明来源的备用模式风积分；不冒充原始 GFS。"
             : "原始模式格点；风羽按 5 kt 编码。"}
         </small>
-        <div className="gfs-wind-key" aria-label="10米风速色阶"><i /><i /><i /><i /><i /><span>0 · 5 · 10 · 20 · 30+ m/s</span></div>
+        <div className="gfs-wind-key" aria-label="10米风速色阶"><i /><i /><i /><i /><i /><span>0 · 5 · 10 · 17 · 25 · 33 · 45+ m/s</span></div>
       </div>
       <div className="terrain-elevation-key" aria-label="地形高程色阶">
         <span>地形高差</span>
@@ -2783,12 +2837,14 @@ function startWindColorFieldRenderer(
   map: MapLibreMap,
   canvas: HTMLCanvasElement,
   windField: WindFieldPayload | null,
+  detailWindField: WindFieldPayload | null,
   visible: boolean
 ) {
   const context = canvas.getContext("2d", { alpha: true, desynchronized: true });
   if (!context) return undefined;
   const points = windField?.status === "available" ? windField.points : [];
-  const vectorIndex = createWindVectorIndex(points);
+  const detailPoints = detailWindField?.status === "available" ? detailWindField.points : [];
+  const vectorIndex = createCompositeWindVectorIndex(points, detailPoints);
   const backdropTexture = document.createElement("canvas");
   let surface: ProjectedCanvasSurface | null = null;
   const resize = () => {
@@ -2804,12 +2860,14 @@ function startWindColorFieldRenderer(
     canvas.style.transform = "none";
     resize();
     clear();
-    if (!visible || points.length === 0 || !surface) return;
+    if (!visible || (points.length === 0 && detailPoints.length === 0) || !surface) return;
     const textureMetrics = drawGfsWindBackdrop(context, map, vectorIndex, surface, backdropTexture, 0.48);
     canvas.dataset.cameraContinuity = "overscanned-affine-surface";
     canvas.dataset.overscanCoverage = `${Math.round(surface.width)}x${Math.round(surface.height)}`;
     canvas.dataset.backdropTexture = `${textureMetrics.width}x${textureMetrics.height}`;
     canvas.dataset.backdropRenderMs = textureMetrics.renderMs.toFixed(1);
+    canvas.dataset.detailVectorCount = String(detailPoints.length);
+    canvas.dataset.detailResolution = String(detailWindField?.displayResolutionDegrees ?? "none");
   };
   let cameraAnchors: CanvasCameraAnchors | null = null;
   const beginCameraMove = () => {
@@ -2944,6 +3002,7 @@ function startWindFieldRenderer(
   map: MapLibreMap,
   canvas: HTMLCanvasElement,
   windFieldRef: MutableRefObject<WindFieldPayload | null>,
+  detailWindFieldRef: MutableRefObject<WindFieldPayload | null>,
   cycloneCoreRef: MutableRefObject<CycloneCoreAnalysis | null>,
   visible: boolean,
   renderMode: WindRenderMode,
@@ -2951,6 +3010,10 @@ function startWindFieldRenderer(
 ) {
   const context = canvas.getContext("2d", { alpha: true, desynchronized: true });
   if (!context) return undefined;
+
+  const seedMode: WindParticleSeedMode = new URLSearchParams(window.location.search).get("windSeed") === "viewport"
+    ? "viewport"
+    : "stable";
 
   let frame = 0;
   let lastFrameTime = 0;
@@ -2976,24 +3039,62 @@ function startWindFieldRenderer(
   const targetFrameIntervalMs = 14;
   const targetRenderBudgetMs = livePerformanceMode ? 18 : 15;
   let observedWindField: WindFieldPayload | null = null;
+  let observedDetailWindField: WindFieldPayload | null = null;
   let observedCoreSignature = "";
   let cycloneCore: CycloneCoreAnalysis | null = null;
   let points: WindFieldPoint[] = [];
-  let vectorIndex = createWindVectorIndex(points);
+  let vectorIndex = createCompositeWindVectorIndex(points);
   let particles: WindParticle[] = [];
+  let stableSeedPlan: StableWindSeedPlan | null = null;
   const trailPointLimit = map.getCanvas().clientWidth <= 760 ? 72 : 96;
+
+  const resetParticle = (particle: WindParticle, currentBounds: WindParticleBounds, projectionRevision: number) => {
+    if (seedMode === "stable" && particle.seedKey && particle.seedLon !== undefined && particle.seedLat !== undefined) {
+      return stableWindParticle(
+        { key: particle.seedKey, lon: particle.seedLon, lat: particle.seedLat },
+        projectionRevision
+      );
+    }
+    return randomWindParticle(currentBounds, projectionRevision);
+  };
+
+  const seedStableParticles = (
+    currentBounds: WindParticleBounds,
+    particleBudget: number,
+    projectionRevision: number,
+    existingParticles: WindParticle[] = []
+  ) => {
+    stableSeedPlan = createStableWindSeedPlan(currentBounds, particleBudget);
+    const seeds = createStableWindSeeds(currentBounds, stableSeedPlan, particleBudget);
+    const existingBySeed = new Map(
+      existingParticles
+        .filter((particle): particle is WindParticle & { seedKey: string } => Boolean(particle.seedKey))
+        .map((particle) => [particle.seedKey, particle])
+    );
+    particles = seeds.map((seed) => existingBySeed.get(seed.key) ?? stableWindParticle(seed, projectionRevision));
+    canvas.dataset.particleCount = String(particles.length);
+    canvas.dataset.stableSeedResolution = String(stableSeedPlan.resolution);
+    canvas.dataset.stableSeedSlots = String(stableSeedPlan.slotsPerCell);
+  };
 
   const syncWindField = () => {
     const nextField = windFieldRef.current;
-    if (nextField === observedWindField) return false;
+    const nextDetailField = detailWindFieldRef.current;
+    if (nextField === observedWindField && nextDetailField === observedDetailWindField) return false;
     observedWindField = nextField;
-    points = nextField?.status === "available" ? nextField.points : [];
-    vectorIndex = createWindVectorIndex(points);
+    observedDetailWindField = nextDetailField;
+    const ambientPoints = nextField?.status === "available" ? nextField.points : [];
+    const detailPoints = nextDetailField?.status === "available" ? nextDetailField.points : [];
+    points = mergeWindVectorPoints(ambientPoints, detailPoints);
+    vectorIndex = createCompositeWindVectorIndex(ambientPoints, detailPoints);
     fieldHotSwapCount += 1;
     canvas.dataset.fieldHotSwaps = String(fieldHotSwapCount);
     canvas.dataset.vectorCount = String(points.length);
+    canvas.dataset.ambientVectorCount = String(ambientPoints.length);
+    canvas.dataset.detailVectorCount = String(detailPoints.length);
     canvas.dataset.windSource = nextField?.source ?? "unavailable";
     canvas.dataset.windResolution = String(nextField?.displayResolutionDegrees ?? "unknown");
+    canvas.dataset.detailResolution = String(nextDetailField?.displayResolutionDegrees ?? "none");
     delete canvas.dataset.analysisCenterLon;
     delete canvas.dataset.analysisCenterLat;
     delete canvas.dataset.analysisCenterX;
@@ -3018,7 +3119,7 @@ function startWindFieldRenderer(
     if (particles.length > 0) {
       for (let index = 0; index < particles.length; index += 1) {
         if (particles[index].kind !== "ambient") {
-          Object.assign(particles[index], randomWindParticle(bounds, cameraRevision));
+          Object.assign(particles[index], resetParticle(particles[index], bounds, cameraRevision));
         }
       }
       canvas.dataset.coreParticleCount = "0";
@@ -3052,7 +3153,7 @@ function startWindFieldRenderer(
   syncWindField();
   syncCycloneCore();
   let bounds = surface ? projectedCanvasWindBounds(map, surface, 0.04) : visibleWindBounds(map, 0.35);
-  const particleCount = livePerformanceMode
+  const particleBudget = livePerformanceMode
     ? canvasWidth <= 760
       ? 640
       : Math.min(1_320, Math.max(1_040, Math.round((canvasWidth * canvasHeight) / 650)))
@@ -3063,13 +3164,16 @@ function startWindFieldRenderer(
   // an idealized cyclone ring creates a visually perfect circle that the source
   // data does not support.
   const coreParticleCount = 0;
-  particles = Array.from({ length: particleCount }, () => randomWindParticle(bounds));
+  if (seedMode === "stable") seedStableParticles(bounds, particleBudget, cameraRevision);
+  else particles = Array.from({ length: particleBudget }, () => randomWindParticle(bounds));
   canvas.dataset.flowSession = String(++windFlowRendererSequence);
   canvas.dataset.renderer = renderMode === "gfs" ? "ncep-gfs-wind-barbs" : "ncep-gfs-streamlines";
   canvas.dataset.vectorInterpolation = "structured-grid-bilinear-raw-uv";
   canvas.dataset.backgroundMode = "raw-ncep-gfs-grid";
   canvas.dataset.cameraContinuity = "overscanned-frozen-frame-affine-transform-then-geographic-redraw";
-  canvas.dataset.particleCount = String(particleCount);
+  canvas.dataset.windSeedMode = seedMode;
+  canvas.dataset.particleBudget = String(particleBudget);
+  canvas.dataset.particleCount = String(particles.length);
   canvas.dataset.trailPoints = String(trailPointLimit);
   canvas.dataset.particleJourney = "model-grid-streamlines";
   canvas.dataset.simulationSecondsPerSecond = "14000";
@@ -3086,13 +3190,34 @@ function startWindFieldRenderer(
 
   if (reducedMotion || renderMode === "gfs") {
     drawStatic();
-    map.on("move", drawStatic);
+    let staticCameraAnchors: CanvasCameraAnchors | null = null;
+    const beginStaticCameraMove = () => {
+      canvas.style.transform = "none";
+      staticCameraAnchors = captureCanvasCameraAnchors(map, canvas);
+    };
+    const followStaticCamera = () => {
+      if (!staticCameraAnchors) beginStaticCameraMove();
+      if (!staticCameraAnchors) return;
+      const transform = canvasCameraTransform(map, staticCameraAnchors);
+      canvas.style.transformOrigin = "0 0";
+      canvas.style.transform = `matrix(${transform.a}, ${transform.b}, ${transform.c}, ${transform.d}, ${transform.e}, ${transform.f})`;
+    };
+    const finishStaticCameraMove = () => {
+      staticCameraAnchors = null;
+      drawStatic();
+    };
+    map.on("movestart", beginStaticCameraMove);
+    map.on("move", followStaticCamera);
+    map.on("moveend", finishStaticCameraMove);
     map.on("resize", drawStatic);
     window.addEventListener("resize", drawStatic);
     return () => {
-      map.off("move", drawStatic);
+      map.off("movestart", beginStaticCameraMove);
+      map.off("move", followStaticCamera);
+      map.off("moveend", finishStaticCameraMove);
       map.off("resize", drawStatic);
       window.removeEventListener("resize", drawStatic);
+      canvas.style.transform = "none";
       clear();
     };
   }
@@ -3145,7 +3270,9 @@ function startWindFieldRenderer(
     const zoomSignal = smoothStep(3.25, 5.65, map.getZoom());
     const maximumActiveParticleCount = Math.min(
       particles.length,
-      livePerformanceMode
+      seedMode === "stable"
+        ? livePerformanceMode ? 1_040 : 1_380
+        : livePerformanceMode
         ? Math.min(1_040, Math.round(particles.length * (0.84 + zoomSignal * 0.12)))
         : 1_380
     );
@@ -3159,9 +3286,9 @@ function startWindFieldRenderer(
       minimumActiveParticleCount,
       Math.min(maximumActiveParticleCount, Math.round(maximumActiveParticleCount * adaptiveQuality))
     );
-    const trailScale = 1.08 + zoomSignal * 0.38;
-    const strokeScale = 0.84 + zoomSignal * 0.24;
-    const opacityScale = 0.9 + zoomSignal * 0.08;
+    const trailScale = seedMode === "stable" ? 1.18 : 1.08 + zoomSignal * 0.38;
+    const strokeScale = seedMode === "stable" ? 0.96 : 0.84 + zoomSignal * 0.24;
+    const opacityScale = seedMode === "stable" ? 0.94 : 0.9 + zoomSignal * 0.08;
     canvas.dataset.activeParticleCount = String(activeParticleCount);
     canvas.dataset.qualityScale = adaptiveQuality.toFixed(2);
     canvas.dataset.zoomSignal = zoomSignal.toFixed(2);
@@ -3185,15 +3312,15 @@ function startWindFieldRenderer(
     for (let index = 0; index < activeParticleCount; index += 1) {
       const particle = particles[index];
       if (particle.kind === "core" && !cycloneCore) {
-        Object.assign(particle, randomWindParticle(bounds, cameraRevision));
+        Object.assign(particle, resetParticle(particle, bounds, cameraRevision));
       }
       if (particle.projectionRevision !== cameraRevision) {
         particle.trailScreen = particle.trail.map((point) => map.project([point.lon, point.lat]));
         particle.projectionRevision = cameraRevision;
       }
-      if (!sampleWindVector(vectorIndex, particle.lon, particle.lat, windSample)) {
+      if (!sampleCompositeWindVector(vectorIndex, particle.lon, particle.lat, windSample)) {
         if (reseedCount < reseedBudget) {
-          Object.assign(particle, randomWindParticle(bounds, cameraRevision));
+          Object.assign(particle, resetParticle(particle, bounds, cameraRevision));
           reseedCount += 1;
         }
         continue;
@@ -3228,7 +3355,7 @@ function startWindFieldRenderer(
         !containsWindPoint(bounds, particle.lon, particle.lat)
       ) {
         if (reseedCount < reseedBudget) {
-          Object.assign(particle, randomWindParticle(bounds, cameraRevision));
+          Object.assign(particle, resetParticle(particle, bounds, cameraRevision));
           reseedCount += 1;
         }
         continue;
@@ -3266,6 +3393,7 @@ function startWindFieldRenderer(
     }
     canvas.dataset.averageRawTrailPx = measuredTrailCount > 0 ? (rawTrailLengthTotal / measuredTrailCount).toFixed(1) : "0";
     canvas.dataset.averageRenderedTrailPx = measuredTrailCount > 0 ? (renderedTrailLengthTotal / measuredTrailCount).toFixed(1) : "0";
+    canvas.dataset.renderedTrailCount = String(measuredTrailCount);
     canvas.dataset.impactTintCounts = JSON.stringify(impactTintCounts);
     canvas.dataset.densitySuppressedCount = String(densitySuppressedCount);
     canvas.dataset.reseedCount = String(reseedCount);
@@ -3322,6 +3450,7 @@ function startWindFieldRenderer(
     cameraAnchors = null;
     bounds = surface ? projectedCanvasWindBounds(map, surface, 0.04) : visibleWindBounds(map, 0.35);
     cameraRevision += 1;
+    if (seedMode === "stable") seedStableParticles(bounds, particleBudget, cameraRevision, particles);
     canvas.dataset.cameraRevision = String(cameraRevision);
     canvas.dataset.cameraInteraction = "geographic-redraw";
     syncCycloneCoreScreen();
@@ -3331,6 +3460,7 @@ function startWindFieldRenderer(
     resizeCanvas();
     bounds = surface ? projectedCanvasWindBounds(map, surface, 0.04) : visibleWindBounds(map, 0.35);
     cameraRevision += 1;
+    if (seedMode === "stable") seedStableParticles(bounds, particleBudget, cameraRevision, particles);
     canvas.dataset.cameraRevision = String(cameraRevision);
     pendingCameraRedraw = true;
   };
@@ -3429,10 +3559,15 @@ interface WindParticleBounds {
   north: number;
 }
 
+type WindParticleSeedMode = "stable" | "viewport";
+
 interface WindParticle {
   kind: "ambient" | "core";
   lon: number;
   lat: number;
+  seedKey?: string;
+  seedLon?: number;
+  seedLat?: number;
   life: number;
   travelKm: number;
   maxTravelKm: number;
@@ -3465,13 +3600,25 @@ function drawMeteorologicalWindBarbs(
   points: WindFieldPoint[],
   compact: boolean
 ) {
-  const plotted: Array<{ x: number; y: number }> = [];
   const minimumSpacing = compact ? 38 : 46;
+  const occupied = new Map<string, { x: number; y: number }>();
   for (const vector of points) {
     const projected = map.project([vector.lon, vector.lat]);
     if (projected.x < -20 || projected.y < -20 || projected.x > map.getCanvas().clientWidth + 20 || projected.y > map.getCanvas().clientHeight + 20) continue;
-    if (plotted.some((sample) => Math.hypot(sample.x - projected.x, sample.y - projected.y) < minimumSpacing)) continue;
-    plotted.push(projected);
+    const cellX = Math.floor(projected.x / minimumSpacing);
+    const cellY = Math.floor(projected.y / minimumSpacing);
+    let crowded = false;
+    for (let yOffset = -1; yOffset <= 1 && !crowded; yOffset += 1) {
+      for (let xOffset = -1; xOffset <= 1; xOffset += 1) {
+        const sample = occupied.get(`${cellX + xOffset}:${cellY + yOffset}`);
+        if (sample && Math.hypot(sample.x - projected.x, sample.y - projected.y) < minimumSpacing) {
+          crowded = true;
+          break;
+        }
+      }
+    }
+    if (crowded) continue;
+    occupied.set(`${cellX}:${cellY}`, projected);
     drawWindBarb(
       context,
       projected.x,
@@ -3488,7 +3635,7 @@ function drawMeteorologicalWindBarbs(
 function drawGfsWindBackdrop(
   context: CanvasRenderingContext2D,
   map: MapLibreMap,
-  index: WindVectorIndex,
+  index: CompositeWindVectorIndex,
   surface: ProjectedCanvasSurface,
   texture: HTMLCanvasElement,
   opacity: number
@@ -3528,7 +3675,7 @@ function drawGfsWindBackdrop(
         ? { lng: longitudes[x], lat: latitudes[y] }
         : map.unproject([screenX, screenY]);
       const offset = (y * textureWidth + x) * 4;
-      if (!sampleWindVector(index, location.lng, location.lat, sample)) {
+      if (!sampleCompositeWindVector(index, location.lng, location.lat, sample)) {
         pixels[offset + 3] = 0;
         continue;
       }
@@ -3682,6 +3829,25 @@ function randomWindParticle(
   };
 }
 
+function stableWindParticle(seed: StableWindSeed, projectionRevision = 0): WindParticle {
+  return {
+    kind: "ambient",
+    lon: seed.lon,
+    lat: seed.lat,
+    seedKey: seed.key,
+    seedLon: seed.lon,
+    seedLat: seed.lat,
+    life: 15 + Math.random() * 15,
+    travelKm: 0,
+    maxTravelKm: 1_260 + Math.random() * 1_080,
+    u: 0,
+    v: 0,
+    trail: [],
+    trailScreen: [],
+    projectionRevision
+  };
+}
+
 interface CycloneCoreAnalysis {
   signature: string;
   center: { lon: number; lat: number };
@@ -3731,138 +3897,6 @@ function buildCycloneCoreAnalysis(storm: Storm | null, bossProfile: BossProfile 
 
 function containsWindPoint(bounds: WindParticleBounds, lon: number, lat: number) {
   return lon >= bounds.west && lon <= bounds.east && lat >= bounds.south && lat <= bounds.north;
-}
-
-interface WindVectorIndex {
-  points: WindFieldPoint[];
-  longitudes: number[];
-  latitudes: number[];
-  grid: Map<string, WindFieldPoint>;
-  width: number;
-  height: number;
-  west: number;
-  south: number;
-  longitudeStep: number;
-  latitudeStep: number;
-  u: Float32Array;
-  v: Float32Array;
-  regular: boolean;
-}
-
-function createWindVectorIndex(points: WindFieldPoint[]): WindVectorIndex {
-  const longitudes = [...new Set(points.map((point) => point.lon))].sort((left, right) => left - right);
-  const latitudes = [...new Set(points.map((point) => point.lat))].sort((left, right) => left - right);
-  const grid = new Map(points.map((point) => [windGridKey(point.lon, point.lat), point]));
-  const width = longitudes.length;
-  const height = latitudes.length;
-  const west = longitudes[0] ?? 0;
-  const south = latitudes[0] ?? 0;
-  const longitudeStep = width > 1 ? (longitudes[width - 1] - west) / (width - 1) : 0;
-  const latitudeStep = height > 1 ? (latitudes[height - 1] - south) / (height - 1) : 0;
-  const regular = width > 1 && height > 1 && longitudeStep > 0 && latitudeStep > 0 && width * height <= points.length * 1.08;
-  const u = new Float32Array(width * height);
-  const v = new Float32Array(width * height);
-  u.fill(Number.NaN);
-  v.fill(Number.NaN);
-  if (regular) {
-    points.forEach((point) => {
-      const x = Math.round((point.lon - west) / longitudeStep);
-      const y = Math.round((point.lat - south) / latitudeStep);
-      if (x < 0 || x >= width || y < 0 || y >= height) return;
-      const offset = y * width + x;
-      u[offset] = point.u;
-      v[offset] = point.v;
-    });
-  }
-  return { points, longitudes, latitudes, grid, width, height, west, south, longitudeStep, latitudeStep, u, v, regular };
-}
-
-interface WindVectorSample {
-  u: number;
-  v: number;
-}
-
-function sampleWindVector(index: WindVectorIndex, lon: number, lat: number, sample: WindVectorSample) {
-  if (!index.regular) {
-    const vector = bilinearWindVector(index, lon, lat);
-    if (!vector) return false;
-    sample.u = vector.u;
-    sample.v = vector.v;
-    return true;
-  }
-  const gridX = (lon - index.west) / index.longitudeStep;
-  const gridY = (lat - index.south) / index.latitudeStep;
-  if (gridX < 0 || gridY < 0 || gridX > index.width - 1 || gridY > index.height - 1) return false;
-  const x0 = Math.min(index.width - 2, Math.floor(gridX));
-  const y0 = Math.min(index.height - 2, Math.floor(gridY));
-  const x1 = x0 + 1;
-  const y1 = y0 + 1;
-  const tx = Math.max(0, Math.min(1, gridX - x0));
-  const ty = Math.max(0, Math.min(1, gridY - y0));
-  const southwest = y0 * index.width + x0;
-  const southeast = y0 * index.width + x1;
-  const northwest = y1 * index.width + x0;
-  const northeast = y1 * index.width + x1;
-  const uSouthwest = index.u[southwest];
-  const uSoutheast = index.u[southeast];
-  const uNorthwest = index.u[northwest];
-  const uNortheast = index.u[northeast];
-  const vSouthwest = index.v[southwest];
-  const vSoutheast = index.v[southeast];
-  const vNorthwest = index.v[northwest];
-  const vNortheast = index.v[northeast];
-  if (
-    !Number.isFinite(uSouthwest) || !Number.isFinite(uSoutheast) || !Number.isFinite(uNorthwest) || !Number.isFinite(uNortheast) ||
-    !Number.isFinite(vSouthwest) || !Number.isFinite(vSoutheast) || !Number.isFinite(vNorthwest) || !Number.isFinite(vNortheast)
-  ) return false;
-  sample.u =
-    uSouthwest * (1 - tx) * (1 - ty) +
-    uSoutheast * tx * (1 - ty) +
-    uNorthwest * (1 - tx) * ty +
-    uNortheast * tx * ty;
-  sample.v =
-    vSouthwest * (1 - tx) * (1 - ty) +
-    vSoutheast * tx * (1 - ty) +
-    vNorthwest * (1 - tx) * ty +
-    vNortheast * tx * ty;
-  return true;
-}
-
-function bilinearWindVector(index: WindVectorIndex, lon: number, lat: number): WindFieldPoint | null {
-  const x = gridBracket(index.longitudes, lon);
-  const y = gridBracket(index.latitudes, lat);
-  if (!x || !y) return null;
-  const southwest = index.grid.get(windGridKey(x.lower, y.lower));
-  const southeast = index.grid.get(windGridKey(x.upper, y.lower));
-  const northwest = index.grid.get(windGridKey(x.lower, y.upper));
-  const northeast = index.grid.get(windGridKey(x.upper, y.upper));
-  if (!southwest || !southeast || !northwest || !northeast) return null;
-  const tx = x.upper === x.lower ? 0 : (lon - x.lower) / (x.upper - x.lower);
-  const ty = y.upper === y.lower ? 0 : (lat - y.lower) / (y.upper - y.lower);
-  const blend = (field: "u" | "v") =>
-    southwest[field] * (1 - tx) * (1 - ty) +
-    southeast[field] * tx * (1 - ty) +
-    northwest[field] * (1 - tx) * ty +
-    northeast[field] * tx * ty;
-  const u = blend("u");
-  const v = blend("v");
-  return { lon, lat, u, v, speed: Math.hypot(u, v), direction: (Math.atan2(-u, -v) * 180) / Math.PI };
-}
-
-function gridBracket(values: number[], value: number) {
-  if (values.length < 2 || value < values[0] || value > values[values.length - 1]) return null;
-  let lowerIndex = 0;
-  let upperIndex = values.length - 1;
-  while (upperIndex - lowerIndex > 1) {
-    const middle = Math.floor((lowerIndex + upperIndex) / 2);
-    if (value <= values[middle]) upperIndex = middle;
-    else lowerIndex = middle;
-  }
-  return { lower: values[lowerIndex], upper: values[upperIndex] };
-}
-
-function windGridKey(lon: number, lat: number) {
-  return `${lon.toFixed(4)}:${lat.toFixed(4)}`;
 }
 
 function renderStormOnMap(
@@ -3998,6 +4032,59 @@ function disposeStormMarker(marker: maplibregl.Marker | null) {
     .querySelectorAll(".storm-satellite-core-canvas")
     .forEach((canvas) => canvas.dispatchEvent(new Event("storm-visual-dispose")));
   marker.remove();
+}
+
+function syncGfsAnalysisCenterMarkers(
+  map: MapLibreMap,
+  markers: Map<string, maplibregl.Marker>,
+  models: GfsAnalysisCenterMarkerModel[]
+) {
+  const visibleIds = new Set(models.map((model) => model.stormId));
+  markers.forEach((marker, stormId) => {
+    if (visibleIds.has(stormId)) return;
+    marker.remove();
+    markers.delete(stormId);
+  });
+
+  models.forEach((model) => {
+    const { center } = model;
+    let marker = markers.get(model.stormId);
+    if (!marker) {
+      const root = document.createElement("div");
+      root.className = "gfs-analysis-center-marker";
+      root.innerHTML = [
+        '<span class="gfs-analysis-center-crosshair" aria-hidden="true"></span>',
+        '<span class="gfs-analysis-center-label"><strong></strong><small></small></span>'
+      ].join("");
+      marker = new maplibregl.Marker({ element: root, anchor: "center" })
+        .setLngLat([center.lon, center.lat])
+        .addTo(map);
+      markers.set(model.stormId, marker);
+    }
+
+    const element = marker.getElement();
+    const confidence = center.confidence === "high" ? "高置信" : center.confidence === "medium" ? "中置信" : "待确认";
+    const offset = center.offsetKm === undefined ? "" : ` · 偏同期路径 ${center.offsetKm} km`;
+    const referenceAt = center.referenceAt ?? model.updatedAt;
+    const detail = `${formatBeijingTime(referenceAt)} BJT · ${confidence}${offset}`;
+    element.classList.toggle("is-active", model.active);
+    element.dataset.stormId = model.stormId;
+    element.dataset.centerLon = String(center.lon);
+    element.dataset.centerLat = String(center.lat);
+    element.dataset.referenceAt = referenceAt;
+    element.style.setProperty("--gfs-center-color", stormTrackColor(model.stormId));
+    element.setAttribute("aria-label", `${model.stormName} GFS 主涡旋中心 ${center.lon.toFixed(2)} 东经 ${center.lat.toFixed(2)} 北纬，${detail}`);
+    const titleElement = element.querySelector("strong");
+    if (titleElement) titleElement.textContent = `${model.stormName} · GFS 主涡旋`;
+    const detailElement = element.querySelector("small");
+    if (detailElement) detailElement.textContent = detail;
+    marker.setLngLat([center.lon, center.lat]);
+  });
+}
+
+function disposeGfsAnalysisCenterMarkers(markers: Map<string, maplibregl.Marker>) {
+  markers.forEach((marker) => marker.remove());
+  markers.clear();
 }
 
 function syncStormFleetMarkers(
@@ -4394,10 +4481,11 @@ function WindFieldTimeBadge({ windField, currentStorm }: { windField: WindFieldP
   const currentTime = currentStorm ? Date.parse(currentStorm.updatedAt) : Number.NaN;
   const lagHours = Number.isFinite(fieldTime) && Number.isFinite(currentTime) ? Math.max(0, Math.round((currentTime - fieldTime) / 3_600_000)) : null;
   return (
-    <aside className="wind-field-time-badge" aria-label="GFS 风场数据时次">
-      <span>GFS 风场有效时刻</span>
+    <aside className="wind-field-time-badge" data-stale={windField.isStale ? "true" : "false"} aria-label="GFS 风场数据时次">
+      <span>{windField.isStale ? "GFS 风场延迟保护" : "GFS 风场有效时刻"}</span>
       <strong>{formatBeijingTime(windField.updatedAt)} BJT</strong>
-      <small>{formatGfsTime(windField.updatedAt)} · {windField.cycle ?? "F000"}</small>
+      <small>{formatGfsTime(windField.updatedAt)} · {windField.cycle ?? "F000"} · 显示 {windField.displayResolutionDegrees ?? "?"}° / 原生 {windField.nativeResolutionDegrees ?? "?"}°</small>
+      {windField.isStale ? <em>最新刷新失败，当前为最后有效模式场</em> : null}
       {currentStorm ? <em>最新路径 {formatBeijingTime(currentStorm.updatedAt)} BJT{lagHours !== null ? ` · 相差 ${lagHours} 小时` : ""}</em> : null}
     </aside>
   );

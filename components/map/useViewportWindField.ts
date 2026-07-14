@@ -83,6 +83,55 @@ export function useViewportWindField({
   return field;
 }
 
+export function useStormCoreWindField({
+  enabled,
+  stormId,
+  center,
+  refreshKey,
+  radiusDegrees = 3.25
+}: {
+  enabled: boolean;
+  stormId?: string | null;
+  center?: { lon: number; lat: number } | null;
+  refreshKey?: string | null;
+  radiusDegrees?: number;
+}) {
+  const [field, setField] = useState<WindFieldPayload | null>(null);
+  const centerLon = center?.lon;
+  const centerLat = center?.lat;
+
+  useEffect(() => {
+    if (!enabled || !stormId || !Number.isFinite(centerLon) || !Number.isFinite(centerLat)) {
+      setField(null);
+      return;
+    }
+    let disposed = false;
+    const controller = new AbortController();
+    const bounds = {
+      west: Math.max(-180, (centerLon as number) - radiusDegrees),
+      east: Math.min(180, (centerLon as number) + radiusDegrees),
+      south: Math.max(-80, (centerLat as number) - radiusDegrees),
+      north: Math.min(80, (centerLat as number) + radiusDegrees)
+    };
+    const query = new URLSearchParams(Object.fromEntries(Object.entries(bounds).map(([key, value]) => [key, value.toFixed(2)])));
+    query.set("stormId", stormId);
+    void fetch(`/api/environment/wind-field?${query}`, { cache: "no-store", signal: controller.signal })
+      .then((response) => response.ok ? response.json() as Promise<WindFieldPayload> : null)
+      .then((payload) => {
+        if (!disposed && payload?.status === "available" && payload.points.length > 0) setField(payload);
+      })
+      .catch((error) => {
+        if (!(error instanceof DOMException && error.name === "AbortError")) return;
+      });
+    return () => {
+      disposed = true;
+      controller.abort();
+    };
+  }, [centerLat, centerLon, enabled, radiusDegrees, refreshKey, stormId]);
+
+  return field;
+}
+
 export function windCoverageContains(
   coverage: WindFieldBounds | null | undefined,
   required: WindFieldBounds

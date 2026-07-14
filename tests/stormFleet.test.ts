@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { alignStormToWindCenter, buildStormFleetGeo, FORECAST_ROUTE_COLORS, stormFleetBounds, stormTrackColor, windFieldMatchesStorm } from "../lib/stormFleet";
-import type { Storm } from "../lib/types";
+import { alignStormToWindCenter, buildGfsAnalysisCenterMarkerModels, buildStormFleetGeo, FORECAST_ROUTE_COLORS, selectCanonicalStormWindField, stormFleetBounds, stormTrackColor, windFieldMatchesStorm } from "../lib/stormFleet";
+import type { Storm, WindFieldPayload } from "../lib/types";
 
 function storm(id: string, lon: number, lat: number): Storm {
   return {
@@ -126,3 +126,59 @@ test("a wind field can never move a different storm", () => {
   assert.equal(windFieldMatchesStorm(field, bavi), true);
   assert.equal(windFieldMatchesStorm(field, haishen), false);
 });
+
+test("canonical storm center prefers the high-resolution core field and never accepts a viewport substitute", () => {
+  const bavi = storm("202609", 121, 36.9);
+  const snapshot = windField(bavi.id, 119.25, 35.25, 1);
+  const core = windField(bavi.id, 119.5, 35.5, 0.25);
+  const foreign = windField("202611", 136.75, 11.75, 0.25);
+
+  assert.equal(selectCanonicalStormWindField(bavi, core, snapshot), core);
+  assert.equal(selectCanonicalStormWindField(bavi, null, snapshot), snapshot);
+  assert.equal(selectCanonicalStormWindField(bavi, foreign, null), null);
+});
+
+test("GFS center marker models keep every storm visible while the active storm uses its canonical field", () => {
+  const bavi = storm("202609", 121, 36.9);
+  const haishen = storm("202611", 136, 10);
+  const canonical = windField(bavi.id, 119.5, 35.5, 0.25);
+  const models = buildGfsAnalysisCenterMarkerModels([bavi, haishen], bavi.id, canonical, {
+    [bavi.id]: {
+      stormId: bavi.id,
+      source: "NOAA/NCEP NOMADS Grib Filter",
+      updatedAt: "2026-07-13T18:00:00Z",
+      status: "available",
+      analysisCenter: { lon: 119.25, lat: 35.25, method: "peak-cyclonic-vorticity" }
+    },
+    [haishen.id]: {
+      stormId: haishen.id,
+      source: "NOAA/NCEP NOMADS Grib Filter",
+      updatedAt: "2026-07-13T18:00:00Z",
+      status: "available",
+      analysisCenter: { lon: 136.75, lat: 11.75, method: "peak-cyclonic-vorticity" }
+    }
+  });
+
+  assert.deepEqual(models.map((model) => model.stormId), [bavi.id, haishen.id]);
+  assert.deepEqual(models[0].center, canonical.analysisCenter);
+  assert.equal(models[0].active, true);
+  assert.equal(models[0].stormName, bavi.nameZh);
+  assert.deepEqual(models[1].center, { lon: 136.75, lat: 11.75, method: "peak-cyclonic-vorticity" });
+  assert.equal(models[1].active, false);
+});
+
+function windField(stormId: string, lon: number, lat: number, resolution: number): WindFieldPayload {
+  return {
+    stormId,
+    source: "NOAA/NCEP NOMADS Grib Filter",
+    updatedAt: "2026-07-13T18:00:00Z",
+    status: "available",
+    attribution: "NOAA",
+    model: "GFS",
+    unit: "m/s",
+    points: [],
+    nativeResolutionDegrees: 0.25,
+    displayResolutionDegrees: resolution,
+    analysisCenter: { lon, lat, method: "peak-cyclonic-vorticity", confidence: "medium", offsetKm: 73 }
+  };
+}

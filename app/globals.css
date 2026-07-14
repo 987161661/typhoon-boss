@@ -269,6 +269,17 @@ a:focus-visible {
   font-style: normal;
 }
 
+.wind-field-time-badge[data-stale="true"] {
+  border-color: rgba(255, 184, 60, 0.68);
+  border-left-color: #ffb83c;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3), inset 0 0 18px rgba(255, 184, 60, 0.1);
+}
+
+.wind-field-time-badge[data-stale="true"] span,
+.wind-field-time-badge[data-stale="true"] small {
+  color: #ffd98b;
+}
+
 /* The broadcast forecast HUD occupies the lower edge of the map. Keep the
    GFS timestamp directly above that reserved band instead of letting data
    provenance compete with the on-air summary. */
@@ -3502,6 +3513,83 @@ a:focus-visible {
     drop-shadow(0 0 var(--storm-glow-radius, 22px) rgba(0, 216, 255, 0.18));
   transform-origin: center;
   transition: width 80ms linear, height 80ms linear;
+}
+
+.gfs-analysis-center-marker {
+  position: absolute;
+  z-index: 12;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+  --gfs-center-color: #ffb000;
+}
+
+.gfs-analysis-center-crosshair {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--gfs-center-color);
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(4, 12, 18, 0.82), 0 0 16px color-mix(in srgb, var(--gfs-center-color) 72%, transparent);
+  transform: translate(-50%, -50%);
+}
+
+.gfs-analysis-center-crosshair::before,
+.gfs-analysis-center-crosshair::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  background: color-mix(in srgb, var(--gfs-center-color) 66%, white);
+  transform: translate(-50%, -50%);
+}
+
+.gfs-analysis-center-crosshair::before {
+  width: 26px;
+  height: 1px;
+}
+
+.gfs-analysis-center-crosshair::after {
+  width: 1px;
+  height: 26px;
+}
+
+.gfs-analysis-center-label {
+  position: absolute;
+  left: 15px;
+  top: -31px;
+  display: grid;
+  gap: 2px;
+  min-width: max-content;
+  padding: 5px 7px;
+  color: color-mix(in srgb, var(--gfs-center-color) 72%, white);
+  background: rgba(5, 16, 21, 0.88);
+  border: 1px solid color-mix(in srgb, var(--gfs-center-color) 68%, transparent);
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.32);
+  font-size: 12px;
+  line-height: 1.1;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.gfs-analysis-center-label strong {
+  font-size: 14px;
+}
+
+.gfs-analysis-center-label small {
+  color: rgba(219, 231, 226, 0.82);
+  font-size: 11px;
+}
+
+.gfs-analysis-center-marker.is-active .gfs-analysis-center-crosshair {
+  box-shadow: 0 0 0 2px rgba(4, 12, 18, 0.88), 0 0 22px color-mix(in srgb, var(--gfs-center-color) 88%, transparent);
+}
+
+.gfs-analysis-center-marker.is-active .gfs-analysis-center-label {
+  background: rgba(5, 16, 21, 0.94);
+  border-width: 2px;
 }
 
 /* All camera gestures share one cheap composition mode. Geographic content
