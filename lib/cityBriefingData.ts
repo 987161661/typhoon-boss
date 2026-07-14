@@ -1,6 +1,8 @@
 import { createPrivateKey, sign } from "node:crypto";
-import { readFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { narrateCitySituation } from "@/lib/cityNarration";
+import { buildCityBattleReport } from "@/lib/cityBattleReport";
 
 /**
  * City-scale evidence bundle for the live-room city card.
@@ -13,7 +15,7 @@ export type CityRiskLevel = "low" | "moderate" | "high" | "severe" | "unavailabl
 export type CityEvidenceLevel = "confirmed" | "observed" | "model" | "unavailable";
 
 export interface CityBriefingSource {
-  id: "open-meteo" | "qweather-now" | "qweather-hourly" | "qweather-minutely" | "qweather-warning";
+  id: "open-meteo" | "qweather-now" | "qweather-hourly" | "qweather-minutely" | "qweather-warning" | "qweather-history";
   label: string;
   evidenceLevel: CityEvidenceLevel;
   updatedAt: string | null;
@@ -34,12 +36,30 @@ export interface CityRisk {
 }
 
 export interface CityBriefingNarrative {
-  engine: "template";
+  engine: "template" | "minimax";
+  stage: "active" | "continuing" | "recovery_watch" | "ordinary_weather" | "data_gap";
   template: CityBriefingTemplate;
   primaryKind: CityHazardKind;
   timeWindow: { startsAt: string | null; endsAt: string | null } | null;
   summary: string;
   actions: string[];
+  caveat: string | null;
+  factRefs: string[];
+}
+
+export interface CityComparisonRank {
+  position: number;
+  total: number;
+  scope: string;
+}
+
+export interface CityComparison {
+  scope: string;
+  fetchedAt: string;
+  relativeHumidityRank?: CityComparisonRank;
+  apparentTemperatureRank?: CityComparisonRank;
+  windSpeedRank?: CityComparisonRank;
+  precipitationRank?: CityComparisonRank;
 }
 
 export interface CityBriefing {
@@ -83,6 +103,8 @@ export interface CityBriefing {
     maxFiveMinutePrecipitationMm: number | null;
     precipitationNextTwoHoursMm: number | null;
   };
+  comparison: CityComparison | null;
+  recentRain?: { total24hMm: number | null; observedDate: string | null; sourceId: "qweather-history"; available: boolean };
   officialWarnings: Array<{
     title: string;
     severity: string | null;
@@ -143,6 +165,9 @@ interface QWeatherPayload {
   }>;
 }
 
+interface QWeatherGeoPayload { location?: Array<{ id?: string }> }
+interface QWeatherHistoryPayload { weatherDaily?: { date?: string; precip?: string } }
+
 const OPEN_METEO_FORECAST = "https://api.open-meteo.com/v1/forecast";
 const OPEN_METEO_GEOCODING = "https://geocoding-api.open-meteo.com/v1/search";
 const PROVINCES = [
@@ -164,7 +189,25 @@ const HOURLY_FIELDS = [
   "total_column_integrated_water_vapour"
 ].join(",");
 
+const NATIONAL_CAPITAL_SAMPLE = [
+  [39.9042, 116.4074], [39.0842, 117.2010], [38.0428, 114.5149], [37.8706, 112.5489], [40.8426, 111.7492], [41.8057, 123.4315], [43.8171, 125.3235], [45.8038, 126.5340],
+  [31.2304, 121.4737], [32.0603, 118.7969], [30.2741, 120.1551], [31.8206, 117.2272], [26.0745, 119.2965], [28.6820, 115.8579], [36.6512, 117.1201], [34.7466, 113.6254],
+  [30.5928, 114.3055], [28.2282, 112.9388], [23.1291, 113.2644], [22.8170, 108.3669], [20.0440, 110.1999], [29.4316, 106.9123], [30.5728, 104.0668], [26.6470, 106.6302],
+  [25.0389, 102.7183], [29.6520, 91.1721], [34.3416, 108.9398], [36.0611, 103.8343], [36.6171, 101.7782], [38.4872, 106.2309], [43.8256, 87.6168]
+] as const;
+const QWEATHER_LOCATION_LIST = "https://raw.githubusercontent.com/qwd/LocationList/master/China-City-List-latest.csv";
+const NATIONAL_CITY_ROSTER_PATH = resolve(process.cwd(), ".runtime/qweather-national-city-roster.json");
+const NATIONAL_CITY_SNAPSHOT_PATH = resolve(process.cwd(), ".runtime/qweather-national-city-snapshot.json");
+const CITY_COMPARISON_TTL_MS = 75 * 60 * 1_000;
+let cityComparisonCache: { fetchedAt: string; values: Array<NonNullable<CityBriefing["current"]>> } | null = null;
+let cityComparisonLoading: Promise<{ fetchedAt: string; values: Array<NonNullable<CityBriefing["current"]>> } | null> | null = null;
+const dailyCityFacts = new Map<string, Omit<CityBriefing, "narrative">>();
+const dailyCityNarrationTurns = new Map<string, number>();
+
 export async function getCityBriefing(cityQuery: string): Promise<CityBriefing> {
+  const dailyKey = `${beijingDateKey()}|${cityQuery.trim().toLowerCase()}`;
+  const cached = dailyCityFacts.get(dailyKey);
+  if (cached) return presentDailyCityBriefing(cached, dailyKey);
   const city = await getCityLocation(cityQuery);
   const [openMeteoResult, qWeatherResult] = await Promise.allSettled([
     loadOpenMeteo(city),
@@ -202,6 +245,9 @@ export async function getCityBriefing(cityQuery: string): Promise<CityBriefing> 
       ? "degraded"
       : "unavailable";
 
+  const comparison = current.sourceId === "qweather-now"
+    ? await buildCityComparison(current)
+    : null;
   const briefing: Omit<CityBriefing, "narrative"> = {
     city,
     generatedAt: now,
@@ -210,6 +256,8 @@ export async function getCityBriefing(cityQuery: string): Promise<CityBriefing> 
     current,
     nextSixHours,
     minutelyRain: qWeather.minutelyRain,
+    comparison,
+    recentRain: "recentRain" in qWeather ? qWeather.recentRain as CityBriefing["recentRain"] : undefined,
     officialWarnings: qWeather.officialWarnings,
     risks,
     sources,
@@ -218,10 +266,20 @@ export async function getCityBriefing(cityQuery: string): Promise<CityBriefing> 
   // City cards are an operational readout, not a creative-writing task. Keep
   // this on the data path: it returns as soon as the weather sources do and
   // never waits for an LLM round trip.
-  return { ...briefing, narrative: buildCityPresentation(briefing) };
+  dailyCityFacts.set(dailyKey, briefing);
+  return presentDailyCityBriefing(briefing, dailyKey);
 }
 
-export function buildCityPresentation(briefing: Omit<CityBriefing, "narrative">): CityBriefingNarrative {
+async function presentDailyCityBriefing(briefing: Omit<CityBriefing, "narrative">, dailyKey: string): Promise<CityBriefing> {
+  const variant = dailyCityNarrationTurns.get(dailyKey) ?? 0;
+  dailyCityNarrationTurns.set(dailyKey, variant + 1);
+  const fallback = buildCityPresentation(briefing, variant);
+  return { ...briefing, narrative: await narrateCitySituation(briefing, fallback) };
+}
+
+function beijingDateKey() { return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date()); }
+
+export function buildCityPresentation(briefing: Omit<CityBriefing, "narrative">, variant = 0): CityBriefingNarrative {
   const warning = briefing.officialWarnings[0];
   const primary = warning
     ? { kind: "warning" as const, level: "severe" as const, label: warning.title, summary: "属地官方预警已发布。", evidenceLevel: "confirmed" as const, sourceIds: ["qweather-warning" as const] }
@@ -240,32 +298,49 @@ export function buildCityPresentation(briefing: Omit<CityBriefing, "narrative">)
     (source) => source.id === "qweather-warning" && source.status !== "available"
   );
 
-  const baseSummary = template === "warning"
-    ? `${warning!.title}已发布，先按属地气象和应急部门指引行动。`
-    : template === "rain"
-      ? rainHeadline(next, briefing.minutelyRain)
-      : template === "wind"
-        ? `未来六小时主风险是阵风，峰值约 ${numberText(next.maxWindGustMps, "m/s")}；降水不是当前首要风险。`
-        : template === "convection"
-          ? convectionHeadline(next)
-          : template === "heat"
-            ? heatHeadline(current)
-            : calmHeadline(current, next);
-  const summary = template === "calm" && officialWarningUnavailable
-    ? `${baseSummary} 官方预警数据当前不可用，不能据此确认无风险。`
-    : baseSummary;
+  const stage = situationStage(briefing, template);
+  const recoverySummary = buildCityBattleReport(briefing, stage, variant);
   return {
     engine: "template",
+    stage,
     template,
     primaryKind: template,
     timeWindow,
-    summary,
-    actions: templateActions(primary, warning)
+    summary: recoverySummary,
+    actions: templateActions(primary, warning),
+    caveat: officialWarningUnavailable ? "官方预警通道暂不可用" : "详见右侧数据窗与来源",
+    factRefs: warning ? ["qweather-warning"] : [current.sourceId ?? "unavailable", next.sourceId ?? "unavailable", ...(briefing.recentRain?.available ? ["qweather-history"] : [])]
   };
 }
 
+function buildSituationSummary(briefing: Omit<CityBriefing, "narrative">, warning: CityBriefing["officialWarnings"][number] | undefined, stage: CityBriefingNarrative["stage"], warningUnavailable: boolean) {
+  const current = briefing.current;
+  const next = briefing.nextSixHours;
+  const parts: string[] = [];
+  const stageLabel = ({ active: "警戒进行中", continuing: "复合关注", recovery_watch: "恢复观察", ordinary_weather: "短时平稳", data_gap: "资料待补" })[stage];
+  parts.push(`【${stageLabel}】`);
+  if (warning) parts.push(`${warning.title}已发布。`);
+  const feels = current.apparentTemperatureC !== null ? `、体感${numberText(current.apparentTemperatureC, "°C")}` : "";
+  const rainNow = current.precipitationMm && current.precipitationMm > 0 ? `，近一小时降水${numberText(current.precipitationMm, "mm")}` : "";
+  parts.push(`现在${numberText(current.temperatureC, "°C")}${feels}${rainNow}。`);
+  if (briefing.minutelyRain.available && briefing.minutelyRain.precipitationNextTwoHoursMm !== null) parts.push(`未来两小时约${numberText(briefing.minutelyRain.precipitationNextTwoHoursMm, "mm")}。`);
+  const forecast = `未来六小时约${numberText(next.precipitationMm, "mm")}，小时峰值${numberText(next.maxHourlyPrecipitationMm, "mm")}、降水概率最高${numberText(next.maxPrecipitationProbabilityPct, "%")}、阵风${numberText(next.maxWindGustMps, "m/s")}。`;
+  parts.push(forecast);
+  if (briefing.recentRain?.available && briefing.recentRain.total24hMm !== null) parts.push(`此前24小时累计${numberText(briefing.recentRain.total24hMm, "mm")}。`);
+  if (stage === "recovery_watch") parts.push("短时回落不等于水文风险解除。");
+  if (warningUnavailable) parts.push("官方预警通道暂不可用。" );
+  return parts.join("");
+}
+
+function situationStage(briefing: Omit<CityBriefing, "narrative">, template: CityBriefingTemplate): CityBriefingNarrative["stage"] {
+  if (briefing.officialWarnings.length || ["high", "severe"].includes(briefing.risks.find((risk) => risk.kind === "rain")?.level ?? "")) return "active";
+  if ((briefing.recentRain?.total24hMm ?? 0) >= 50) return "recovery_watch";
+  if (briefing.sources.some((source) => source.status !== "available")) return "data_gap";
+  return template === "calm" ? "ordinary_weather" : "continuing";
+}
+
 function numberText(value: number | null, unit: string) {
-  return value === null ? "待更新" : `${value.toFixed(value >= 10 ? 0 : 1)} ${unit}`;
+  return value === null ? "待更新" : unit === "%" ? `${value.toFixed(value >= 10 ? 0 : 1)}%` : `${value.toFixed(value >= 10 ? 0 : 1)} ${unit}`;
 }
 
 function rainHeadline(next: CityBriefing["nextSixHours"], minutely: CityBriefing["minutelyRain"]) {
@@ -431,17 +506,19 @@ async function loadQWeather(city: CityBriefing["city"]) {
   const location = `${city.longitude.toFixed(2)},${city.latitude.toFixed(2)}`;
   // The alert endpoint is v1 and coordinate-based. A failure is kept separate
   // from ordinary weather data, so it can never be misrepresented as no alert.
-  const [now, hourly, minutely, warning] = await Promise.allSettled([
+  const [now, hourly, minutely, warning, history] = await Promise.allSettled([
     fetchQWeather(host, `/v7/weather/now?location=${encodeURIComponent(location)}&lang=zh`, headers),
     fetchQWeather(host, `/v7/weather/24h?location=${encodeURIComponent(location)}&lang=zh`, headers),
     fetchQWeather(host, `/v7/minutely/5m?location=${encodeURIComponent(location)}&lang=zh`, headers),
-    fetchQWeather(host, `/weatheralert/v1/current/${city.latitude.toFixed(4)}/${city.longitude.toFixed(4)}?lang=zh&localTime=true`, headers)
+    fetchQWeather(host, `/weatheralert/v1/current/${city.latitude.toFixed(4)}/${city.longitude.toFixed(4)}?lang=zh&localTime=true`, headers),
+    loadQWeatherYesterdayRain(host, headers, city)
   ]);
-  const failures = [now, hourly, minutely, warning].filter((entry) => entry.status === "rejected").map((entry) => errorText(entry.status === "rejected" ? entry.reason : ""));
+  const failures = [now, hourly, minutely, warning, history].filter((entry) => entry.status === "rejected").map((entry) => errorText(entry.status === "rejected" ? entry.reason : ""));
   const nowPayload = now.status === "fulfilled" ? now.value : null;
   const hourlyPayload = hourly.status === "fulfilled" ? hourly.value : null;
   const minutelyPayload = minutely.status === "fulfilled" ? minutely.value : null;
   const warningPayload = warning.status === "fulfilled" ? warning.value : null;
+  const recentRain = history.status === "fulfilled" ? history.value : { total24hMm: null, observedDate: null, sourceId: "qweather-history" as const, available: false };
   const minutelyRain = summarizeMinutelyRain(minutelyPayload);
   const officialWarnings = summarizeOfficialWarnings(warningPayload);
   const updatedAt = minutelyPayload?.updateTime ?? warningPayload?.updateTime ?? null;
@@ -450,6 +527,7 @@ async function loadQWeather(city: CityBriefing["city"]) {
     current: summarizeQWeatherNow(nowPayload),
     nextSixHours: summarizeQWeatherHours(hourlyPayload),
     minutelyRain,
+    recentRain,
     officialWarnings,
     warnings: failures.map((failure) => `和风天气请求失败：${failure}`),
     sources: qWeatherSources({
@@ -459,6 +537,16 @@ async function loadQWeather(city: CityBriefing["city"]) {
       warning: warningPayload ? "available" : "unavailable"
     }, updatedAt)
   };
+}
+
+async function loadQWeatherYesterdayRain(host: string, headers: Record<string, string>, city: CityBriefing["city"]) {
+  const location = `${city.longitude.toFixed(2)},${city.latitude.toFixed(2)}`;
+  const geo = await fetchQWeather(host, `/geo/v2/city/lookup?location=${encodeURIComponent(location)}&lang=zh`, headers) as QWeatherGeoPayload;
+  const locationId = geo.location?.[0]?.id;
+  if (!locationId) throw new Error("和风天气未返回历史天气所需的 LocationID");
+  const date = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(Date.now() - 86_400_000)).replaceAll("-", "");
+  const payload = await fetchQWeather(host, `/v7/historical/weather?location=${encodeURIComponent(locationId)}&date=${date}`, headers) as QWeatherHistoryPayload;
+  return { total24hMm: numberValue(payload.weatherDaily?.precip), observedDate: payload.weatherDaily?.date ?? null, sourceId: "qweather-history" as const, available: true };
 }
 
 async function qWeatherAuthHeaders(): Promise<Record<string, string>> {
@@ -473,6 +561,89 @@ async function qWeatherAuthHeaders(): Promise<Record<string, string>> {
   if (token) return { Authorization: `Bearer ${token}`, "User-Agent": userAgent };
   const apiKey = process.env.QWEATHER_API_KEY?.trim();
   return apiKey ? { "X-QW-Api-Key": apiKey, "User-Agent": userAgent } : {};
+}
+
+async function buildCityComparison(current: CityBriefing["current"]): Promise<CityComparison | null> {
+  const snapshot = await loadCityComparisonSnapshot();
+  if (!snapshot) return null;
+  const rank = (value: number | null, field: keyof Pick<CityBriefing["current"], "relativeHumidityPct" | "apparentTemperatureC" | "windSpeedMps" | "precipitationMm">): CityComparisonRank | undefined => {
+    if (value === null) return undefined;
+    const values = snapshot.values.map((item) => item[field]).filter((item): item is number => item !== null);
+    if (values.length < 20) return undefined;
+    return { position: values.filter((item) => item > value).length + 1, total: values.length, scope: "全国城市点位" };
+  };
+  return {
+    scope: "全国城市点位",
+    fetchedAt: snapshot.fetchedAt,
+    relativeHumidityRank: rank(current.relativeHumidityPct, "relativeHumidityPct"),
+    apparentTemperatureRank: rank(current.apparentTemperatureC, "apparentTemperatureC"),
+    windSpeedRank: rank(current.windSpeedMps, "windSpeedMps"),
+    precipitationRank: rank(current.precipitationMm, "precipitationMm")
+  };
+}
+
+async function loadCityComparisonSnapshot() {
+  if (cityComparisonCache && Date.now() - Date.parse(cityComparisonCache.fetchedAt) < CITY_COMPARISON_TTL_MS) return cityComparisonCache;
+  if (!cityComparisonLoading) cityComparisonLoading = readNationalCitySnapshot().finally(() => { cityComparisonLoading = null; });
+  return cityComparisonLoading;
+}
+
+async function readNationalCitySnapshot() {
+  try {
+    const snapshot = JSON.parse(await readFile(NATIONAL_CITY_SNAPSHOT_PATH, "utf8")) as { fetchedAt?: string; values?: Array<NonNullable<CityBriefing["current"]>> };
+    if (!snapshot.fetchedAt || !Array.isArray(snapshot.values) || Date.now() - Date.parse(snapshot.fetchedAt) >= CITY_COMPARISON_TTL_MS) return null;
+    if (snapshot.values.length < 500) return null;
+    cityComparisonCache = { fetchedAt: snapshot.fetchedAt, values: snapshot.values };
+    return cityComparisonCache;
+  } catch { return null; }
+}
+
+export async function refreshNationalCityComparison() {
+  const host = process.env.QWEATHER_API_HOST?.trim().replace(/\/$/, "");
+  if (!host) throw new Error("QWEATHER_API_HOST is not configured");
+  const headers = await qWeatherAuthHeaders();
+  if (!Object.keys(headers).length) throw new Error("QWeather credentials are not configured");
+  const roster = await loadNationalCityRoster();
+  const pending = [...roster];
+  const values: Array<NonNullable<CityBriefing["current"]>> = [];
+  const worker = async () => {
+    while (pending.length) {
+      const locationId = pending.shift();
+      if (!locationId) return;
+      try {
+        const payload = await fetchQWeather(host, `/v7/weather/now?location=${encodeURIComponent(locationId)}&lang=zh`, headers);
+        const summary = summarizeQWeatherNow(payload);
+        if (summary) values.push(summary);
+      } catch { /* Keep the snapshot honest: its denominator is fulfilled locations only. */ }
+    }
+  };
+  await Promise.all(Array.from({ length: 16 }, worker));
+  if (values.length < 500) throw new Error(`National city snapshot incomplete: ${values.length}/${roster.length}`);
+  const snapshot = { fetchedAt: new Date().toISOString(), scope: "全国城市点位", rosterCount: roster.length, values };
+  await writeJsonAtomic(NATIONAL_CITY_SNAPSHOT_PATH, snapshot);
+  cityComparisonCache = { fetchedAt: snapshot.fetchedAt, values };
+  return { fetchedAt: snapshot.fetchedAt, rosterCount: roster.length, fulfilled: values.length };
+}
+
+async function loadNationalCityRoster() {
+  try {
+    const roster = JSON.parse(await readFile(NATIONAL_CITY_ROSTER_PATH, "utf8")) as { fetchedAt?: string; ids?: string[] };
+    if (roster.fetchedAt && Array.isArray(roster.ids) && roster.ids.length >= 500 && Date.now() - Date.parse(roster.fetchedAt) < 30 * 24 * 60 * 60 * 1_000) return roster.ids;
+  } catch { /* Refresh below. */ }
+  const response = await fetch(QWEATHER_LOCATION_LIST, { cache: "no-store", signal: AbortSignal.timeout(30_000) });
+  if (!response.ok) throw new Error(`QWeather Location List HTTP ${response.status}`);
+  const lines = (await response.text()).split(/\r?\n/).slice(2);
+  const ids = [...new Set(lines.map((line) => line.split(",")[0]?.trim()).filter((id): id is string => /^\d{9,}$/.test(id)))];
+  if (ids.length < 500) throw new Error("QWeather Location List has too few China city locations");
+  await writeJsonAtomic(NATIONAL_CITY_ROSTER_PATH, { fetchedAt: new Date().toISOString(), source: QWEATHER_LOCATION_LIST, ids });
+  return ids;
+}
+
+async function writeJsonAtomic(filePath: string, value: unknown) {
+  await mkdir(dirname(filePath), { recursive: true });
+  const temp = `${filePath}.${process.pid}.tmp`;
+  await writeFile(temp, `${JSON.stringify(value)}\n`, "utf8");
+  await rename(temp, filePath);
 }
 
 async function loadQWeatherJwtSettings() {

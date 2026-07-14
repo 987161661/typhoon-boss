@@ -1,0 +1,8 @@
+{
+  "color":{"surface":"rgba(38,10,12,.54)","surfaceActive":"rgba(255,75,56,.12)","line":"rgba(255,194,71,.23)","text":"#fff5df","muted":"#cabda9","amber":"#ffc247","alert":"#ff4b38","accent":"#b6ff52"},
+  "type":{"meta":"10px","signal":"12px","value":"22px Bahnschrift, Microsoft YaHei UI, sans-serif","comment":"11px"},
+  "space":{"xs":"6px","sm":"8px","md":"10px","lg":"12px","xl":"16px"},
+  "panel":{"signalMinHeight":"86px","mobileSignalMinHeight":"74px","rail":"3px"},
+  "motion":{"enter":"180ms ease-out","reduced":"1ms"},
+  "glow":{"alert":"0 0 14px rgba(255,75,56,.18)","accent":"0 0 10px rgba(182,255,82,.14)"}
+}

@@ -8,6 +8,7 @@
     "start": "next start",
     "live:with-host": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start_live_with_linglan.ps1",
     "agent:run": "node scripts/run_typhoon_evolution_agent.mjs",
+    "cities:rank:refresh": "tsx scripts/refresh_national_city_rank.ts",
     "setup:wgrib2": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install_wgrib2.ps1",
     "clean:local": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/clean_local_artifacts.ps1",
     "lint": "eslint .",

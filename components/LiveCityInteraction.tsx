@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type RefObject } from "react";
-import { CloudRain, Droplets, LoaderCircle, Thermometer, Wind, X, type LucideIcon } from "lucide-react";
+import { CloudRain, Droplets, LoaderCircle, Siren, Thermometer, Wind, X, type LucideIcon } from "lucide-react";
 import type { CityBriefing } from "@/lib/cityBriefingData";
 import type { CityAttention, CityAttentionAnchor, CityInteractionRequest } from "@/lib/liveCityInteraction";
+import { buildCitySignalBoard, type CitySignalIcon } from "@/lib/citySignalBoard";
 
 const FLASH_DURATION_MS = 1_000;
 const PANEL_DEPLOY_DURATION_MS = 1_020;
-const CARD_DURATION_MS = 14_000;
+const CARD_DURATION_MS = 30_000;
 
 type Presentation =
   | { state: "idle" }
@@ -159,6 +160,7 @@ export function LiveCityInteraction({
   }
 
   const { briefing, request } = presentation;
+  const signalBoard = buildCitySignalBoard(briefing);
   const { currentMetrics, forecastMetrics, currentTitle, forecastTitle } = buildTacticalDecks(briefing);
   const warningSourceUnavailable = briefing.sources.some(
     (source) => source.id === "qweather-warning" && source.status !== "available"
@@ -184,6 +186,9 @@ export function LiveCityInteraction({
         <ThreatDial score={riskScore} />
         <TypewriterText text={briefing.narrative.summary} active={presentation.state === "card"} className="live-city-card-verdict city-card-tactical-copy" speed={42} />
       </div>
+      {briefing.narrative.caveat && !briefing.officialWarnings[0] && (
+        <div className="live-city-data-gap" role="status">研判边界：{briefing.narrative.caveat}</div>
+      )}
       {briefing.officialWarnings[0] && (
         <div className="live-city-official-warning" role="alert">
           <b>官方预警</b>
@@ -216,13 +221,14 @@ export function LiveCityInteraction({
         <b>5分钟峰值 {numberLabel(briefing.minutelyRain.maxFiveMinutePrecipitationMm, " mm")}</b>
         <small>{briefing.minutelyRain.available ? "分钟级降水资料已接入" : "分钟级降水资料暂缺"}</small>
       </div>
+      <CitySignalBoard board={signalBoard} briefing={briefing} />
       <div className="live-city-actions">
         <span>{windowLabel ? `关键窗口：${windowLabel}` : "未来 6 小时研判"}</span>
         {briefing.narrative.actions.map((action, index) => <b key={action} style={{ "--city-action-index": index } as CSSProperties}>› {action}</b>)}
       </div>
       <WorldFragment active={presentation.state === "card"} />
       <footer>
-        <span>数据模板直出 · 不等待大模型</span>
+        <span>{briefing.narrative.engine === "minimax" ? "事实账本校验 · 档案局播报" : "事实账本直出 · 播报保底"}</span>
         <time>更新 {formatTime(observedAt)}</time>
       </footer>
     </aside>
@@ -355,6 +361,25 @@ function TelemetryDeck({ title, metrics }: { title: string; metrics: TacticalMet
         </article>;
       })}
     </div>
+  </section>;
+}
+
+function CitySignalBoard({ board, briefing }: { board: ReturnType<typeof buildCitySignalBoard>; briefing: CityBriefing }) {
+  const icons: Record<CitySignalIcon, typeof CloudRain> = { rain: CloudRain, humidity: Droplets, heat: Thermometer, wind: Wind, warning: Siren };
+  const hasNationalRanking = briefing.comparison?.scope === "全国城市点位";
+  return <section className="city-signal-board" aria-label="战况异动">
+    <header><span>CITY MUTATORS // 异动优先</span><small>{hasNationalRanking ? `${briefing.comparison!.scope} · ${formatTime(briefing.comparison!.fetchedAt)}` : "全国城市榜单同步中 · 暂不显示排名"}</small></header>
+    <div className="city-signal-grid" data-count={board.signals.length}>
+      {board.signals.map((signal) => {
+        const Icon = icons[signal.icon];
+        return <article key={signal.id} data-severity={signal.severity}>
+          <Icon /><div><span>{signal.label}</span><strong>{signal.value}</strong><small>{signal.detail}</small></div>
+          {hasNationalRanking && signal.rank && <b>{signal.rank.scope} 第 {signal.rank.position.toString().padStart(2, "0")}/{signal.rank.total}</b>}
+          <p>{signal.comment}</p>
+        </article>;
+      })}
+    </div>
+    {board.evidence.length > 0 && <div className="city-evidence-strip"><span>资料底账</span>{board.evidence.map((item) => <b key={item.label}>{item.label} <em>{item.value}</em></b>)}</div>}
   </section>;
 }
 

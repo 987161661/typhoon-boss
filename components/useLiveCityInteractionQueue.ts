@@ -10,21 +10,38 @@ import {
 const CITY_COOLDOWN_MS = 90_000;
 const EVENT_DEDUPLICATION_MS = 10 * 60_000;
 const MAX_PENDING_INTERACTIONS = 5;
+const MIN_ACTIVE_MS = 10_000;
 
 export function useLiveCityInteractionQueue() {
   const [active, setActive] = useState<CityInteractionRequest | null>(null);
   const [queueVersion, setQueueVersion] = useState(0);
   const pendingRef = useRef<CityInteractionRequest[]>([]);
+  const activeStartedAtRef = useRef(0);
   const seenEventAtRef = useRef(new Map<string, number>());
   const cityAcceptedAtRef = useRef(new Map<string, number>());
 
   const advance = useCallback(() => {
-    setActive((current) => current ?? pendingRef.current.shift() ?? null);
+    setActive((current) => {
+      if (current) return current;
+      const next = pendingRef.current.shift() ?? null;
+      if (next) activeStartedAtRef.current = Date.now();
+      return next;
+    });
   }, []);
 
   useEffect(() => {
     if (!active) advance();
   }, [active, advance, queueVersion]);
+
+  // A fresh request may preempt an idle report, but never before its audience
+  // has had ten seconds to read it. The report itself owns the 30s no-queue
+  // timeout; this hook only cuts it short when a request is actually waiting.
+  useEffect(() => {
+    if (!active || !pendingRef.current.length) return;
+    const remaining = Math.max(0, MIN_ACTIVE_MS - (Date.now() - activeStartedAtRef.current));
+    const timer = window.setTimeout(() => setActive(null), remaining);
+    return () => window.clearTimeout(timer);
+  }, [active, queueVersion]);
 
   const submitComment = useCallback((comment: HostLiveComment) => {
     const request = toCityInteractionRequest(comment);
@@ -43,12 +60,12 @@ export function useLiveCityInteractionQueue() {
     if (!isRadarOperator && acceptedAt && now - acceptedAt < CITY_COOLDOWN_MS) return false;
 
     // The local radar console is an operator control, not an audience spam
-    // source. A fresh @city command must visibly replay the card immediately,
-    // including after a previous request for the same city.
+    // source. It goes to the front of the waiting line, but it still respects
+    // the active card's minimum on-screen time.
     if (isRadarOperator) {
-      pendingRef.current = [];
       cityAcceptedAtRef.current.set(cityKey, now);
-      setActive(request);
+      pendingRef.current = [request, ...pendingRef.current.filter((item) => item.cityQuery !== request.cityQuery)].slice(0, MAX_PENDING_INTERACTIONS);
+      setQueueVersion((version) => version + 1);
       return true;
     }
 

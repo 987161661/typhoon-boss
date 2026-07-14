@@ -11,6 +11,7 @@ function briefing(overrides: Partial<CityBriefing> = {}): Omit<CityBriefing, "na
     current: { sourceId: "open-meteo", evidenceLevel: "model", observedAt: "2026-07-14T12:00:00Z", temperatureC: 26, apparentTemperatureC: 27, relativeHumidityPct: 70, precipitationMm: 0, windSpeedMps: 3, windGustMps: 5, weatherCode: 1 },
     nextSixHours: { sourceId: "open-meteo", startsAt: "2026-07-14T12:00:00Z", endsAt: "2026-07-14T18:00:00Z", precipitationMm: 0.3, maxHourlyPrecipitationMm: 0.1, maxPrecipitationProbabilityPct: 12, maxWindGustMps: 4, maxCapeJkg: 50 },
     minutelyRain: { available: false, updatedAt: null, summary: null, maxFiveMinutePrecipitationMm: null, precipitationNextTwoHoursMm: null },
+    comparison: null,
     officialWarnings: [],
     risks: [
       { kind: "rain", level: "low", label: "rain", summary: "", evidenceLevel: "model", sourceIds: ["open-meteo"] },
@@ -41,7 +42,7 @@ test("official warning always overrides model-derived city risk", () => {
   assert.match(result.summary, /暴雨橙色预警/);
 });
 
-test("wind-led city does not fall back to a rain-first headline", () => {
+test("wind-led city renders a wind battle report", () => {
   const result = buildCityPresentation(briefing({
     risks: [
       { kind: "rain", level: "low", label: "rain", summary: "", evidenceLevel: "model", sourceIds: ["open-meteo"] },
@@ -52,13 +53,29 @@ test("wind-led city does not fall back to a rain-first headline", () => {
     nextSixHours: { ...briefing().nextSixHours, maxWindGustMps: 21 }
   }));
   assert.equal(result.template, "wind");
-  assert.match(result.summary, /阵风/);
+  assert.match(result.summary, /风场扰动/);
 });
 
-test("quiet city reports a model signal rather than claiming no risk", () => {
+test("quiet city uses a calm battle-report voice without claiming safety", () => {
   const result = buildCityPresentation(briefing());
   assert.equal(result.template, "calm");
-  assert.match(result.summary, /当前模式未显示未来六小时突出的风雨信号/);
+  assert.match(result.summary, /短时平稳/);
+  assert.doesNotMatch(result.summary, /安全/);
+});
+
+test("heat-led city with an incoming rain signal uses the combined state", () => {
+  const result = buildCityPresentation(briefing({
+    risks: [
+      { kind: "rain", level: "moderate", label: "rain", summary: "", evidenceLevel: "model", sourceIds: ["open-meteo"] },
+      { kind: "wind", level: "low", label: "wind", summary: "", evidenceLevel: "model", sourceIds: ["open-meteo"] },
+      { kind: "convection", level: "low", label: "convection", summary: "", evidenceLevel: "model", sourceIds: ["open-meteo"] },
+      { kind: "heat", level: "high", label: "heat", summary: "", evidenceLevel: "model", sourceIds: ["open-meteo"] }
+    ],
+    current: { ...briefing().current, temperatureC: 32, apparentTemperatureC: 35 },
+    nextSixHours: { ...briefing().nextSixHours, precipitationMm: 6.3, maxHourlyPrecipitationMm: 4.6, maxPrecipitationProbabilityPct: 78 }
+  }));
+  assert.match(result.summary, /闷热待雨/);
+  assert.match(result.summary, /伞|雨/);
 });
 
 test("live-room mention accepts country and province-city forms", () => {
