@@ -94,7 +94,7 @@ test("fleet geo preserves every published agency forecast", () => {
   assert.deepEqual(stormFleetBounds([haishen]), [[134, 9], [141, 15]]);
 });
 
-test("every storm can use its own recorded GFS vortex center", () => {
+test("a recorded GFS vortex never moves the official storm marker", () => {
   const haishen = storm("202611", 136.5, 10.6);
   const aligned = alignStormToWindCenter(haishen, {
     stormId: haishen.id,
@@ -104,8 +104,8 @@ test("every storm can use its own recorded GFS vortex center", () => {
     analysisCenter: { lon: 137, lat: 9.75, method: "peak-cyclonic-vorticity" }
   });
 
-  assert.deepEqual(aligned.position, { lon: 137, lat: 9.75 });
-  assert.equal(aligned.updatedAt, "2026-07-12T18:00:00Z");
+  assert.deepEqual(aligned.position, haishen.position);
+  assert.equal(aligned.updatedAt, haishen.updatedAt);
 });
 
 test("a wind field can never move a different storm", () => {

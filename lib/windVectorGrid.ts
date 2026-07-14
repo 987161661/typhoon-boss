@@ -5,6 +5,19 @@ export interface WindVectorSample {
   v: number;
 }
 
+/** Move a coherent model frame without changing its U/V values or grid shape. */
+export function translateWindVectorPoints(
+  points: WindFieldPoint[],
+  translation: { lon: number; lat: number } | null
+) {
+  if (!translation || (translation.lon === 0 && translation.lat === 0)) return points;
+  return points.map((point) => ({
+    ...point,
+    lon: point.lon + translation.lon,
+    lat: point.lat + translation.lat
+  }));
+}
+
 interface WindVectorIndex {
   points: WindFieldPoint[];
   longitudes: number[];

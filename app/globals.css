@@ -10786,3 +10786,11 @@ a:focus-visible {
 .wind-field-time-badge[data-stale="true"] .wind-field-time-badge-handle {
   color: #ffd98b;
 }
+
+/* Broadcast HUD always reads above map canvases, projected markers, route
+   overlays and the active information rail. */
+.radar-shell[data-view="live"] .live-topbar,
+.radar-shell[data-view="live"] .live-bottom-bar {
+  z-index: 1000;
+  isolation: isolate;
+}

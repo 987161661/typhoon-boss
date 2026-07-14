@@ -10,6 +10,33 @@ $vtuberRoot = 'D:\LocalToolset\vtuber\aituber-onair-main'
 $linglanLauncher = Join-Path $vtuberRoot 'Start-AITuber.ps1'
 $runtimeDir = Join-Path $projectRoot '.runtime'
 $serviceLogDir = Join-Path $projectRoot 'runtime\logs'
+$liveUrl = "http://127.0.0.1:$Port/live"
+
+function Test-TyphoonLiveAssets {
+  param([string]$Url)
+
+  try {
+    $page = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 4
+    if ($page.StatusCode -ne 200 -or $page.Content -notmatch 'live-director') {
+      return $false
+    }
+    $assetMatches = [regex]::Matches($page.Content, '(?:href|src)="([^"?#]+(?:\.css|app/live/page\.js|app-pages-internals\.js)[^"#]*)"')
+    $assets = @($assetMatches | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
+    if ($assets.Count -lt 2) {
+      return $false
+    }
+    foreach ($asset in $assets) {
+      $assetUrl = [Uri]::new([Uri]$Url, $asset).AbsoluteUri
+      $response = Invoke-WebRequest -Uri $assetUrl -UseBasicParsing -TimeoutSec 5
+      if ($response.StatusCode -ne 200 -or $response.RawContentLength -le 0) {
+        return $false
+      }
+    }
+    return $true
+  } catch {
+    return $false
+  }
+}
 
 if (-not $NoLinglan) {
   if (-not (Test-Path -LiteralPath $linglanLauncher)) {
@@ -25,28 +52,41 @@ if (-not $NoLinglan) {
 }
 
 $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
-if (-not $listener) {
-  New-Item -ItemType Directory -Path $serviceLogDir -Force | Out-Null
-  Start-Process -FilePath 'npm.cmd' `
-    -ArgumentList @('run', 'dev', '--', '-H', '127.0.0.1', '-p', [string]$Port) `
-    -WorkingDirectory $projectRoot `
-    -WindowStyle Hidden `
-    -RedirectStandardOutput (Join-Path $serviceLogDir "live-$Port.current.out.log") `
-    -RedirectStandardError (Join-Path $serviceLogDir "live-$Port.current.err.log")
+if ($listener -and -not (Test-TyphoonLiveAssets -Url $liveUrl)) {
+  Write-Host "Existing radar server on port $Port has missing client assets; restarting it."
+  $listener | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object {
+    Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue
+  }
+  for ($attempt = 0; $attempt -lt 20; $attempt += 1) {
+    Start-Sleep -Milliseconds 250
+    $listener = Get-NetTCPConnection -LocalPort $Port -State Listen -ErrorAction SilentlyContinue
+    if (-not $listener) { break }
+  }
 }
 
-$liveUrl = "http://127.0.0.1:$Port/live"
+if (-not $listener) {
+  New-Item -ItemType Directory -Path $serviceLogDir -Force | Out-Null
+  $previousDistDir = $env:NEXT_DIST_DIR
+  try {
+    $env:NEXT_DIST_DIR = ".next-live-$Port"
+    Start-Process -FilePath 'npm.cmd' `
+      -ArgumentList @('run', 'dev', '--', '-H', '127.0.0.1', '-p', [string]$Port) `
+      -WorkingDirectory $projectRoot `
+      -WindowStyle Hidden `
+      -RedirectStandardOutput (Join-Path $serviceLogDir "live-$Port.current.out.log") `
+      -RedirectStandardError (Join-Path $serviceLogDir "live-$Port.current.err.log")
+  } finally {
+    $env:NEXT_DIST_DIR = $previousDistDir
+  }
+}
+
 $liveReady = $false
 for ($attempt = 0; $attempt -lt 20; $attempt += 1) {
-  try {
-    $response = Invoke-WebRequest -Uri $liveUrl -UseBasicParsing -TimeoutSec 2
-    if ($response.StatusCode -eq 200) {
-      $liveReady = $true
-      break
-    }
-  } catch {
-    Start-Sleep -Milliseconds 500
+  if (Test-TyphoonLiveAssets -Url $liveUrl) {
+    $liveReady = $true
+    break
   }
+  Start-Sleep -Milliseconds 500
 }
 
 if (-not $liveReady) {
@@ -54,7 +94,7 @@ if (-not $liveReady) {
 }
 
 $health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/health" -TimeoutSec 8
-if ($health.status -ne 'ok' -or $health.track.stormCount -lt 1) {
+if ($health.status -ne 'ok') {
   throw "Typhoon data connection is not ready. status=$($health.status); storms=$($health.track.stormCount)"
 }
 

@@ -34,13 +34,10 @@ export interface GfsAnalysisCenterMarkerModel {
 }
 
 export function alignStormToWindCenter(storm: Storm, windCenter?: StormWindCenter) {
-  const center = windCenter?.source === "NOAA/NCEP NOMADS Grib Filter" ? windCenter.analysisCenter : null;
-  if (windCenter?.status !== "available" || !center) return storm;
-  return {
-    ...storm,
-    position: { lon: center.lon, lat: center.lat },
-    updatedAt: windCenter.updatedAt
-  };
+  // Best-track and model-vortex positions are separate facts. Never move an
+  // official storm marker to make it agree with a model analysis.
+  void windCenter;
+  return storm;
 }
 
 export function windFieldMatchesStorm(windField: WindFieldPayload | null, storm: Storm | null) {

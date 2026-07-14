@@ -1332,13 +1332,14 @@ function syncRegionalSatelliteLayer(map: MapLibreMap, layer: SatelliteLayerPaylo
     [bounds.west, bounds.south]
   ];
   const existingSource = map.getSource(REGIONAL_SATELLITE_SOURCE_ID) as ImageSource | undefined;
-  const previousImageUrl = regionalSatelliteImageUrls.get(map);
+  const imageKey = satelliteImageKey(imageUrl, bounds);
+  const previousImageKey = regionalSatelliteImageUrls.get(map);
   if (!existingSource) {
     map.addSource(REGIONAL_SATELLITE_SOURCE_ID, { type: "image", url: imageUrl, coordinates });
-  } else if (previousImageUrl !== imageUrl) {
+  } else if (previousImageKey !== imageKey) {
     existingSource.updateImage({ url: imageUrl, coordinates });
   }
-  regionalSatelliteImageUrls.set(map, imageUrl);
+  regionalSatelliteImageUrls.set(map, imageKey);
 
   if (!map.getLayer(REGIONAL_SATELLITE_LAYER_ID)) {
     const beforeLayer = map.getLayer("province-fill") ? "province-fill" : undefined;
@@ -1361,6 +1362,13 @@ function syncRegionalSatelliteLayer(map: MapLibreMap, layer: SatelliteLayerPaylo
   map.setLayoutProperty(REGIONAL_SATELLITE_LAYER_ID, "visibility", visible ? "visible" : "none");
 }
 
+function satelliteImageKey(
+  imageUrl: string,
+  bounds: { west: number; south: number; east: number; north: number }
+) {
+  return `${imageUrl}|${bounds.west},${bounds.south},${bounds.east},${bounds.north}`;
+}
+
 function syncGlobalSatelliteLayer(map: MapLibreMap, layer: SatelliteLayerPayload | null, visible: boolean) {
   const imageUrl = layer?.status === "available" ? layer.globalImageUrl : null;
   const bounds = layer?.globalBounds;
@@ -1377,7 +1385,8 @@ function syncGlobalSatelliteLayer(map: MapLibreMap, layer: SatelliteLayerPayload
     [bounds.east, bounds.south],
     [bounds.west, bounds.south]
   ];
-  const previousImageUrl = globalSatelliteImageUrls.get(map);
+  const imageKey = satelliteImageKey(imageUrl, bounds);
+  const previousImageKey = globalSatelliteImageUrls.get(map);
   const existingSource = map.getSource(GLOBAL_SATELLITE_SOURCE_ID) as ImageSource | undefined;
   if (!existingSource) {
     map.addSource(GLOBAL_SATELLITE_SOURCE_ID, {
@@ -1385,10 +1394,10 @@ function syncGlobalSatelliteLayer(map: MapLibreMap, layer: SatelliteLayerPayload
       url: imageUrl,
       coordinates
     });
-  } else if (previousImageUrl !== imageUrl) {
+  } else if (previousImageKey !== imageKey) {
     existingSource.updateImage({ url: imageUrl, coordinates });
   }
-  globalSatelliteImageUrls.set(map, imageUrl);
+  globalSatelliteImageUrls.set(map, imageKey);
 
   if (!map.getLayer(GLOBAL_SATELLITE_LAYER_ID)) {
     const beforeLayer = map.getLayer("province-fill") ? "province-fill" : undefined;
@@ -2395,10 +2404,12 @@ function gfsScalarColor(layer: GfsScalarLayerId, value: number) {
   }
   if (layer === "precipitation") {
     if (value < 0.05) return null;
-    if (value < 1) return "rgba(56,216,151,0.24)";
-    if (value < 5) return "rgba(247,210,72,0.32)";
-    if (value < 15) return "rgba(255,126,42,0.4)";
-    return "rgba(238,43,68,0.5)";
+    // Rain intensity is encoded with one intuitive hue: more rain means a
+    // deeper, darker blue instead of switching through unrelated alert colors.
+    if (value < 1) return "rgba(157,220,255,0.24)";
+    if (value < 5) return "rgba(77,166,245,0.34)";
+    if (value < 15) return "rgba(25,103,210,0.44)";
+    return "rgba(5,35,120,0.58)";
   }
   if (layer === "gust") {
     if (value < 5) return null;
@@ -3143,8 +3154,12 @@ function startWindFieldRenderer(
     if (nextField === observedWindField && nextDetailField === observedDetailWindField) return false;
     observedWindField = nextField;
     observedDetailWindField = nextDetailField;
-    const ambientPoints = nextField?.status === "available" ? nextField.points : [];
-    const detailPoints = nextDetailField?.status === "available" ? nextDetailField.points : [];
+    const ambientPoints = nextField?.status === "available"
+      ? nextField.points
+      : [];
+    const detailPoints = nextDetailField?.status === "available"
+      ? nextDetailField.points
+      : [];
     points = mergeWindVectorPoints(ambientPoints, detailPoints);
     vectorIndex = createCompositeWindVectorIndex(ambientPoints, detailPoints);
     fieldHotSwapCount += 1;
@@ -3155,6 +3170,10 @@ function startWindFieldRenderer(
     canvas.dataset.windSource = nextField?.source ?? "unavailable";
     canvas.dataset.windResolution = String(nextField?.displayResolutionDegrees ?? "unknown");
     canvas.dataset.detailResolution = String(nextDetailField?.displayResolutionDegrees ?? "none");
+    canvas.dataset.displayFrame = "geographic-source-grid";
+    delete canvas.dataset.displayRegistrationKm;
+    delete canvas.dataset.displayAnchorLon;
+    delete canvas.dataset.displayAnchorLat;
     delete canvas.dataset.analysisCenterLon;
     delete canvas.dataset.analysisCenterLat;
     delete canvas.dataset.analysisCenterX;
@@ -3412,6 +3431,7 @@ function startWindFieldRenderer(
     const visibleAmbientHeads = new Map<number, number>();
     const visibleCoreHeads = new Map<number, number>();
     const windSample = { u: 0, v: 0 };
+    const midpointSample = { u: 0, v: 0 };
     const ambientHeadCellSize = policy.headSpacingPx;
     const coreHeadCellSize = Math.max(24, policy.headSpacingPx * 0.72);
     for (let index = 0; index < particles.length; index += 1) {
@@ -3435,23 +3455,23 @@ function startWindFieldRenderer(
       }
 
       if (particle.trail.length === 0) {
-        particle.u = windSample.u;
-        particle.v = windSample.v;
         particle.trail.push({ lon: particle.lon, lat: particle.lat });
         particle.trailScreen.push(map.project([particle.lon, particle.lat]));
-      } else {
-        const response = 1 - Math.exp(-deltaSeconds * 5.4);
-        particle.u += (windSample.u - particle.u) * response;
-        particle.v += (windSample.v - particle.v) * response;
       }
 
       // This is streamline integration distance, not a playback-speed trick:
       // the finite-distance cap below keeps the visual field evenly sampled
       // while the direction and speed remain the raw NCEP U/V values.
       const latitudeScale = 111_320;
-      const longitudeScale = latitudeScale * Math.max(0.2, Math.cos(degToRad(particle.lat)));
+      const startLongitudeScale = latitudeScale * Math.max(0.2, Math.cos(degToRad(particle.lat)));
+      const midpointLon = particle.lon + (windSample.u * simulationSeconds * 0.5) / startLongitudeScale;
+      const midpointLat = particle.lat + (windSample.v * simulationSeconds * 0.5) / latitudeScale;
+      const hasMidpoint = sampleCompositeWindVector(vectorIndex, midpointLon, midpointLat, midpointSample);
+      particle.u = hasMidpoint ? midpointSample.u : windSample.u;
+      particle.v = hasMidpoint ? midpointSample.v : windSample.v;
+      const midpointLongitudeScale = latitudeScale * Math.max(0.2, Math.cos(degToRad(midpointLat)));
       const vectorSpeed = Math.hypot(particle.u, particle.v);
-      particle.lon += (particle.u * simulationSeconds) / longitudeScale;
+      particle.lon += (particle.u * simulationSeconds) / midpointLongitudeScale;
       particle.lat += (particle.v * simulationSeconds) / latitudeScale;
       particle.headScreen = map.project([particle.lon, particle.lat]);
       particle.life -= deltaSeconds;
@@ -4197,13 +4217,10 @@ function upsertStormMarker(
 }
 
 function stormAtGfsAnalysisCenter(storm: Storm | null, windField: WindFieldPayload | null) {
-  if (!windFieldMatchesStorm(windField, storm)) return storm;
-  const center = windField?.source === "NOAA/NCEP NOMADS Grib Filter" ? windField.analysisCenter : undefined;
-  if (!storm || !center || !windField?.updatedAt) return storm;
-  // The model vortex is the only location the GFS streamlines can truthfully
-  // converge on. Move the visual there rather than claiming its best-track
-  // location is the same object.
-  return { ...storm, position: { lon: center.lon, lat: center.lat }, updatedAt: windField.updatedAt };
+  // Keep the official marker on the reported track. The raw GFS vortex has a
+  // distinct marker and must never replace the observation.
+  void windField;
+  return storm;
 }
 
 function stormMarkerRenderKey(storm: Storm, satelliteLayer?: SatelliteLayerPayload | null, bossProfile?: BossProfile | null) {
@@ -4306,6 +4323,7 @@ function syncGfsAnalysisCenterMarkers(
 
   models.forEach((model) => {
     const { center } = model;
+    const displayCenter = center;
     let marker = markers.get(model.stormId);
     if (!marker) {
       const root = document.createElement("div");
@@ -4315,7 +4333,7 @@ function syncGfsAnalysisCenterMarkers(
         '<span class="gfs-analysis-center-label"><strong></strong><small></small></span>'
       ].join("");
       marker = new maplibregl.Marker({ element: root, anchor: "center" })
-        .setLngLat([center.lon, center.lat])
+        .setLngLat([displayCenter.lon, displayCenter.lat])
         .addTo(map);
       markers.set(model.stormId, marker);
     }
@@ -4324,19 +4342,21 @@ function syncGfsAnalysisCenterMarkers(
     const confidence = center.confidence === "high" ? "高置信" : center.confidence === "medium" ? "中置信" : "待确认";
     const offset = center.offsetKm === undefined ? "" : ` · 偏同期路径 ${center.offsetKm} km`;
     const referenceAt = center.referenceAt ?? model.updatedAt;
-    const detail = `${formatBeijingTime(referenceAt)} BJT · ${confidence}${offset}`;
+    const sourceAge = formatSourceAgeHours(referenceAt);
+    const detail = `${formatBeijingTime(referenceAt)} BJT · ${confidence}${offset} · ${sourceAge}坐标`;
     element.classList.toggle("is-active", model.active);
     element.dataset.stormId = model.stormId;
-    element.dataset.centerLon = String(center.lon);
-    element.dataset.centerLat = String(center.lat);
+    element.dataset.centerLon = String(displayCenter.lon);
+    element.dataset.centerLat = String(displayCenter.lat);
+    element.dataset.displayFrame = "geographic-source-grid";
     element.dataset.referenceAt = referenceAt;
     element.style.setProperty("--gfs-center-color", stormTrackColor(model.stormId));
-    element.setAttribute("aria-label", `${model.stormName} GFS 主涡旋中心 ${center.lon.toFixed(2)} 东经 ${center.lat.toFixed(2)} 北纬，${detail}`);
+    element.setAttribute("aria-label", `${model.stormName} GFS 主涡旋中心 ${displayCenter.lon.toFixed(2)} 东经 ${displayCenter.lat.toFixed(2)} 北纬，${detail}`);
     const titleElement = element.querySelector("strong");
-    if (titleElement) titleElement.textContent = `${model.stormName} · GFS 主涡旋`;
+    if (titleElement) titleElement.textContent = `${model.stormName} · GFS 主涡旋（${sourceAge}坐标）`;
     const detailElement = element.querySelector("small");
     if (detailElement) detailElement.textContent = detail;
-    marker.setLngLat([center.lon, center.lat]);
+    marker.setLngLat([displayCenter.lon, displayCenter.lat]);
   });
 }
 
@@ -4852,6 +4872,13 @@ function formatBeijingTime(value: string) {
     minute: "2-digit",
     hour12: false
   });
+}
+
+function formatSourceAgeHours(value: string, nowMs = Date.now()) {
+  const sourceMs = Date.parse(value);
+  if (!Number.isFinite(sourceMs)) return "未知时次";
+  const elapsedHours = Math.max(0, Math.floor((nowMs - sourceMs) / 3_600_000));
+  return elapsedHours === 0 ? "不到1小时" : `${elapsedHours}小时前`;
 }
 
 function eventEvidenceLabel(level: BossProfile["events"][number]["evidenceLevel"]) {

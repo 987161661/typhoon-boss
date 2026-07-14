@@ -5,6 +5,11 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import sharp from "sharp";
 import { makeQuadrantWindPolygon } from "@/lib/meteorology";
+import {
+  globalMercatorLatitudeCrop,
+  HIMAWARI_TEASIA_BOUNDS,
+  selectSynchronizedSatellitePair
+} from "@/lib/satelliteGeoreference";
 import { getCurrentStorms } from "@/lib/realTyphoonData";
 import { findCyclonicVorticityCenter, resolveWindAnalysisReference } from "@/lib/windFieldDiagnostics";
 import type {
@@ -25,12 +30,7 @@ const JMA_REGION = {
   id: "teasia",
   label: "Himawari Tropical Southeast Asia RGB",
   product: "rgb",
-  bounds: {
-    west: 69.8,
-    south: 0,
-    east: 150.4,
-    north: 40.1
-  }
+  bounds: HIMAWARI_TEASIA_BOUNDS
 };
 const NOAA_HIMAWARI_BASE_URL = "https://www.ospo.noaa.gov/jma/teasia";
 const NOAA_HIMAWARI_FRAME_LIST_URL = `${NOAA_HIMAWARI_BASE_URL}/txtfiles/rgb_names.txt`;
@@ -228,7 +228,7 @@ export async function fetchGlobalSatelliteImage(frame: string): Promise<Response
   const remoteUrl = `${NOAA_GMGSI_BASE_URL}/${NOAA_GMGSI_PRODUCT}/${frame}.gif`;
   let image: CachedSatelliteImage;
   try {
-    image = await getCachedSatelliteImage(`global:${frame}`, "global", remoteUrl, prepareGlobalCloudOverlay);
+    image = await getCachedSatelliteImage(`global-georef-v2:${frame}`, "global", remoteUrl, prepareGlobalCloudOverlay);
   } catch (error) {
     return satelliteUnavailableResponse("global", error);
   }
@@ -1403,17 +1403,7 @@ async function loadGlobalSatelliteFrames() {
 }
 
 function chooseSynchronizedFramePair(regionalFrames: SatelliteFrame[], globalFrames: SatelliteFrame[]) {
-  const now = Date.now() + 5 * 60 * 1000;
-  const regional = regionalFrames.filter((frame) => new Date(frame.capturedAt).getTime() <= now);
-  const global = globalFrames.filter((frame) => new Date(frame.capturedAt).getTime() <= now);
-  // These products have different publication delays and retention windows.
-  // Forcing an equal timestamp made the regional layer follow a stale global
-  // frame until NOAA had already removed that regional image. Prefer the newest
-  // independently available frame and expose the actual skew to the UI.
-  return {
-    regional: regional[0] ?? [...regionalFrames].sort(compareFrameNewestFirst)[0],
-    global: global[0] ?? [...globalFrames].sort(compareFrameNewestFirst)[0]
-  };
+  return selectSynchronizedSatellitePair(regionalFrames, globalFrames);
 }
 
 function uniqueFrames(frames: SatelliteFrame[]) {
@@ -1491,9 +1481,8 @@ async function prepareGlobalCloudOverlay(bytes: Uint8Array) {
   const metadata = await sharp(Buffer.from(bytes)).metadata();
   const width = metadata.width ?? 835;
   const height = metadata.height ?? 488;
-  const top = Math.max(0, Math.round(height * 0.154));
-  const bottom = Math.min(height, Math.round(height * 0.868));
-  return renderCloudMask(bytes, { left: 0, top, width, height: Math.max(1, bottom - top) }, 76, 175);
+  const extract = globalMercatorLatitudeCrop(width, height, GLOBAL_SATELLITE_BOUNDS.north, GLOBAL_SATELLITE_BOUNDS.south);
+  return renderCloudMask(bytes, extract, 76, 175);
 }
 
 async function renderCloudMask(

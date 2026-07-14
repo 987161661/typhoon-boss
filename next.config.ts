@@ -2,6 +2,10 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  // The long-running live dev server must not share build artifacts with
+  // `next build`: a production build replaces dev manifests/chunks in `.next`
+  // and leaves an already-running live page as unstyled server HTML.
+  distDir: process.env.NEXT_DIST_DIR || ".next",
   async headers() {
     return [{
       source: "/(.*)",
