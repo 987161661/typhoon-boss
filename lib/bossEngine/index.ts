@@ -121,9 +121,10 @@ function buildIntensityFeatures(storm: Storm) {
 }
 
 function buildLandfallFeatures(storm: Storm) {
+  const futureForecast = futureForecastPoints(storm.forecast);
   const path = [
     { ...storm.position, time: storm.updatedAt, isForecast: false },
-    ...storm.forecast.map((point) => ({ lon: point.lon, lat: point.lat, time: point.time, isForecast: true }))
+    ...futureForecast.map((point) => ({ lon: point.lon, lat: point.lat, time: point.time, isForecast: true }))
   ];
   const watchPoints = getProvinceReferencePoints({ coastalOnly: true });
   const distances = watchPoints.map((watch) => {
@@ -138,7 +139,7 @@ function buildLandfallFeatures(storm: Storm) {
   let previousProvince = currentProvince;
   let forecastLandfall: { province: string; time: string } | null = null;
 
-  for (const point of storm.forecast) {
+  for (const point of futureForecast) {
     const province = findProvinceAtCoordinate(point, { coastalOnly: true });
     if (!previousProvince && province) {
       forecastLandfall = { province: province.shortName, time: point.time };
@@ -208,8 +209,10 @@ function buildLandfallScenarios(storm: Storm, landfall: ReturnType<typeof buildL
       : [];
   const coastalProvinces = getProvinceReferencePoints({ coastalOnly: true });
   const agencyTotal = Math.max(1, sourceScenarios.length);
+  const nowMs = Date.now();
   const aggregates = new Map<string, {
     province: string;
+    pathRelation: "current-position" | "future-entry" | "nearby-corridor";
     score: number;
     timeWeightedMs: number;
     timeWeight: number;
@@ -224,17 +227,20 @@ function buildLandfallScenarios(storm: Storm, landfall: ReturnType<typeof buildL
     score,
     point,
     agencyCode,
-    direct
+    direct,
+    pathRelation
   }: {
     province: string;
     score: number;
     point?: TrackPoint | null;
     agencyCode?: string | null;
     direct?: boolean;
+    pathRelation: "current-position" | "future-entry" | "nearby-corridor";
   }) => {
     if (!Number.isFinite(score) || score <= 0) return;
     const current = aggregates.get(province) ?? {
       province,
+      pathRelation,
       score: 0,
       timeWeightedMs: 0,
       timeWeight: 0,
@@ -244,6 +250,9 @@ function buildLandfallScenarios(storm: Storm, landfall: ReturnType<typeof buildL
       agencies: new Set<string>()
     };
     current.score += score;
+    if (pathRelation === "current-position" || pathRelation === "future-entry") {
+      current.pathRelation = pathRelation;
+    }
     if (agencyCode) current.agencies.add(agencyCode);
     if (direct) current.directHits += 1;
     if (point) {
@@ -266,12 +275,13 @@ function buildLandfallScenarios(storm: Storm, landfall: ReturnType<typeof buildL
       score: 4,
       point: { ...storm.position, time: storm.updatedAt, wind: storm.maxWind, pressure: storm.minPressure },
       agencyCode: "OBS",
-      direct: true
+      direct: true,
+      pathRelation: "current-position"
     });
   }
 
   sourceScenarios.forEach((scenario) => {
-    const points = scenario.points.filter((point) => Number.isFinite(point.lon) && Number.isFinite(point.lat));
+    const points = futureForecastPoints(scenario.points, nowMs).filter((point) => Number.isFinite(point.lon) && Number.isFinite(point.lat));
     if (points.length === 0) return;
     const directPoint = points.find((point) => findProvinceAtCoordinate(point, { coastalOnly: true }));
     const scenarioWeight = scenario.isPrimary ? 1.35 : 1;
@@ -284,7 +294,8 @@ function buildLandfallScenarios(storm: Storm, landfall: ReturnType<typeof buildL
         score: scenarioWeight,
         point: directPoint,
         agencyCode: scenario.agencyCode,
-        direct: true
+        direct: true,
+        pathRelation: "future-entry"
       });
       return;
     }
@@ -305,24 +316,27 @@ function buildLandfallScenarios(storm: Storm, landfall: ReturnType<typeof buildL
       score: scenarioWeight * Math.exp(-nearest.distanceKm / 300) * 0.62,
       point: nearest.point,
       agencyCode: scenario.agencyCode,
-      direct: false
+      direct: false,
+      pathRelation: "nearby-corridor"
     });
   });
 
   landfall.provinceDistances.slice(0, 5).forEach((candidate, index) => {
     if (aggregates.size >= 3 && aggregates.has(candidate.name)) return;
     const province = coastalProvinces.find((item) => item.shortName === candidate.name);
-    const closestPoint = province && storm.forecast.length > 0
-      ? storm.forecast.reduce((best, point) => {
+    const forecast = futureForecastPoints(storm.forecast, nowMs);
+    const closestPoint = province && forecast.length > 0
+      ? forecast.reduce((best, point) => {
           const distanceKm = distanceBetweenKm(point, { lon: province.center[0], lat: province.center[1] });
           return distanceKm < best.distanceKm ? { point, distanceKm } : best;
         }, { point: storm.forecast[0], distanceKm: Number.POSITIVE_INFINITY }).point
-      : storm.forecast[0] ?? null;
+      : forecast[0] ?? null;
     addCandidate({
       province: candidate.name,
       score: Math.exp(-candidate.distanceKm / 340) * (0.24 - index * 0.025),
       point: closestPoint,
-      direct: false
+      direct: false,
+      pathRelation: "nearby-corridor"
     });
   });
 
@@ -341,6 +355,7 @@ function buildLandfallScenarios(storm: Storm, landfall: ReturnType<typeof buildL
     const estimatedTimeMs = item.timeWeight > 0 ? item.timeWeightedMs / item.timeWeight : null;
     return {
       province: item.province,
+      pathRelation: item.pathRelation,
       relativeWeight: relativeWeights[index],
       estimatedAt: estimatedTimeMs === null ? null : new Date(estimatedTimeMs).toISOString(),
       windSpeedMs,
@@ -1044,6 +1059,14 @@ function formatNumber(value: number | null, digits: number) {
 
 function parseStormTime(value: string) {
   return parseBeijingTime(value);
+}
+
+/** Only future forecast positions may support a future-impact broadcast. */
+export function futureForecastPoints(points: TrackPoint[], nowMs = Date.now()) {
+  return points.filter((point) => {
+    const pointTime = parseStormTime(point.time);
+    return pointTime !== null && pointTime >= nowMs;
+  });
 }
 
 function boundedEvidence<T>(start: (signal: AbortSignal) => Promise<T>, fallback: T, timeoutMs = 1_600): Promise<T> {

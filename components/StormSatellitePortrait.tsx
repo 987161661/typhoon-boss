@@ -59,16 +59,19 @@ export function StormSatellitePortrait({
   }, [imageUrl, satelliteLayer, storm]);
 
   const sourceLabel = satelliteLayer?.updatedAt ? new Date(satelliteLayer.updatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : null;
+  const frameLabel = satelliteLayer?.isStale
+    ? `卫星帧 ${sourceLabel ?? "时次未知"}（较旧）`
+    : `卫星帧 ${sourceLabel ?? "时次未知"}`;
 
   return (
     <div
       className={`storm-satellite-portrait is-${frameState}`}
-      aria-label={frameState === "ready" ? `${storm.nameZh} 实时卫星云图` : `${storm.nameZh} 卫星云图暂不可用`}
+      aria-label={frameState === "ready" ? `${storm.nameZh} 卫星云图 ${sourceLabel ?? "时次未知"}` : `${storm.nameZh} 卫星云图暂不可用`}
     >
       <canvas ref={canvasRef} width="256" height="256" aria-hidden="true" />
       <span className="storm-satellite-portrait-grid" aria-hidden="true" />
       <span className="storm-satellite-portrait-crosshair" aria-hidden="true" />
-      <span className="storm-satellite-portrait-tag">{frameState === "ready" ? `卫星帧 ${sourceLabel ?? "LIVE"}` : frameState === "loading" ? "卫星帧同步中" : "卫星帧待命"}</span>
+      <span className="storm-satellite-portrait-tag">{frameState === "ready" ? frameLabel : frameState === "loading" ? "卫星帧同步中" : "卫星帧不可用"}</span>
     </div>
   );
 }

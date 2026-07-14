@@ -14,7 +14,7 @@ import {
   type PointerEvent as ReactPointerEvent
 } from "react";
 import maplibregl, { type GeoJSONSource, type ImageSource, type Map as MapLibreMap } from "maplibre-gl";
-import { AlertTriangle, ChevronLeft, ChevronRight, Database, Palette, RadioTower, Satellite, Settings2, Shield, Wind } from "lucide-react";
+import { AlertTriangle, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Database, Palette, RadioTower, Satellite, Settings2, Shield, Wind } from "lucide-react";
 import Link from "next/link";
 import { makeCircle } from "@/lib/provinceGeo";
 import { createStormVisualCanvas } from "@/lib/stormVisualRenderer";
@@ -59,6 +59,7 @@ import { useViewportGfsLayer, useViewportGridLayer } from "./map/useViewportGfsL
 import { usePollingEnvironmentLayer } from "./map/usePollingEnvironmentLayer";
 import { HudPanel, StatusPill } from "./HudPrimitives";
 import { BossSkillSlotPanel, IntelPanel } from "./IntelPanel";
+import type { CityAttention, CityAttentionAnchor } from "@/lib/liveCityInteraction";
 import {
   buildLiveBroadcastModel,
   LiveAudiencePanel,
@@ -219,10 +220,14 @@ const DEFAULT_ENVIRONMENT_LAYERS: EnvironmentLayerToggles = {
 export function TyphoonMap({
   view = "standard",
   liveDeck = "briefing",
+  cityAttention = null,
+  onCityAttentionAnchor,
   onSceneReady
 }: {
   view?: RadarView;
   liveDeck?: LiveDeckView;
+  cityAttention?: CityAttention | null;
+  onCityAttentionAnchor?: (anchor: CityAttentionAnchor | null) => void;
   onSceneReady?: () => void;
 }) {
   const isLiveView = view === "live";
@@ -254,6 +259,7 @@ export function TyphoonMap({
   const [ecmwfTracksVisible, setEcmwfTracksVisible] = useState(false);
   const [observationsVisible, setObservationsVisible] = useState(false);
   const [cwaRadarVisible, setCwaRadarVisible] = useState(false);
+  const [liveEnvironmentCollapsed, setLiveEnvironmentCollapsed] = useState(false);
   const [impactArea, setImpactArea] = useState<ImpactAreaPayload | null>(null);
   const [watchRegions, setWatchRegions] = useState<ProvinceAlertPoint[]>([]);
   useEffect(() => {
@@ -286,6 +292,10 @@ export function TyphoonMap({
   const markerRef = useRef<maplibregl.Marker | null>(null);
   const gfsCenterMarkerRefs = useRef<Map<string, maplibregl.Marker>>(new Map());
   const fleetMarkerRefs = useRef<Map<string, maplibregl.Marker>>(new Map());
+  const cityAttentionMarkerRef = useRef<maplibregl.Marker | null>(null);
+  const cityAttentionElementRef = useRef<HTMLDivElement | null>(null);
+  const cityCameraSnapshotRef = useRef<{ center: [number, number]; zoom: number; bearing: number; pitch: number } | null>(null);
+  const cityAttentionRef = useRef<CityAttention | null>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const stormRef = useRef<Storm | null>(null);
   const stormsRef = useRef<Storm[]>([]);
@@ -293,6 +303,9 @@ export function TyphoonMap({
   const focusedStormIdRef = useRef<string | null>(null);
   const requestedStormId = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("stormId");
   const storm = storms[activeIndex] ?? null;
+  // Live decks are storm-specific.  When the upstream feed has no active
+  // storm, the broadcast becomes a map-first environmental monitoring view.
+  const showLiveStandbyEnvironment = isLiveView && !storm;
   const selectStorm = useCallback((index: number) => {
     setActiveIndex(index);
     if (typeof window === "undefined" || view === "live") return;
@@ -335,26 +348,32 @@ export function TyphoonMap({
   const cwaRadarLayer = usePollingEnvironmentLayer<RadarMosaicLayerPayload>({
     url: "/api/environment/cwa-radar",
     intervalMs: 5 * 60 * 1000,
-    enabled: !isLiveView
+    enabled: !isLiveView || showLiveStandbyEnvironment
   });
   const ecmwfTrackLayer = usePollingEnvironmentLayer<EcmwfTrackPayload>({
     url: "/api/environment/ecmwf-tracks",
     intervalMs: 30 * 60 * 1000,
-    enabled: !isLiveView
+    // On the live standby deck this is an on-demand, cancellable layer. The
+    // toggle is not merely cosmetic: turning it off aborts its active fetch
+    // and stops the 30-minute polling loop.
+    enabled: !isLiveView || (showLiveStandbyEnvironment && ecmwfTracksVisible)
   });
   const officialAlerts = usePollingEnvironmentLayer<OfficialAlertPayload>({
     url: "/api/environment/official-alerts",
     intervalMs: 5 * 60 * 1000,
-    enabled: !isLiveView
+    enabled: !isLiveView || showLiveStandbyEnvironment
   });
   const regionalObservations = usePollingEnvironmentLayer<RegionalObservationPayload>({
     url: "/api/environment/regional-observations",
     intervalMs: 5 * 60 * 1000,
-    enabled: !isLiveView
+    enabled: !isLiveView || showLiveStandbyEnvironment
   });
   const matchedEcmwfTracks = useMemo(() => matchEcmwfTracks(storm, ecmwfTrackLayer), [ecmwfTrackLayer, storm]);
   const activeWindField = viewportWindField ?? windField;
-  const scopedActiveWindField = windFieldMatchesStorm(activeWindField, storm) ? activeWindField : null;
+  // A viewport GFS field is valid without a tracked cyclone as long as it was
+  // requested without a storm id.  The old storm-only guard hid those real
+  // ambient vectors whenever the active-storm list became empty.
+  const scopedActiveWindField = windFieldMatchesMapContext(activeWindField, storm) ? activeWindField : null;
   const windFieldSignature = useMemo(() => {
     if (scopedActiveWindField?.status !== "available") return `${storm?.id ?? "no-storm"};${scopedActiveWindField?.status ?? "pending"}`;
     return [
@@ -378,7 +397,7 @@ export function TyphoonMap({
     latestWindFieldRef.current = pendingWindFieldRef.current;
     setStableWindField(pendingWindFieldRef.current);
   }, [windFieldSignature]);
-  const stormWindField = windFieldMatchesStorm(stableWindField, storm) ? stableWindField : null;
+  const stormWindField = windFieldMatchesMapContext(stableWindField, storm) ? stableWindField : null;
   const compatibleCoreWindField = windFieldsShareFrame(stormWindField, coreWindField) ? coreWindField : null;
   latestCoreWindFieldRef.current = compatibleCoreWindField;
   const canonicalStormWindField = useMemo(
@@ -416,9 +435,11 @@ export function TyphoonMap({
         lastUpdated,
         lastSyncedAt,
         dataError,
-        snapshotStale: snapshot?.cache.stale
+        snapshotStale: snapshot?.cache.stale,
+        satelliteLayer,
+        lastTrackedStorm: snapshot?.lastTrackedStorm
       }),
-    [storm, bossProfile, sourceLabel, lastUpdated, lastSyncedAt, dataError, snapshot?.cache.stale]
+    [storm, bossProfile, sourceLabel, lastUpdated, lastSyncedAt, dataError, snapshot?.cache.stale, snapshot?.lastTrackedStorm, satelliteLayer]
   );
 
   const stormGeo = useMemo(() => buildStormGeo(storm), [storm]);
@@ -616,6 +637,11 @@ export function TyphoonMap({
       return () => {
         resizeObserver?.disconnect();
       disposeStormMarker(markerRef.current);
+      cityAttentionMarkerRef.current?.remove();
+      cityAttentionMarkerRef.current = null;
+      cityAttentionElementRef.current = null;
+      cityCameraSnapshotRef.current = null;
+      cityAttentionRef.current = null;
       disposeGfsAnalysisCenterMarkers(gfsCenterMarkers);
       disposeStormFleetMarkers(fleetMarkers);
       markerRef.current = null;
@@ -638,12 +664,85 @@ export function TyphoonMap({
   }, [isLiveView, mapReady]);
 
   useEffect(() => {
+    cityAttentionRef.current = cityAttention;
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+
+    if (!cityAttention) {
+      onCityAttentionAnchor?.(null);
+      cityAttentionMarkerRef.current?.remove();
+      cityAttentionMarkerRef.current = null;
+      cityAttentionElementRef.current = null;
+      const previousCamera = cityCameraSnapshotRef.current;
+      cityCameraSnapshotRef.current = null;
+      if (previousCamera) map.easeTo({ ...previousCamera, duration: 760, essential: true });
+      return;
+    }
+
+    const syncAttentionAnchor = () => {
+      const point = map.project([cityAttention.longitude, cityAttention.latitude]);
+      const rect = map.getCanvas().getBoundingClientRect();
+      const x = rect.left + point.x;
+      const y = rect.top + point.y;
+      onCityAttentionAnchor?.({
+        x,
+        y,
+        horizontal: x > window.innerWidth * 0.58 ? "left" : "right",
+        vertical: y > window.innerHeight * 0.62 ? "up" : "down"
+      });
+    };
+    map.on("move", syncAttentionAnchor);
+    map.on("resize", syncAttentionAnchor);
+
+    const isNewTarget = cityAttentionMarkerRef.current?.getLngLat().lng !== cityAttention.longitude ||
+      cityAttentionMarkerRef.current?.getLngLat().lat !== cityAttention.latitude;
+    if (isNewTarget) {
+      if (!cityCameraSnapshotRef.current) {
+        const center = map.getCenter();
+        cityCameraSnapshotRef.current = {
+          center: [center.lng, center.lat],
+          zoom: map.getZoom(),
+          bearing: map.getBearing(),
+          pitch: map.getPitch()
+        };
+      }
+      const element = document.createElement("div");
+      element.className = "city-attention-marker";
+      element.setAttribute("aria-hidden", "true");
+      element.innerHTML = "<i></i><b></b><span></span>";
+      cityAttentionElementRef.current = element;
+      cityAttentionMarkerRef.current?.remove();
+      cityAttentionMarkerRef.current = new maplibregl.Marker({ element, anchor: "center" })
+        .setLngLat([cityAttention.longitude, cityAttention.latitude])
+        .addTo(map);
+      map.stop();
+      map.easeTo({
+        center: [cityAttention.longitude, cityAttention.latitude],
+        zoom: Math.max(map.getZoom(), 5.6),
+        duration: 720,
+        essential: true
+      });
+    }
+    const element = cityAttentionElementRef.current;
+    if (element) {
+      element.dataset.phase = cityAttention.phase;
+      element.dataset.city = cityAttention.city;
+    }
+    syncAttentionAnchor();
+    return () => {
+      map.off("move", syncAttentionAnchor);
+      map.off("resize", syncAttentionAnchor);
+    };
+  }, [cityAttention, mapReady, onCityAttentionAnchor]);
+
+  useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
     updateStormSources(map, stormGeo);
     renderStormOnMap(map, activeMarkerStorm, markerRef, satelliteLayer, bossProfile);
     updateStormFleetSources(map, stormFleetGeo);
     syncStormFleetMarkers(map, markerStorms, storm?.id ?? null, fleetMarkerRefs.current, bossProfiles, satelliteLayer);
+    if (cityAttentionRef.current) return;
     if (storm) {
       // The live deck changes every five seconds. It must not be treated as a
       // new target: fitBounds/easeTo during the layout swap causes canvas
@@ -739,7 +838,14 @@ export function TyphoonMap({
   }, [storm, mapReady, theme]);
 
   return (
-    <main className="radar-shell" data-theme={theme} data-view={view} data-live-deck={isLiveView ? liveDeck : undefined}>
+    <main
+      className="radar-shell"
+      data-theme={theme}
+      data-view={view}
+      data-live-deck={isLiveView ? liveDeck : undefined}
+      data-live-standby={showLiveStandbyEnvironment ? "true" : undefined}
+      data-live-rail-collapsed={isLiveView && showLiveStandbyEnvironment && liveEnvironmentCollapsed ? "true" : undefined}
+    >
       {!isLiveView ? <div className="boot-scan" /> : null}
       <section className="map-stage" aria-label="台风 Boss 雷达地图">
         {mapFailed ? <FallbackMap storm={storm} /> : <div className="map-canvas" ref={mapNode} />}
@@ -751,7 +857,7 @@ export function TyphoonMap({
         {!mapFailed && environmentLayers.wind ? <canvas className="wind-particle-canvas" ref={windCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed && environmentLayers.wind ? <canvas className="wind-particle-interaction-canvas" ref={windInteractionCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed && storm ? <canvas className="forecast-route-canvas" ref={forecastCanvasRef} aria-hidden="true" /> : null}
-        {!mapFailed ? <WindFieldTimeBadge windField={stormWindField} currentStorm={storm} /> : null}
+        {isLiveView && !mapFailed ? <WindFieldTimeBadge placement="live" windField={stormWindField} currentStorm={storm} /> : null}
         {!mapFailed ? (
           <ProjectedMapOverlays
             map={mapReady ? mapRef.current : null}
@@ -814,72 +920,109 @@ export function TyphoonMap({
           <div className="left-tactical-stack">
             <DefenseStatusPanel alerts={provinceAlerts} onSelect={fetchDefense} />
             <BossSkillSlotPanel storm={storm} bossProfile={bossProfile} className="left-boss-skill-panel" />
-            <EnvironmentLayerPanel
-              layers={environmentLayers}
-              satellite={satelliteLayer}
-              windField={activeWindField}
-              detailWindField={compatibleCoreWindField}
-              impactArea={impactArea}
-              gfsScalarLayer={gfsScalarLayer}
-              gfsScalarPayload={viewportGfsLayer}
-              cwaRadar={cwaRadarLayer}
-              cwaRadarVisible={cwaRadarVisible}
-              gfsWave={viewportGfsWave}
-              gfsWaveVisible={gfsWaveVisible}
-              ecmwfTracks={ecmwfTrackLayer}
-              ecmwfTracksVisible={ecmwfTracksVisible}
-              ecmwfMemberCount={matchedEcmwfTracks.ensemble?.members.length ?? 0}
-              observations={regionalObservations}
-              observationsVisible={observationsVisible}
-              windRenderMode={windRenderMode}
-              onToggle={toggleEnvironmentLayer}
-              onGfsScalarLayerChange={setGfsScalarLayer}
-              onCwaRadarToggle={() => setCwaRadarVisible((current) => !current)}
-              onGfsWaveToggle={() => setGfsWaveVisible((current) => !current)}
-              onEcmwfTracksToggle={() => setEcmwfTracksVisible((current) => !current)}
-              onObservationsToggle={() => setObservationsVisible((current) => !current)}
-              onWindRenderModeChange={setWindRenderMode}
-            />
+            <div className="environment-panel-stack">
+              <EnvironmentLayerPanel
+                layers={environmentLayers}
+                satellite={satelliteLayer}
+                windField={activeWindField}
+                detailWindField={compatibleCoreWindField}
+                impactArea={impactArea}
+                gfsScalarLayer={gfsScalarLayer}
+                gfsScalarPayload={viewportGfsLayer}
+                cwaRadar={cwaRadarLayer}
+                cwaRadarVisible={cwaRadarVisible}
+                gfsWave={viewportGfsWave}
+                gfsWaveVisible={gfsWaveVisible}
+                ecmwfTracks={ecmwfTrackLayer}
+                ecmwfTracksVisible={ecmwfTracksVisible}
+                ecmwfMemberCount={matchedEcmwfTracks.ensemble?.members.length ?? 0}
+                observations={regionalObservations}
+                observationsVisible={observationsVisible}
+                windRenderMode={windRenderMode}
+                onToggle={toggleEnvironmentLayer}
+                onGfsScalarLayerChange={setGfsScalarLayer}
+                onCwaRadarToggle={() => setCwaRadarVisible((current) => !current)}
+                onGfsWaveToggle={() => setGfsWaveVisible((current) => !current)}
+                onEcmwfTracksToggle={() => setEcmwfTracksVisible((current) => !current)}
+                onObservationsToggle={() => setObservationsVisible((current) => !current)}
+                onWindRenderModeChange={setWindRenderMode}
+              />
+              {!mapFailed ? <WindFieldTimeBadge placement="main" windField={stormWindField} currentStorm={storm} /> : null}
+            </div>
           </div>
         ) : !isLiveView ? (
           <>
             <DefenseStatusPanel alerts={provinceAlerts} onSelect={fetchDefense} />
-            <EnvironmentLayerPanel
-              layers={environmentLayers}
-              satellite={satelliteLayer}
-              windField={activeWindField}
-              detailWindField={compatibleCoreWindField}
-              impactArea={impactArea}
-              gfsScalarLayer={gfsScalarLayer}
-              gfsScalarPayload={viewportGfsLayer}
-              cwaRadar={cwaRadarLayer}
-              cwaRadarVisible={cwaRadarVisible}
-              gfsWave={viewportGfsWave}
-              gfsWaveVisible={gfsWaveVisible}
-              ecmwfTracks={ecmwfTrackLayer}
-              ecmwfTracksVisible={ecmwfTracksVisible}
-              ecmwfMemberCount={matchedEcmwfTracks.ensemble?.members.length ?? 0}
-              observations={regionalObservations}
-              observationsVisible={observationsVisible}
-              windRenderMode={windRenderMode}
-              onToggle={toggleEnvironmentLayer}
-              onGfsScalarLayerChange={setGfsScalarLayer}
-              onCwaRadarToggle={() => setCwaRadarVisible((current) => !current)}
-              onGfsWaveToggle={() => setGfsWaveVisible((current) => !current)}
-              onEcmwfTracksToggle={() => setEcmwfTracksVisible((current) => !current)}
-              onObservationsToggle={() => setObservationsVisible((current) => !current)}
-              onWindRenderModeChange={setWindRenderMode}
-            />
+            <div className="environment-panel-stack">
+              <EnvironmentLayerPanel
+                layers={environmentLayers}
+                satellite={satelliteLayer}
+                windField={activeWindField}
+                detailWindField={compatibleCoreWindField}
+                impactArea={impactArea}
+                gfsScalarLayer={gfsScalarLayer}
+                gfsScalarPayload={viewportGfsLayer}
+                cwaRadar={cwaRadarLayer}
+                cwaRadarVisible={cwaRadarVisible}
+                gfsWave={viewportGfsWave}
+                gfsWaveVisible={gfsWaveVisible}
+                ecmwfTracks={ecmwfTrackLayer}
+                ecmwfTracksVisible={ecmwfTracksVisible}
+                ecmwfMemberCount={matchedEcmwfTracks.ensemble?.members.length ?? 0}
+                observations={regionalObservations}
+                observationsVisible={observationsVisible}
+                windRenderMode={windRenderMode}
+                onToggle={toggleEnvironmentLayer}
+                onGfsScalarLayerChange={setGfsScalarLayer}
+                onCwaRadarToggle={() => setCwaRadarVisible((current) => !current)}
+                onGfsWaveToggle={() => setGfsWaveVisible((current) => !current)}
+                onEcmwfTracksToggle={() => setEcmwfTracksVisible((current) => !current)}
+                onObservationsToggle={() => setObservationsVisible((current) => !current)}
+                onWindRenderModeChange={setWindRenderMode}
+              />
+              {!mapFailed ? <WindFieldTimeBadge placement="main" windField={stormWindField} currentStorm={storm} /> : null}
+            </div>
           </>
         ) : null}
         {!isLiveView && theme === "archive-command" ? <MapLegendPanel /> : null}
         {!isLiveView && theme === "archive-command" ? <DossierStormIndex storms={storms} activeIndex={activeIndex} onSelect={selectStorm} /> : null}
         {!isLiveView && theme === "archive-command" ? <ImpactLegend /> : null}
-        {!isLiveView && theme === "night-radar" ? <BottomAlertBar storm={storm} bossProfile={bossProfile} alerts={provinceAlerts} dataError={dataError} sourceLabel={sourceLabel} /> : null}
+        {!isLiveView && theme === "night-radar" ? <BottomAlertBar storm={storm} bossProfile={bossProfile} alerts={provinceAlerts} dataError={dataError} sourceLabel={sourceLabel} lastTrackedStorm={snapshot?.lastTrackedStorm ?? null} /> : null}
         {!isLiveView ? <DefenseDrawer defense={selectedDefense} onClose={() => setSelectedDefense(null)} /> : null}
       </section>
 
-      {isLiveView ? liveDeck === "briefing" ? (
+      {isLiveView ? showLiveStandbyEnvironment ? (
+        <EnvironmentLayerPanel
+          className="live-standby-environment-panel"
+          collapsible
+          collapsed={liveEnvironmentCollapsed}
+          onCollapsedChange={() => setLiveEnvironmentCollapsed((current) => !current)}
+          layers={environmentLayers}
+          satellite={satelliteLayer}
+          windField={activeWindField}
+          detailWindField={compatibleCoreWindField}
+          impactArea={impactArea}
+          gfsScalarLayer={gfsScalarLayer}
+          gfsScalarPayload={viewportGfsLayer}
+          cwaRadar={cwaRadarLayer}
+          cwaRadarVisible={cwaRadarVisible}
+          gfsWave={viewportGfsWave}
+          gfsWaveVisible={gfsWaveVisible}
+          ecmwfTracks={ecmwfTrackLayer}
+          ecmwfTracksVisible={ecmwfTracksVisible}
+          ecmwfMemberCount={matchedEcmwfTracks.ensemble?.members.length ?? 0}
+          observations={regionalObservations}
+          observationsVisible={observationsVisible}
+          windRenderMode={windRenderMode}
+          onToggle={toggleEnvironmentLayer}
+          onGfsScalarLayerChange={setGfsScalarLayer}
+          onCwaRadarToggle={() => setCwaRadarVisible((current) => !current)}
+          onGfsWaveToggle={() => setGfsWaveVisible((current) => !current)}
+          onEcmwfTracksToggle={() => setEcmwfTracksVisible((current) => !current)}
+          onObservationsToggle={() => setObservationsVisible((current) => !current)}
+          onWindRenderModeChange={setWindRenderMode}
+        />
+      ) : liveDeck === "briefing" ? (
         <LiveAudiencePanel
           model={liveModel}
           storm={storm}
@@ -1807,6 +1950,10 @@ function MapLegendPanel() {
 }
 
 function EnvironmentLayerPanel({
+  className = "",
+  collapsible = false,
+  collapsed = false,
+  onCollapsedChange,
   layers,
   satellite,
   windField,
@@ -1832,6 +1979,10 @@ function EnvironmentLayerPanel({
   onObservationsToggle,
   onWindRenderModeChange
 }: {
+  className?: string;
+  collapsible?: boolean;
+  collapsed?: boolean;
+  onCollapsedChange?: () => void;
   layers: EnvironmentLayerToggles;
   satellite: SatelliteLayerPayload | null;
   windField: WindFieldPayload | null;
@@ -1900,13 +2051,34 @@ function EnvironmentLayerPanel({
       alert: windField?.status !== "available" || !hasDirectNcepGfs || Boolean(windField?.isStale)
     }
   ];
+  const selectWindRenderMode = (mode: WindRenderMode) => {
+    // The display-mode controls are also the fastest way to silence an active
+    // wind visual. Clicking the active mode closes it; choosing the other
+    // mode swaps it in, and a closed wind layer is reopened explicitly.
+    if (layers.wind && windRenderMode === mode) {
+      onToggle("wind");
+      return;
+    }
+    if (!layers.wind) onToggle("wind");
+    onWindRenderModeChange(mode);
+  };
 
   return (
-    <HudPanel as="aside" className="environment-panel" aria-label="环境图层控制">
-      <div className="section-title compact">
-        <Satellite size={16} />
-        <span>环境图层</span>
+    <HudPanel as="aside" className={`environment-panel ${className} ${collapsible ? "is-collapsible" : ""} ${collapsed ? "is-collapsed" : ""}`.trim()} aria-label="环境图层控制">
+      <div className="environment-panel-heading">
+        <div className="section-title compact">
+          <Satellite size={16} />
+          <span>环境图层</span>
+        </div>
+        {collapsible ? (
+          <button className="environment-panel-collapse" type="button" onClick={onCollapsedChange} aria-expanded={!collapsed}>
+            {collapsed ? <ChevronDown size={17} /> : <ChevronUp size={17} />}
+            <span>{collapsed ? "放下" : "收起"}</span>
+          </button>
+        ) : null}
       </div>
+      <div className="environment-panel-content" aria-hidden={collapsed}>
+      <div className="environment-panel-content-inner">
       <small className="section-subtitle">卫星云图 / 官方风圈 / NCEP GFS</small>
       <div className="environment-layer-list">
         {rows.map((row) => {
@@ -1977,12 +2149,13 @@ function EnvironmentLayerPanel({
         <span>补充路径资料</span>
         <button
           className={ecmwfTracksVisible ? "active" : ""}
-          disabled={ecmwfTracks?.status !== "available" || ecmwfMemberCount === 0}
           onClick={onEcmwfTracksToggle}
           type="button"
           aria-pressed={ecmwfTracksVisible}
-        >ECMWF 集合路径</button>
-        <small>{ecmwfTracks?.status === "available"
+        >{ecmwfTracksVisible ? "停止 ECMWF 路径" : "ECMWF 集合路径"}</button>
+        <small>{!ecmwfTracksVisible
+          ? "按需获取；点击后开始请求，随时可停止。"
+          : ecmwfTracks?.status === "available"
           ? ecmwfMemberCount > 0 ? `${ecmwfTracks.cycle} · 匹配 ${ecmwfMemberCount} 个集合成员` : `${ecmwfTracks.cycle} · 当前目标未匹配到成员`
           : ecmwfTracks?.reason ?? "正在获取 ECMWF BUFR 路径…"}</small>
       </div>
@@ -2003,11 +2176,11 @@ function EnvironmentLayerPanel({
       <div className="wind-render-mode" aria-label="10 米风显示方式">
         <span>10m 风显示</span>
         <div role="group" aria-label="选择风场显示方式">
-          <button className={windRenderMode === "streamlines" ? "active" : ""} type="button" onClick={() => onWindRenderModeChange("streamlines")}>
-            全屏流线
+          <button className={layers.wind && windRenderMode === "streamlines" ? "active" : ""} type="button" onClick={() => selectWindRenderMode("streamlines")} aria-pressed={layers.wind && windRenderMode === "streamlines"}>
+            {layers.wind && windRenderMode === "streamlines" ? "关闭流线" : "全屏流线"}
           </button>
-          <button className={windRenderMode === "gfs" ? "active" : ""} type="button" onClick={() => onWindRenderModeChange("gfs")}>
-            GFS 风羽
+          <button className={layers.wind && windRenderMode === "gfs" ? "active" : ""} type="button" onClick={() => selectWindRenderMode("gfs")} aria-pressed={layers.wind && windRenderMode === "gfs"}>
+            {layers.wind && windRenderMode === "gfs" ? "关闭风羽" : "GFS 风羽"}
           </button>
         </div>
         <small>
@@ -2033,6 +2206,8 @@ function EnvironmentLayerPanel({
       <p className="environment-attribution">
         {windField?.status === "available" ? `${windField.source} · ${windField.model} · ${windField.unit}` : "仅显示已接通的实时公开数据源。"}
       </p>
+      </div>
+      </div>
     </HudPanel>
   );
 }
@@ -2115,17 +2290,22 @@ function BottomAlertBar({
   bossProfile,
   alerts,
   dataError,
-  sourceLabel
+  sourceLabel,
+  lastTrackedStorm
 }: {
   storm: Storm | null;
   bossProfile?: BossProfile | null;
   alerts: ReturnType<typeof buildProvinceAlerts>;
   dataError: string | null;
   sourceLabel: string;
+  lastTrackedStorm: { nameZh: string; nameEn: string; lastObservedAt: string; status: "active" | "exited-live-track" } | null;
 }) {
   const events = bossProfile?.events.slice(0, 3) ?? [];
+  const isClosure = !storm && lastTrackedStorm?.status === "exited-live-track";
   const message = dataError
     ? "数据链路异常，请以官方预警为准。雷达将在下一轮刷新时重试。"
+    : isClosure
+      ? `${lastTrackedStorm.nameZh} 已退出实时路径清单；当前未发现活动台风，雷达继续监听后续公开实况。`
     : bossProfile
       ? bossProfile.riskSummary
     : storm
@@ -2133,12 +2313,12 @@ function BottomAlertBar({
       : "当前无活动台风，雷达保持待机巡航。";
 
   return (
-    <footer className="bottom-command">
+    <footer className={`bottom-command ${isClosure ? "is-cycle-closed" : ""}`}>
       <div className="bottom-defense-title">
-        <Shield size={40} />
+        {isClosure ? <RadioTower size={40} /> : <Shield size={40} />}
         <div>
-          <b>BOSS 战况追踪</b>
-          <span>战斗履历 / 省份防线</span>
+          <b>{isClosure ? "本轮台风收束" : "BOSS 战况追踪"}</b>
+          <span>{isClosure ? "最后实况归档 / 实时监听" : "战斗履历 / 省份防线"}</span>
         </div>
       </div>
       <div className="boss-event-strip">
@@ -2150,7 +2330,19 @@ function BottomAlertBar({
                 <small>{formatClock(event.time)} / {event.sourceLabel ? `${event.sourceLabel} / ` : ""}{eventEvidenceLabel(event.evidenceLevel)}</small>
               </div>
             ))
-          : alerts.slice(0, 3).map((item) => (
+          : isClosure
+            ? [
+              { title: "实时路径状态", detail: `${lastTrackedStorm.nameZh} 已退出活动清单`, note: "本轮路径追踪已收束" },
+              { title: "最后公开实况", detail: `${formatClock(lastTrackedStorm.lastObservedAt)} · ${lastTrackedStorm.nameEn}`, note: "保留最后有效时次，不延用旧路径" },
+              { title: "雷达监听", detail: "当前 0 个活动台风", note: "等待上游发布新目标" }
+            ].map((item) => (
+              <div className="boss-event-card is-cycle-closure" key={item.title}>
+                <b>{item.title}</b>
+                <p><ScrollWhenOverflow>{item.detail}</ScrollWhenOverflow></p>
+                <small><ScrollWhenOverflow>{item.note}</ScrollWhenOverflow></small>
+              </div>
+            ))
+            : alerts.slice(0, 3).map((item) => (
               <div className={`boss-event-card level-${item.level}`} key={item.name}>
                 <b>{item.name}</b>
                 <p>{item.label}</p>
@@ -2172,6 +2364,30 @@ function BottomAlertBar({
         </Link>
       </div>
     </footer>
+  );
+}
+
+function ScrollWhenOverflow({ children }: { children: string }) {
+  const viewportRef = useRef<HTMLSpanElement | null>(null);
+  const [overflowing, setOverflowing] = useState(false);
+
+  useLayoutEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    const update = () => setOverflowing(viewport.scrollWidth > viewport.clientWidth + 1);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, [children]);
+
+  return (
+    <span className={`boss-event-scroll ${overflowing ? "is-overflowing" : ""}`} ref={viewportRef} title={children}>
+      <span className="boss-event-scroll-track">
+        <span>{children}</span>
+        {overflowing ? <span aria-hidden="true">{children}</span> : null}
+      </span>
+    </span>
   );
 }
 
@@ -4753,7 +4969,22 @@ function windForceTextureOpacity(forceLevel: number) {
   return Math.max(0, Math.min(1, 1 - (forceLevel - 2) / 15));
 }
 
-function WindFieldTimeBadge({ windField, currentStorm }: { windField: WindFieldPayload | null; currentStorm: Storm | null }) {
+function windFieldMatchesMapContext(windField: WindFieldPayload | null, storm: Storm | null) {
+  if (!windField || windField.status !== "available" || windField.points.length === 0) return false;
+  // Preserve strict identity matching while a storm is active.  In standby,
+  // only accept a field explicitly fetched as ambient map coverage.
+  return storm ? windFieldMatchesStorm(windField, storm) : windField.stormId == null;
+}
+
+function WindFieldTimeBadge({
+  placement,
+  windField,
+  currentStorm
+}: {
+  placement: "main" | "live";
+  windField: WindFieldPayload | null;
+  currentStorm: Storm | null;
+}) {
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const badgeRef = useRef<HTMLElement | null>(null);
   const dragRef = useRef<{
@@ -4770,12 +5001,12 @@ function WindFieldTimeBadge({ windField, currentStorm }: { windField: WindFieldP
   const resetPosition = useCallback(() => setOffset({ x: 0, y: 0 }), []);
   const onDragStart = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
     const badge = badgeRef.current;
-    const stage = badge?.closest<HTMLElement>(".map-stage");
-    if (!badge || !stage) return;
+    const bounds = badge?.closest<HTMLElement>(placement === "live" ? ".map-stage" : ".radar-shell");
+    if (!badge || !bounds) return;
     event.preventDefault();
     event.stopPropagation();
     const badgeRect = badge.getBoundingClientRect();
-    const stageRect = stage.getBoundingClientRect();
+    const stageRect = bounds.getBoundingClientRect();
     dragRef.current = {
       pointerId: event.pointerId,
       originX: event.clientX,
@@ -4788,7 +5019,7 @@ function WindFieldTimeBadge({ windField, currentStorm }: { windField: WindFieldP
       maxY: offset.y + stageRect.bottom - badgeRect.bottom
     };
     event.currentTarget.setPointerCapture(event.pointerId);
-  }, [offset.x, offset.y]);
+  }, [offset.x, offset.y, placement]);
   const onDragMove = useCallback((event: ReactPointerEvent<HTMLButtonElement>) => {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
@@ -4823,7 +5054,7 @@ function WindFieldTimeBadge({ windField, currentStorm }: { windField: WindFieldP
   const lagHours = Number.isFinite(fieldTime) && Number.isFinite(currentTime) ? Math.max(0, Math.round((currentTime - fieldTime) / 3_600_000)) : null;
   return (
     <aside
-      className="wind-field-time-badge"
+      className={`wind-field-time-badge is-${placement}`}
       data-stale={windField.isStale ? "true" : "false"}
       aria-label="GFS 风场数据时次"
       ref={badgeRef}

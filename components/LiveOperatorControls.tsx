@@ -32,13 +32,14 @@ export function LiveOperatorControls({
 }: {
   hostVisible: boolean;
   onToggleHost: () => void;
-  onSendChat: (text: string) => void;
+  onSendChat: (text: string) => "city" | "host";
   settings: LiveControlSettings;
   settingsStatus: SettingsStatus;
   onSaveSettings: (patch: Partial<LiveControlSettings>) => Promise<void>;
 }) {
   const [message, setMessage] = useState("");
   const [lastSent, setLastSent] = useState("");
+  const [lastDispatch, setLastDispatch] = useState<"city" | "host" | null>(null);
   const [drawerPinned, setDrawerPinned] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [draft, setDraft] = useState(settings);
@@ -51,7 +52,7 @@ export function LiveOperatorControls({
     event.preventDefault();
     const text = message.trim();
     if (!text) return;
-    onSendChat(text);
+    setLastDispatch(onSendChat(text));
     setLastSent(text);
     setMessage("");
   };
@@ -267,21 +268,25 @@ export function LiveOperatorControls({
           <span>DIRECT LINK</span>
           <strong>和凌岚说话</strong>
         </div>
-        <label htmlFor="live-linglan-chat">输入给数字人的消息</label>
+        <label htmlFor="live-linglan-chat">输入消息；@城市触发城市战况卡</label>
         <input
           id="live-linglan-chat"
           value={message}
           onChange={(event) => setMessage(event.target.value)}
           maxLength={500}
           autoComplete="off"
-          placeholder="输入问题，例如：现在浙江最需要注意什么？"
+          placeholder="输入问题，或 @杭州 查看城市战况"
         />
         <button type="submit" disabled={!message.trim()}>
           <Send aria-hidden="true" />
           发送
         </button>
         <span className="live-chat-status" role="status">
-          {lastSent ? "已送入凌岚对话队列" : "事实校验后播报"}
+          {lastSent
+            ? lastDispatch === "city"
+              ? "已触发城市战况卡"
+              : "已送入凌岚对话队列"
+            : "输入 @城市触发战况卡"}
         </span>
       </form>
     </>

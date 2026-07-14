@@ -1,9 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { TyphoonMap } from "./TyphoonMap";
 import { DigitalHostWindow, type HostChatRequest } from "./DigitalHostWindow";
 import { LiveOperatorControls } from "./LiveOperatorControls";
+import { LiveCityInteraction } from "./LiveCityInteraction";
+import { LiveCityTargetLock } from "./LiveCityTargetLock";
+import { useLiveCityInteractionQueue } from "./useLiveCityInteractionQueue";
+import { createLiveCityEventId, type CityAttention, type CityAttentionAnchor, type HostLiveComment } from "@/lib/liveCityInteraction";
 import {
   DEFAULT_LIVE_CONTROL_SETTINGS,
   normalizeLiveControlSettings,
@@ -21,12 +26,47 @@ export function LiveDirector() {
   const [cycle, setCycle] = useState(0);
   const [hostVisible, setHostVisible] = useState(true);
   const [chatRequest, setChatRequest] = useState<HostChatRequest | null>(null);
+  const [cityAttention, setCityAttention] = useState<CityAttention | null>(null);
+  const [cityAttentionAnchor, setCityAttentionAnchor] = useState<CityAttentionAnchor | null>(null);
   const [controlSettings, setControlSettings] = useState(DEFAULT_LIVE_CONTROL_SETTINGS);
   const [settingsStatus, setSettingsStatus] = useState<"loading" | "saved" | "saving" | "error">(
     "loading"
   );
+  const [cityOverlayHost, setCityOverlayHost] = useState<HTMLElement | null>(null);
   const transitionTimerRef = useRef<number | null>(null);
   const ready = loaded.briefing || loaded.analysis;
+  const cityInteractions = useLiveCityInteractionQueue();
+
+  useEffect(() => {
+    setCityOverlayHost(document.body);
+  }, []);
+
+  const handleLiveComment = useCallback((comment: HostLiveComment) => {
+    cityInteractions.submitComment(comment);
+  }, [cityInteractions]);
+
+  const handleRadarChat = useCallback((text: string) => {
+    const id = createLiveCityEventId("radar-chat");
+    const handledAsCity = cityInteractions.submitComment({
+      type: "aituber:live-comment",
+      version: 1,
+      id,
+      text,
+      viewerId: "radar-operator",
+      viewerName: "雷达操作台",
+      platform: "radar-chat",
+      receivedAt: Date.now()
+    });
+    // An @city command is a visual interaction only. Keep it out of the
+    // avatar dialogue queue so the map/card is the complete response.
+    if (handledAsCity) return "city";
+    setChatRequest({ id, text });
+    return "host";
+  }, [cityInteractions]);
+
+  const handleCityAttentionChange = useCallback((attention: CityAttention | null) => {
+    setCityAttention(attention);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -121,17 +161,36 @@ export function LiveDirector() {
         <TyphoonMap
           view="live"
           liveDeck={activeScene}
+          cityAttention={cityAttention}
+          onCityAttentionAnchor={setCityAttentionAnchor}
           onSceneReady={() => markLoaded(activeScene)}
         />
       </section>
 
-      <DigitalHostWindow scene={activeScene} visible={hostVisible} chatRequest={chatRequest} />
+      <DigitalHostWindow
+        scene={activeScene}
+        visible={hostVisible}
+        chatRequest={chatRequest}
+        onLiveComment={handleLiveComment}
+      />
+      {/* City reports are broadcast overlays, outside the map scene and side
+          rail stacking contexts. */}
+      {cityOverlayHost ? createPortal(
+        <div className="live-city-overlay">
+          <LiveCityInteraction
+            interaction={cityInteractions.active}
+            anchor={cityAttentionAnchor}
+            onAttentionChange={handleCityAttentionChange}
+            onComplete={cityInteractions.completeActive}
+          />
+          <LiveCityTargetLock attention={cityAttention} anchor={cityAttentionAnchor} />
+        </div>,
+        cityOverlayHost
+      ) : null}
       <LiveOperatorControls
         hostVisible={hostVisible}
         onToggleHost={() => setHostVisible((current) => !current)}
-        onSendChat={(text) =>
-          setChatRequest({ id: `${Date.now()}-${crypto.randomUUID()}`, text })
-        }
+        onSendChat={handleRadarChat}
         settings={controlSettings}
         settingsStatus={settingsStatus}
         onSaveSettings={saveControlSettings}

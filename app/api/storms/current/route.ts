@@ -16,6 +16,9 @@ export async function GET() {
         status: snapshot.status,
         count: snapshot.storms.length,
         storms: snapshot.storms,
+        // A storm leaving the upstream active list is a meaningful state
+        // transition. Expose it so downstream clients distinguish ended from absent data.
+        lastTrackedStorm: snapshot.lastTrackedStorm,
         warnings: snapshot.warnings
       },
       {
@@ -31,6 +34,7 @@ export async function GET() {
         updatedAt: new Date().toISOString(),
         count: 0,
         storms: [],
+        lastTrackedStorm: null,
         error: error instanceof Error ? error.message : "Typhoon API temporarily unavailable."
       },
       {

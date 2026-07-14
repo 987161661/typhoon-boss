@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { futureForecastPoints } from "../lib/bossEngine";
 import { parseJtwcStructureBulletin } from "../lib/bossEngine/structureIntelligence";
 import type { Storm } from "../lib/types";
 
@@ -18,6 +19,15 @@ test("JTWC bulletin must match the storm identity", () => {
   assert.throws(() => parseJtwcStructureBulletin("WDPN31 PGTW 120900 PROGNOSTIC REASONING FOR TYPHOON 10W (MAYSAK)", storm, "https://example.invalid"), /identity did not match/);
   const parsed = parseJtwcStructureBulletin("WDPN31 PGTW 120900 PROGNOSTIC REASONING FOR TYPHOON 09W (BAVI) WITH A STABLE EYE", storm, "https://example.invalid");
   assert.equal(parsed.source, "jtwc");
+});
+
+test("past forecast positions never support a future province-impact broadcast", () => {
+  const points = [
+    { time: "2026-07-14T06:00:00.000Z", lon: 120, lat: 30, wind: 18, pressure: 992 },
+    { time: "2026-07-14T12:00:00.000Z", lon: 122, lat: 32, wind: 18, pressure: 992 }
+  ];
+  const eligible = futureForecastPoints(points, Date.parse("2026-07-14T07:00:00.000Z"));
+  assert.deepEqual(eligible, [points[1]]);
 });
 
 test("JTWC final warning takes precedence over eyewall interpretation", () => {

@@ -32,6 +32,7 @@ export async function GET(request: NextRequest) {
         updatedAt: new Date().toISOString(),
         activeStormId: null,
         storms: [],
+        lastTrackedStorm: null,
         bosses: [],
         environment: null,
         warnings: [error instanceof Error ? error.message : "Radar snapshot temporarily unavailable."]

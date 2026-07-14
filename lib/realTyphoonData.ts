@@ -148,6 +148,16 @@ let currentStormsCache: { expiresAt: number; storms: Storm[] } | null = null;
 let currentStormsInFlight: Promise<Storm[]> | null = null;
 let lastTrackWarning: string | null = null;
 let lastTrackFetchedAt: string | null = null;
+let lastTrackedStorm: LastTrackedStorm | null | undefined;
+
+export interface LastTrackedStorm {
+  id: string;
+  nameZh: string;
+  nameEn: string;
+  lastObservedAt: string;
+  status: "active" | "exited-live-track";
+  exitedLiveTrackAt: string | null;
+}
 
 export interface TrackSnapshot {
   source: string;
@@ -155,18 +165,23 @@ export interface TrackSnapshot {
   fetchedAt: string;
   status: "fresh" | "stale" | "unavailable";
   storms: Storm[];
+  lastTrackedStorm: LastTrackedStorm | null;
   warnings: string[];
 }
 
 export async function getTrackSnapshot(): Promise<TrackSnapshot> {
   try {
     const storms = await getCurrentStorms();
+    const fetchedAt = lastTrackFetchedAt ?? new Date().toISOString();
+    const lifecycle = await reconcileLastTrackedStorm(storms, fetchedAt);
+    void persistTrackSnapshot(storms, fetchedAt, lifecycle);
     return {
       source: DATA_SOURCE,
       observedAt: storms[0]?.updatedAt ?? null,
-      fetchedAt: lastTrackFetchedAt ?? new Date().toISOString(),
+      fetchedAt,
       status: lastTrackWarning ? "stale" : "fresh",
       storms,
+      lastTrackedStorm: lifecycle,
       warnings: lastTrackWarning ? [lastTrackWarning] : []
     };
   } catch (error) {
@@ -176,6 +191,7 @@ export async function getTrackSnapshot(): Promise<TrackSnapshot> {
       fetchedAt: new Date().toISOString(),
       status: "unavailable",
       storms: [],
+      lastTrackedStorm: lastTrackedStorm ?? null,
       warnings: [error instanceof Error ? error.message : "台风路径源暂时不可用。"]
     };
   }
@@ -198,7 +214,6 @@ export async function getCurrentStorms(): Promise<Storm[]> {
         expiresAt: Date.now() + CURRENT_STORMS_CACHE_TTL_MS,
         storms
       };
-      void persistTrackSnapshot(storms, lastTrackFetchedAt);
       currentStormsInFlight = null;
       return storms;
     },
@@ -570,28 +585,65 @@ function convertTrackPoint(point: ZjPoint | ZjForecastPoint): TrackPoint {
   };
 }
 
-async function persistTrackSnapshot(storms: Storm[], fetchedAt: string) {
+async function reconcileLastTrackedStorm(storms: Storm[], fetchedAt: string): Promise<LastTrackedStorm | null> {
+  if (lastTrackedStorm === undefined) {
+    lastTrackedStorm = (await readLastTrackSnapshot())?.lastTrackedStorm ?? null;
+  }
+  const activeStorm = storms[0] ?? null;
+  if (activeStorm) {
+    lastTrackedStorm = {
+      id: activeStorm.id,
+      nameZh: activeStorm.nameZh,
+      nameEn: activeStorm.nameEn,
+      lastObservedAt: activeStorm.updatedAt,
+      status: "active",
+      exitedLiveTrackAt: null
+    };
+  } else if (lastTrackedStorm?.status === "active") {
+    // This is a feed-state transition, not an assertion that an agency has
+    // issued a formal termination bulletin.
+    lastTrackedStorm = { ...lastTrackedStorm, status: "exited-live-track", exitedLiveTrackAt: fetchedAt };
+  }
+  return lastTrackedStorm;
+}
+
+async function persistTrackSnapshot(storms: Storm[], fetchedAt: string, lifecycle: LastTrackedStorm | null) {
   try {
     await mkdir(path.dirname(TRACK_SNAPSHOT_PATH), { recursive: true });
     const temporary = `${TRACK_SNAPSHOT_PATH}.${process.pid}.tmp`;
-    await writeFile(temporary, JSON.stringify({ version: 1, fetchedAt, storms }), "utf8");
+    await writeFile(temporary, JSON.stringify({ version: 2, fetchedAt, storms, lastTrackedStorm: lifecycle }), "utf8");
     await rename(temporary, TRACK_SNAPSHOT_PATH);
   } catch (error) {
     console.warn("[track-snapshot] persistence failed", error);
   }
 }
 
-async function readLastTrackSnapshot(): Promise<{ fetchedAt: string; storms: Storm[] } | null> {
+async function readLastTrackSnapshot(): Promise<{ fetchedAt: string; storms: Storm[]; lastTrackedStorm: LastTrackedStorm | null } | null> {
   try {
     const settings = await readControlConsoleSettings();
-    const payload = JSON.parse(await readFile(TRACK_SNAPSHOT_PATH, "utf8")) as { version?: number; fetchedAt?: string; storms?: Storm[] };
+    const payload = JSON.parse(await readFile(TRACK_SNAPSHOT_PATH, "utf8")) as { version?: number; fetchedAt?: string; storms?: Storm[]; lastTrackedStorm?: unknown };
     const fetchedAt = Date.parse(payload.fetchedAt ?? "");
-    if (payload.version !== 1 || !Array.isArray(payload.storms) || !Number.isFinite(fetchedAt)) return null;
+    if ((payload.version !== 1 && payload.version !== 2) || !Array.isArray(payload.storms) || !Number.isFinite(fetchedAt)) return null;
     if (Date.now() - fetchedAt > settings.reliability.retainLastGoodDataHours * 60 * 60 * 1000) return null;
-    return { fetchedAt: payload.fetchedAt as string, storms: payload.storms };
+    return { fetchedAt: payload.fetchedAt as string, storms: payload.storms, lastTrackedStorm: normalizeLastTrackedStorm(payload.lastTrackedStorm) };
   } catch {
     return null;
   }
+}
+
+function normalizeLastTrackedStorm(value: unknown): LastTrackedStorm | null {
+  if (!value || typeof value !== "object") return null;
+  const item = value as Partial<LastTrackedStorm>;
+  if (!item.id || !item.nameZh || !item.nameEn || !item.lastObservedAt) return null;
+  if (item.status !== "active" && item.status !== "exited-live-track") return null;
+  return {
+    id: item.id,
+    nameZh: item.nameZh,
+    nameEn: item.nameEn,
+    lastObservedAt: item.lastObservedAt,
+    status: item.status,
+    exitedLiveTrackAt: item.exitedLiveTrackAt ?? null
+  };
 }
 
 function convertForecastScenarios(point: ZjPoint): ForecastScenario[] {

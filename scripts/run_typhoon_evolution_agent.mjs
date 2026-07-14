@@ -65,7 +65,15 @@ async function main() {
     collectTyphoonFacts(now),
     collectCityWind(previousState.cityWind ?? null, now)
   ]);
+  const trackSnapshot = await readJson(path.join(runtimeDir, "track-snapshot.json"), null);
   const changeSet = buildChangeSet(previousState.snapshotByStormId, facts.storms);
+  const lifecycleEvents = reconcileLifecycleEvents(
+    previousState.lifecycleEvents,
+    previousState.snapshotByStormId,
+    facts.storms,
+    trackSnapshot?.lastTrackedStorm,
+    now,
+  );
   let analysis;
   let analysisMode = "MiniMax M3 智能汇总";
   try {
@@ -76,17 +84,18 @@ async function main() {
   }
   const history = buildHistory(previousState.history, facts, changeSet, analysis, now);
   const nextState = {
-    version: 2,
+    version: 3,
     updatedAt: now.toISOString(),
     snapshotByStormId: Object.fromEntries(facts.storms.map((storm) => [storm.id, compactSnapshot(storm)])),
     cityWind,
     history,
+    lifecycleEvents,
     lastAnalysis: analysis
   };
 
   await mkdir(runtimeDir, { recursive: true });
   await writeAtomicJson(statePath, nextState);
-  await writeAtomicText(reportPath, renderReport(facts, changeSet, cityWind, analysis, analysisMode, history, now));
+  await writeAtomicText(reportPath, renderReport(facts, changeSet, cityWind, analysis, analysisMode, history, lifecycleEvents, now));
   console.log(`Updated ${path.basename(reportPath)} with ${facts.storms.length} active storm(s) and ${cityWind.cities.length} city wind rows.`);
 }
 
@@ -272,6 +281,41 @@ function buildChangeSet(previousById, storms) {
   });
 }
 
+// Lifecycle facts are deterministic feed transitions, not LLM conclusions.
+// Keeping a small ledger makes an item disappearing from the active list
+// answerable as "ended / no longer active" instead of "data unavailable".
+function reconcileLifecycleEvents(previousEvents, previousById, storms, snapshotHint, now) {
+  const retained = Array.isArray(previousEvents) ? previousEvents : [];
+  const activeIds = new Set(storms.map((storm) => storm.id));
+  const candidates = Object.values(previousById ?? {})
+    .filter((storm) => storm?.id && !activeIds.has(storm.id))
+    .map((storm) => ({
+      id: storm.id,
+      nameZh: storm.nameZh,
+      nameEn: storm.nameEn,
+      lastObservedAt: storm.latest?.observedAt ?? null,
+      exitedLiveTrackAt: now.toISOString(),
+      status: "exited-live-track",
+      source: "upstream-active-list",
+    }));
+  if (snapshotHint?.status === "exited-live-track" && snapshotHint.id && !activeIds.has(snapshotHint.id)) {
+    candidates.push({
+      id: snapshotHint.id,
+      nameZh: snapshotHint.nameZh,
+      nameEn: snapshotHint.nameEn,
+      lastObservedAt: snapshotHint.lastObservedAt ?? null,
+      exitedLiveTrackAt: snapshotHint.exitedLiveTrackAt ?? now.toISOString(),
+      status: "exited-live-track",
+      source: "upstream-active-list",
+    });
+  }
+  const byId = new Map(retained.map((event) => [event.id, event]));
+  for (const event of candidates) byId.set(event.id, event);
+  return [...byId.values()]
+    .sort((a, b) => Date.parse(b.exitedLiveTrackAt || 0) - Date.parse(a.exitedLiveTrackAt || 0))
+    .slice(0, 24);
+}
+
 function buildDeterministicAnalysis(facts, changeSet) {
   if (facts.storms.length === 0) {
     return "当前公开接口未返回活动台风。本轮仅记录数据状态，不生成路径或强度变化判断。";
@@ -383,7 +427,7 @@ async function invokeMiniMax(apiKey, prompt) {
   return analysis || null;
 }
 
-function renderReport(facts, changeSet, cityWind, analysis, analysisMode, history, now) {
+function renderReport(facts, changeSet, cityWind, analysis, analysisMode, history, lifecycleEvents, now) {
   const sourceRows = facts.storms.length
     ? facts.storms.map((storm) => {
         const point = storm.latest;
@@ -391,6 +435,10 @@ function renderReport(facts, changeSet, cityWind, analysis, analysisMode, histor
       }).join("\n")
     : "| 无活动台风 | — | — | — | — |";
   const historyRows = history.map((entry) => `| ${entry.ranAt} | ${entry.stormCount} | ${entry.sourceTimes || "—"} | ${entry.changeNote} |`).join("\n");
+  const lifecycleRows = lifecycleEvents.length
+    ? lifecycleEvents.map((event) => `- ${event.nameZh} (${event.id}) \u5df2\u4ece\u4e0a\u6e38\u6d3b\u52a8\u53f0\u98ce\u5217\u8868\u9000\u51fa\uff1b\u6700\u540e\u53ef\u6838\u5b9e\u5b9e\u51b5\uff1a${event.lastObservedAt || "--"}\uff1b\u9000\u51fa\u65f6\u95f4\uff1a${event.exitedLiveTrackAt || "--"}\u3002`)
+        .join("\n")
+    : "- \u672c\u8f6e\u65e0\u65b0\u7684\u53f0\u98ce\u9000\u51fa\u6d3b\u52a8\u5217\u8868\u4e8b\u4ef6\u3002";
   const cityRows = cityWind.cities.map((city) => {
     const speed = Number.isFinite(city.windMps) ? `${city.windMps.toFixed(1)} m/s` : "—";
     const force = Number.isFinite(city.windForceLevel) ? `${city.windForceLevel} 级` : "—";
@@ -413,6 +461,10 @@ function renderReport(facts, changeSet, cityWind, analysis, analysisMode, histor
 ## 最新演进判断
 
 ${analysis}
+
+## \u53f0\u98ce\u751f\u547d\u5468\u671f\u8f6c\u573a\u4e8b\u5b9e
+
+${lifecycleRows}
 
 ## 本轮公开实况
 

@@ -8,6 +8,7 @@ import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent
 } from "react";
+import { isHostLiveComment, type HostLiveComment } from "@/lib/liveCityInteraction";
 
 type DirectorScene = "briefing" | "analysis";
 
@@ -17,6 +18,8 @@ export type HostChatRequest = {
   viewerId?: string;
   viewerName?: string;
 };
+
+export type { HostLiveComment } from "@/lib/liveCityInteraction";
 
 type HostHealth = {
   queueDepth?: number;
@@ -76,11 +79,13 @@ function isHostReady(health: HostHealth | null) {
 export function DigitalHostWindow({
   scene,
   visible = true,
-  chatRequest
+  chatRequest,
+  onLiveComment
 }: {
   scene: DirectorScene;
   visible?: boolean;
   chatRequest?: HostChatRequest | null;
+  onLiveComment?: (comment: HostLiveComment) => void;
 }) {
   const hostWindowRef = useRef<HTMLElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -95,6 +100,7 @@ export function DigitalHostWindow({
     attempts: number;
     acknowledged: boolean;
   } | null>(null);
+  const onLiveCommentRef = useRef(onLiveComment);
   const [frameLoaded, setFrameLoaded] = useState(false);
   const frameLoadedRef = useRef(false);
   const [hostFrameReady, setHostFrameReady] = useState(false);
@@ -116,6 +122,10 @@ export function DigitalHostWindow({
   useEffect(() => {
     sceneRef.current = scene;
   }, [scene]);
+
+  useEffect(() => {
+    onLiveCommentRef.current = onLiveComment;
+  }, [onLiveComment]);
 
   useEffect(() => {
     frameLoadedRef.current = frameLoaded;
@@ -184,6 +194,10 @@ export function DigitalHostWindow({
   useEffect(() => {
     const handleHostMessage = (event: MessageEvent<unknown>) => {
       if (event.origin !== hostOrigin || event.source !== iframeRef.current?.contentWindow) return;
+      if (isHostLiveComment(event.data)) {
+        onLiveCommentRef.current?.(event.data);
+        return;
+      }
       const data = event.data as { type?: unknown; requestId?: unknown };
       if (data?.type === "linglan:ready") {
         setHostFrameReady(true);

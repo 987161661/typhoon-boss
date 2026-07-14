@@ -91,7 +91,7 @@ export interface BossProvinceCurrentConditions {
 
 export interface BossProvinceBriefing {
   province: string;
-  headlineLabel: "预计登陆" | "预计最接近" | "影响判断";
+  headlineLabel: "路径入省推演" | "预计最接近" | "影响判断" | "中心位置";
   impactStatus: "landfall" | "direct" | "watch" | "unaffected" | "unavailable";
   impactLabel: string;
   estimatedAt: string | null;
@@ -106,6 +106,7 @@ export interface BossProvinceBriefing {
 
 export interface BossLandfallScenario {
   province: string;
+  pathRelation: "current-position" | "future-entry" | "nearby-corridor";
   relativeWeight: number;
   estimatedAt: string | null;
   windSpeedMs: number | null;
