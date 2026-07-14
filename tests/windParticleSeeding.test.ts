@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createHierarchicalWindSeeds,
   createStableWindSeedPlan,
   createStableWindSeeds,
+  planWindParticlePoolReconciliation,
   type WindSeedBounds
 } from "../lib/windParticleSeeding";
 
@@ -46,4 +48,47 @@ test("zooming into a smaller geographic area does not manufacture extra seed den
       .map((seed) => seed.key)
   );
   assert.ok(closeSeeds.every((seed) => wideKeysInsideCloseView.has(seed.key)));
+});
+
+test("hierarchical seed levels hand off continuously across a resolution boundary", () => {
+  const beforeBounds: WindSeedBounds = { west: 78, east: 144, south: 8, north: 55 };
+  let before = createHierarchicalWindSeeds(beforeBounds, 1_200);
+  let after = before;
+
+  for (let step = 1; step <= 120; step += 1) {
+    const inset = step * 0.12;
+    const candidateBounds = {
+      west: beforeBounds.west + inset,
+      east: beforeBounds.east - inset,
+      south: beforeBounds.south + inset * 0.4,
+      north: beforeBounds.north - inset * 0.4
+    };
+    const candidate = createHierarchicalWindSeeds(candidateBounds, 1_200);
+    if (candidate.plan.lowerResolution !== before.plan.lowerResolution) {
+      after = candidate;
+      break;
+    }
+    before = candidate;
+  }
+
+  assert.notEqual(before.plan.lowerResolution, after.plan.lowerResolution);
+  const beforeKeys = new Set(before.seeds.map((seed) => seed.key));
+  const sharedCount = after.seeds.filter((seed) => beforeKeys.has(seed.key)).length;
+  assert.ok(sharedCount > 800, `expected a mostly continuous handoff, got ${sharedCount} shared seeds`);
+});
+
+test("particle pool reconciliation preserves in-bounds identities and fills only deficits", () => {
+  const bounds: WindSeedBounds = { west: 100, east: 130, south: 15, north: 40 };
+  const seeds = createHierarchicalWindSeeds(bounds, 6).seeds;
+  const existing = [
+    { id: "kept", seedKey: "old:kept", lon: 112, lat: 24, state: "active" as const },
+    { id: "reactivated", seedKey: "old:reactivated", lon: 118, lat: 29, state: "retiring" as const },
+    { id: "outside", seedKey: "old:outside", lon: 80, lat: 29, state: "active" as const }
+  ];
+  const result = planWindParticlePoolReconciliation(existing, seeds, bounds, 6, 8);
+
+  assert.ok(result.keepIds.includes("kept"));
+  assert.ok(result.reactivateIds.includes("reactivated"));
+  assert.ok(result.retireIds.includes("outside"));
+  assert.equal(result.spawnSeeds.length, 4);
 });

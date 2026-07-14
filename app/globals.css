@@ -146,6 +146,7 @@ a:focus-visible {
 .regional-observation-canvas,
 .wind-color-canvas,
 .wind-particle-canvas,
+.wind-particle-interaction-canvas,
 .forecast-route-canvas {
   position: absolute;
   inset: 0;
@@ -215,7 +216,8 @@ a:focus-visible {
   filter: saturate(1.2);
 }
 
-.wind-particle-canvas {
+.wind-particle-canvas,
+.wind-particle-interaction-canvas {
   z-index: 5;
   inset: -20%;
   width: 140%;
@@ -224,6 +226,18 @@ a:focus-visible {
   opacity: 0.98;
   filter: saturate(1.28) contrast(1.12) drop-shadow(0 0 1px rgba(120, 255, 194, 0.52));
   will-change: contents;
+}
+
+.wind-particle-canvas {
+  transition: opacity 120ms linear;
+}
+
+.wind-particle-interaction-canvas {
+  z-index: 6;
+  opacity: 0;
+  visibility: hidden;
+  will-change: transform, opacity;
+  transition: opacity 120ms linear;
 }
 
 .wind-field-time-badge {
@@ -3603,7 +3617,8 @@ a:focus-visible {
 }
 
 .map-stage[data-camera-moving="true"] .storm-map-marker,
-.map-stage[data-camera-moving="true"] .wind-particle-canvas {
+.map-stage[data-camera-moving="true"] .wind-particle-canvas,
+.map-stage[data-camera-moving="true"] .wind-particle-interaction-canvas {
   filter: none;
 }
 

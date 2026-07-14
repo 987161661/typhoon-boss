@@ -16,6 +16,34 @@ export interface StableWindSeedPlan {
   slotsPerCell: number;
 }
 
+export interface HierarchicalWindSeedPlan {
+  lowerResolution: number;
+  upperResolution: number;
+  blend: number;
+  lowerCount: number;
+  upperCount: number;
+}
+
+export interface HierarchicalWindSeeds {
+  plan: HierarchicalWindSeedPlan;
+  seeds: StableWindSeed[];
+}
+
+export interface WindPoolSeedParticle {
+  id: string;
+  seedKey?: string;
+  lon: number;
+  lat: number;
+  state: "active" | "retiring";
+}
+
+export interface WindParticlePoolReconciliation {
+  keepIds: string[];
+  reactivateIds: string[];
+  retireIds: string[];
+  spawnSeeds: StableWindSeed[];
+}
+
 const MAX_MERCATOR_LATITUDE = 85.051129;
 
 export function createStableWindSeedPlan(bounds: WindSeedBounds, targetCount: number): StableWindSeedPlan {
@@ -66,6 +94,65 @@ export function createStableWindSeeds(
   return candidates.slice(0, maximumCount).map(({ key, lon, lat }) => ({ key, lon, lat }));
 }
 
+export function createHierarchicalWindSeeds(
+  bounds: WindSeedBounds,
+  targetCount: number
+): HierarchicalWindSeeds {
+  const normalized = normalizedBounds(bounds);
+  const safeTarget = Math.max(1, Math.round(targetCount));
+  const area = Math.max(1e-8, (normalized.east - normalized.west) * (normalized.south - normalized.north));
+  const idealResolution = Math.sqrt(safeTarget / area);
+  const lowerResolution = clampPowerOfTwoFloor(idealResolution, 16, 4096);
+  const upperResolution = Math.min(4096, lowerResolution * 2);
+  const blend = upperResolution === lowerResolution
+    ? 0
+    : clamp(Math.log2(idealResolution / lowerResolution), 0, 1);
+  const lowerCount = Math.round(safeTarget * (1 - blend));
+  const upperCount = safeTarget - lowerCount;
+  const lowerPlan = seedPlanAtResolution(normalized, lowerResolution, safeTarget);
+  const upperPlan = seedPlanAtResolution(normalized, upperResolution, safeTarget);
+  const lowerSeeds = createStableWindSeeds(bounds, lowerPlan, lowerCount);
+  const lowerKeys = new Set(lowerSeeds.map((seed) => seed.key));
+  const upperSeeds = createStableWindSeeds(bounds, upperPlan, upperCount)
+    .filter((seed) => !lowerKeys.has(seed.key));
+
+  return {
+    plan: { lowerResolution, upperResolution, blend, lowerCount, upperCount },
+    seeds: [...lowerSeeds, ...upperSeeds]
+  };
+}
+
+export function planWindParticlePoolReconciliation(
+  existing: readonly WindPoolSeedParticle[],
+  seeds: readonly StableWindSeed[],
+  bounds: WindSeedBounds,
+  targetCount: number,
+  poolCapacity: number
+): WindParticlePoolReconciliation {
+  const safeTarget = Math.max(0, Math.round(targetCount));
+  const safeCapacity = Math.max(safeTarget, Math.round(poolCapacity));
+  const inside = existing
+    .filter((particle) => containsSeedPoint(bounds, particle.lon, particle.lat))
+    .sort((left, right) => stableWindHash(left.id) - stableWindHash(right.id) || left.id.localeCompare(right.id));
+  const desired = inside.slice(0, safeTarget);
+  const desiredIds = new Set(desired.map((particle) => particle.id));
+  const keepIds = desired.filter((particle) => particle.state === "active").map((particle) => particle.id);
+  const reactivateIds = desired.filter((particle) => particle.state === "retiring").map((particle) => particle.id);
+  const retireIds = existing.filter((particle) => !desiredIds.has(particle.id) && particle.state !== "retiring").map((particle) => particle.id);
+  const existingSeedKeys = new Set(existing.map((particle) => particle.seedKey).filter((key): key is string => Boolean(key)));
+  const availableSlots = Math.max(0, safeCapacity - existing.length);
+  const missing = Math.max(0, safeTarget - desired.length);
+  const spawnSeeds = seeds
+    .filter((seed) => !existingSeedKeys.has(seed.key))
+    .slice(0, Math.min(missing, availableSlots));
+
+  return { keepIds, reactivateIds, retireIds, spawnSeeds };
+}
+
+export function stableWindHash(value: string) {
+  return hash32(value);
+}
+
 function normalizedBounds(bounds: WindSeedBounds) {
   const west = clamp(Math.min(bounds.west, bounds.east), -180, 180);
   const east = clamp(Math.max(bounds.west, bounds.east), -180, 180);
@@ -85,6 +172,25 @@ function countIntersectingCells(bounds: ReturnType<typeof normalizedBounds>, res
   return columns * rows;
 }
 
+function seedPlanAtResolution(
+  bounds: ReturnType<typeof normalizedBounds>,
+  resolution: number,
+  targetCount: number
+): StableWindSeedPlan {
+  const cellCount = Math.max(1, countIntersectingCells(bounds, resolution));
+  return {
+    resolution,
+    slotsPerCell: Math.max(1, Math.ceil(Math.max(1, targetCount) / cellCount))
+  };
+}
+
+function containsSeedPoint(bounds: WindSeedBounds, lon: number, lat: number) {
+  return lon >= Math.min(bounds.west, bounds.east) &&
+    lon <= Math.max(bounds.west, bounds.east) &&
+    lat >= Math.min(bounds.south, bounds.north) &&
+    lat <= Math.max(bounds.south, bounds.north);
+}
+
 function latitudeToMercatorY(latitude: number) {
   const radians = latitude * Math.PI / 180;
   return (1 - Math.log(Math.tan(radians) + 1 / Math.cos(radians)) / Math.PI) / 2;
@@ -96,6 +202,11 @@ function mercatorYToLatitude(y: number) {
 
 function clampPowerOfTwo(value: number, minimum: number, maximum: number) {
   const exponent = Math.round(Math.log2(Math.max(1, value)));
+  return clamp(2 ** exponent, minimum, maximum);
+}
+
+function clampPowerOfTwoFloor(value: number, minimum: number, maximum: number) {
+  const exponent = Math.floor(Math.log2(Math.max(1, value)));
   return clamp(2 ** exponent, minimum, maximum);
 }
 

@@ -26,11 +26,12 @@ import {
   type CompositeWindVectorIndex
 } from "@/lib/windVectorGrid";
 import {
-  createStableWindSeedPlan,
-  createStableWindSeeds,
+  createHierarchicalWindSeeds,
+  planWindParticlePoolReconciliation,
+  stableWindHash,
   type StableWindSeed,
-  type StableWindSeedPlan
 } from "@/lib/windParticleSeeding";
+import { computeWindFlowPolicy, trimWindTrailToPixelLength, type WindFlowPolicy } from "@/lib/windFlowPolicy";
 import type { BossProfile } from "@/lib/bossEngine/types";
 import { useRadarSnapshot } from "./useRadarSnapshot";
 import type {
@@ -278,6 +279,7 @@ export function TyphoonMap({
   const ecmwfTrackCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const observationCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const windCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const windInteractionCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const forecastCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const markerRef = useRef<maplibregl.Marker | null>(null);
   const gfsCenterMarkerRefs = useRef<Map<string, maplibregl.Marker>>(new Map());
@@ -717,6 +719,7 @@ export function TyphoonMap({
     return startWindFieldRenderer(
       map,
       canvas,
+      windInteractionCanvasRef.current,
       latestWindFieldRef,
       latestCoreWindFieldRef,
       cycloneCoreRef,
@@ -744,6 +747,7 @@ export function TyphoonMap({
         {!mapFailed && observationsVisible ? <canvas className="regional-observation-canvas" ref={observationCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed && environmentLayers.wind ? <canvas className="wind-color-canvas" ref={windColorCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed && environmentLayers.wind ? <canvas className="wind-particle-canvas" ref={windCanvasRef} aria-hidden="true" /> : null}
+        {!mapFailed && environmentLayers.wind ? <canvas className="wind-particle-interaction-canvas" ref={windInteractionCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed && storm ? <canvas className="forecast-route-canvas" ref={forecastCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed ? <WindFieldTimeBadge windField={stormWindField} currentStorm={storm} /> : null}
         {!mapFailed ? (
@@ -3001,6 +3005,7 @@ function projectedCanvasWindBounds(
 function startWindFieldRenderer(
   map: MapLibreMap,
   canvas: HTMLCanvasElement,
+  interactionCanvas: HTMLCanvasElement | null,
   windFieldRef: MutableRefObject<WindFieldPayload | null>,
   detailWindFieldRef: MutableRefObject<WindFieldPayload | null>,
   cycloneCoreRef: MutableRefObject<CycloneCoreAnalysis | null>,
@@ -3010,12 +3015,16 @@ function startWindFieldRenderer(
 ) {
   const context = canvas.getContext("2d", { alpha: true, desynchronized: true });
   if (!context) return undefined;
+  const interactionContext = interactionCanvas?.getContext("2d", { alpha: true, desynchronized: true }) ?? null;
 
   const seedMode: WindParticleSeedMode = new URLSearchParams(window.location.search).get("windSeed") === "viewport"
     ? "viewport"
     : "stable";
 
   let frame = 0;
+  let projectionFrame = 0;
+  let moveEndTimer = 0;
+  let interactionHideTimer = 0;
   let lastFrameTime = 0;
   let frameTimingTotal = 0;
   let frameTimingMax = 0;
@@ -3023,6 +3032,8 @@ function startWindFieldRenderer(
   let renderTimingTotal = 0;
   let renderTimingMax = 0;
   let renderTimingSamples = 0;
+  let underBudgetFrameCount = 0;
+  const recentRenderTimes: number[] = [];
   let adaptiveQuality = livePerformanceMode ? 0.78 : 0.62;
   let canvasWidth = 1;
   let canvasHeight = 1;
@@ -3031,7 +3042,9 @@ function startWindFieldRenderer(
   let fieldHotSwapCount = 0;
   let cameraMoving = false;
   let cameraAnchors: CanvasCameraAnchors | null = null;
-  let pendingCameraRedraw = false;
+  let handoffReady = false;
+  let projectionGeneration = 0;
+  let particleSequence = 0;
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   // Let the browser present at display cadence. The adaptive particle budget
   // below controls work per frame; a 30 ms gate permanently capped even a
@@ -3045,36 +3058,81 @@ function startWindFieldRenderer(
   let points: WindFieldPoint[] = [];
   let vectorIndex = createCompositeWindVectorIndex(points);
   let particles: WindParticle[] = [];
-  let stableSeedPlan: StableWindSeedPlan | null = null;
-  const trailPointLimit = map.getCanvas().clientWidth <= 760 ? 72 : 96;
+  let seedCandidates: StableWindSeed[] = [];
+  let policy: WindFlowPolicy;
+  const flowSession = ++windFlowRendererSequence;
+  const fadeDurationSeconds = 0.18;
 
-  const resetParticle = (particle: WindParticle, currentBounds: WindParticleBounds, projectionRevision: number) => {
-    if (seedMode === "stable" && particle.seedKey && particle.seedLon !== undefined && particle.seedLat !== undefined) {
-      return stableWindParticle(
-        { key: particle.seedKey, lon: particle.seedLon, lat: particle.seedLat },
-        projectionRevision
-      );
+  const warmStartParticle = (particle: WindParticle, projectImmediately: boolean) => {
+    if (points.length === 0) return particle;
+    const sample = { u: 0, v: 0 };
+    if (!sampleCompositeWindVector(vectorIndex, particle.lon, particle.lat, sample)) return particle;
+    const initialSpeed = Math.hypot(sample.u, sample.v);
+    if (initialSpeed < 0.6) return particle;
+    const metresPerPixel = 156_543.03392 * Math.max(0.2, Math.cos(degToRad(particle.lat))) / 2 ** map.getZoom();
+    const phase = 0.78 + (stableWindHash(`${particle.id}:warm`) / 0x1_0000_0000) * 0.32;
+    const strengthScale = 0.35 + smoothStep(1.1, 5, initialSpeed) * 0.65;
+    const targetTravelKm = Math.max(8, (policy.targetTrailPx * metresPerPixel * phase * strengthScale) / 1000);
+    const integrationSteps = 32;
+    const stepDistanceMetres = (targetTravelKm * 1000) / integrationSteps;
+    const trail: Array<{ lon: number; lat: number }> = [{ lon: particle.lon, lat: particle.lat }];
+    let travelledKm = 0;
+    for (let step = 0; step < integrationSteps; step += 1) {
+      if (!sampleCompositeWindVector(vectorIndex, particle.lon, particle.lat, sample)) break;
+      const speed = Math.hypot(sample.u, sample.v);
+      if (speed < 0.6) break;
+      const stepSeconds = stepDistanceMetres / speed;
+      const latitudeScale = 111_320;
+      const longitudeScale = latitudeScale * Math.max(0.2, Math.cos(degToRad(particle.lat)));
+      particle.lon += (sample.u * stepSeconds) / longitudeScale;
+      particle.lat += (sample.v * stepSeconds) / latitudeScale;
+      particle.u = sample.u;
+      particle.v = sample.v;
+      travelledKm += stepDistanceMetres / 1000;
+      trail.push({ lon: particle.lon, lat: particle.lat });
     }
-    return randomWindParticle(currentBounds, projectionRevision);
+    particle.trail = trail;
+    particle.travelKm = travelledKm;
+    if (projectImmediately) {
+      particle.trailScreen = trail.map((point) => map.project([point.lon, point.lat]));
+      particle.headScreen = map.project([particle.lon, particle.lat]);
+      particle.projectionRevision = cameraRevision;
+    } else {
+      particle.trailScreen = [];
+      particle.headScreen = null;
+      particle.projectionRevision = 0;
+    }
+    return particle;
   };
 
-  const seedStableParticles = (
-    currentBounds: WindParticleBounds,
-    particleBudget: number,
-    projectionRevision: number,
-    existingParticles: WindParticle[] = []
-  ) => {
-    stableSeedPlan = createStableWindSeedPlan(currentBounds, particleBudget);
-    const seeds = createStableWindSeeds(currentBounds, stableSeedPlan, particleBudget);
-    const existingBySeed = new Map(
-      existingParticles
-        .filter((particle): particle is WindParticle & { seedKey: string } => Boolean(particle.seedKey))
-        .map((particle) => [particle.seedKey, particle])
-    );
-    particles = seeds.map((seed) => existingBySeed.get(seed.key) ?? stableWindParticle(seed, projectionRevision));
-    canvas.dataset.particleCount = String(particles.length);
-    canvas.dataset.stableSeedResolution = String(stableSeedPlan.resolution);
-    canvas.dataset.stableSeedSlots = String(stableSeedPlan.slotsPerCell);
+  const resetParticle = (particle: WindParticle, currentBounds: WindParticleBounds, projectionRevision: number) => {
+    const resetGeneration = particle.resetGeneration + 1;
+    const preserved = {
+      id: particle.id,
+      opacity: particle.opacity,
+      state: particle.state,
+      resetGeneration
+    } as const;
+    if (seedMode === "stable" && seedCandidates.length > 0) {
+      const seed = seedCandidates[stableWindHash(`${particle.id}:${resetGeneration}`) % seedCandidates.length];
+      return warmStartParticle({ ...stableWindParticle(seed, projectionRevision, particle.id), ...preserved }, !cameraMoving);
+    }
+    return warmStartParticle({ ...randomWindParticle(currentBounds, projectionRevision, particle.id), ...preserved }, !cameraMoving);
+  };
+
+  const updatePolicy = () => {
+    policy = computeWindFlowPolicy({
+      zoom: map.getZoom(),
+      viewportWidth: canvasWidth,
+      viewportHeight: canvasHeight,
+      adaptiveQuality,
+      livePerformanceMode
+    });
+    canvas.dataset.targetTrailPx = policy.targetTrailPx.toFixed(1);
+    canvas.dataset.headSpacingPx = policy.headSpacingPx.toFixed(1);
+    canvas.dataset.segmentBudget = String(policy.segmentBudget);
+    canvas.dataset.particleBudget = String(policy.targetParticleCount);
+    canvas.dataset.trailPoints = String(policy.historyPointLimit);
   };
 
   const syncWindField = () => {
@@ -3116,14 +3174,7 @@ function startWindFieldRenderer(
     canvas.dataset.cycloneCenter = nextCore ? `${nextCore.center.lon.toFixed(4)},${nextCore.center.lat.toFixed(4)}` : "none";
     syncCycloneCoreScreen();
     canvas.dataset.eyeRadiusKm = nextCore?.hasConfirmedEye ? nextCore.eyeRadiusKm.toFixed(1) : "0";
-    if (particles.length > 0) {
-      for (let index = 0; index < particles.length; index += 1) {
-        if (particles[index].kind !== "ambient") {
-          Object.assign(particles[index], resetParticle(particles[index], bounds, cameraRevision));
-        }
-      }
-      canvas.dataset.coreParticleCount = "0";
-    }
+    canvas.dataset.coreParticleCount = "0";
     return true;
   };
 
@@ -3145,39 +3196,110 @@ function startWindFieldRenderer(
     context.restore();
   };
 
+  const clearInteractionCanvas = () => {
+    if (!interactionCanvas || !interactionContext) return;
+    interactionContext.setTransform(1, 0, 0, 1, 0, 0);
+    interactionContext.clearRect(0, 0, interactionCanvas.width, interactionCanvas.height);
+  };
+
+  const reconcileParticlePool = (initial = false) => {
+    updatePolicy();
+    particles = particles.filter((particle) => {
+      if (particle.state === "retiring" && particle.opacity <= 0) return false;
+      return containsWindPoint(bounds, particle.lon, particle.lat);
+    });
+
+    let preservedParticles = 0;
+    let spawnedParticles = 0;
+    if (seedMode === "stable") {
+      const hierarchical = createHierarchicalWindSeeds(bounds, policy.targetParticleCount);
+      seedCandidates = hierarchical.seeds;
+      canvas.dataset.stableSeedResolution = `${hierarchical.plan.lowerResolution}:${hierarchical.plan.upperResolution}`;
+      canvas.dataset.stableSeedBlend = hierarchical.plan.blend.toFixed(3);
+      const reconciliation = planWindParticlePoolReconciliation(
+        particles,
+        seedCandidates,
+        bounds,
+        policy.targetParticleCount,
+        policy.poolCapacity
+      );
+      const keep = new Set(reconciliation.keepIds);
+      const reactivate = new Set(reconciliation.reactivateIds);
+      const retire = new Set(reconciliation.retireIds);
+      particles.forEach((particle) => {
+        if (keep.has(particle.id) || reactivate.has(particle.id)) {
+          particle.state = "active";
+          preservedParticles += 1;
+        } else if (retire.has(particle.id)) {
+          particle.state = "retiring";
+        }
+      });
+      const spawned = reconciliation.spawnSeeds.map((seed) => warmStartParticle(stableWindParticle(
+        seed,
+        cameraRevision,
+        `stable:${seed.key}`,
+        initial ? 1 : 0
+      ), !cameraMoving));
+      spawnedParticles = spawned.length;
+      particles.push(...spawned);
+    } else {
+      seedCandidates = [];
+      const active = particles
+        .filter((particle) => particle.state === "active")
+        .sort((left, right) => stableWindHash(left.id) - stableWindHash(right.id));
+      preservedParticles = Math.min(active.length, policy.targetParticleCount);
+      const desiredIds = new Set(active.slice(0, policy.targetParticleCount).map((particle) => particle.id));
+      particles.forEach((particle) => {
+        particle.state = desiredIds.has(particle.id) ? "active" : "retiring";
+      });
+      const availableSlots = Math.max(0, policy.poolCapacity - particles.length);
+      const missing = Math.min(availableSlots, Math.max(0, policy.targetParticleCount - preservedParticles));
+      for (let index = 0; index < missing; index += 1) {
+        particles.push(warmStartParticle(
+          randomWindParticle(bounds, cameraRevision, `viewport:${flowSession}:${++particleSequence}`, initial ? 1 : 0),
+          !cameraMoving
+        ));
+      }
+      spawnedParticles = missing;
+    }
+
+    canvas.dataset.particleCount = String(particles.length);
+    canvas.dataset.preservedParticles = String(preservedParticles);
+    canvas.dataset.spawnedParticles = String(spawnedParticles);
+    canvas.dataset.retiringParticles = String(particles.filter((particle) => particle.state === "retiring").length);
+  };
+
   resizeCanvas();
+  updatePolicy();
+  canvas.style.opacity = "1";
+  canvas.style.transform = "none";
+  if (interactionCanvas) {
+    interactionCanvas.style.opacity = "0";
+    interactionCanvas.style.visibility = "hidden";
+    interactionCanvas.style.transform = "none";
+  }
   if (!visible) {
     clear();
     return () => clear();
   }
   syncWindField();
   syncCycloneCore();
-  let bounds = surface ? projectedCanvasWindBounds(map, surface, 0.04) : visibleWindBounds(map, 0.35);
-  const particleBudget = livePerformanceMode
-    ? canvasWidth <= 760
-      ? 640
-      : Math.min(1_320, Math.max(1_040, Math.round((canvasWidth * canvasHeight) / 650)))
-    : canvasWidth <= 760
-      ? 1_040
-      : Math.min(1_760, Math.max(1_480, Math.round((canvasWidth * canvasHeight) / 430)));
+  let bounds = visibleWindBounds(map, 0.12);
   // Seed the whole layer from the observed/model grid. Injecting particles into
   // an idealized cyclone ring creates a visually perfect circle that the source
   // data does not support.
   const coreParticleCount = 0;
-  if (seedMode === "stable") seedStableParticles(bounds, particleBudget, cameraRevision);
-  else particles = Array.from({ length: particleBudget }, () => randomWindParticle(bounds));
-  canvas.dataset.flowSession = String(++windFlowRendererSequence);
+  reconcileParticlePool(true);
+  canvas.dataset.flowSession = String(flowSession);
   canvas.dataset.renderer = renderMode === "gfs" ? "ncep-gfs-wind-barbs" : "ncep-gfs-streamlines";
   canvas.dataset.vectorInterpolation = "structured-grid-bilinear-raw-uv";
   canvas.dataset.backgroundMode = "raw-ncep-gfs-grid";
-  canvas.dataset.cameraContinuity = "overscanned-frozen-frame-affine-transform-then-geographic-redraw";
+  canvas.dataset.cameraContinuity = "interaction-snapshot-affine-transform-then-chunked-geographic-handoff";
   canvas.dataset.windSeedMode = seedMode;
-  canvas.dataset.particleBudget = String(particleBudget);
   canvas.dataset.particleCount = String(particles.length);
-  canvas.dataset.trailPoints = String(trailPointLimit);
   canvas.dataset.particleJourney = "model-grid-streamlines";
-  canvas.dataset.simulationSecondsPerSecond = "14000";
-  canvas.dataset.maxVisibleHeadDensity = "ambient:5/core:3";
+  canvas.dataset.simulationSecondsPerSecond = "18000";
+  canvas.dataset.maxVisibleHeadDensity = "ambient:3/core:2";
   canvas.dataset.coreParticleCount = String(coreParticleCount);
 
   const drawStatic = () => {
@@ -3218,6 +3340,7 @@ function startWindFieldRenderer(
       map.off("resize", drawStatic);
       window.removeEventListener("resize", drawStatic);
       canvas.style.transform = "none";
+      canvas.style.opacity = "1";
       clear();
     };
   }
@@ -3253,11 +3376,6 @@ function startWindFieldRenderer(
     const renderStartedAt = performance.now();
     lastFrameTime = timeMs;
 
-    if (pendingCameraRedraw) {
-      canvas.style.transform = "none";
-      pendingCameraRedraw = false;
-    }
-
     syncWindField();
     syncCycloneCore();
     syncCycloneCoreScreen();
@@ -3267,56 +3385,44 @@ function startWindFieldRenderer(
       return;
     }
     context.globalCompositeOperation = "source-over";
-    const zoomSignal = smoothStep(3.25, 5.65, map.getZoom());
-    const maximumActiveParticleCount = Math.min(
-      particles.length,
-      seedMode === "stable"
-        ? livePerformanceMode ? 1_040 : 1_380
-        : livePerformanceMode
-        ? Math.min(1_040, Math.round(particles.length * (0.84 + zoomSignal * 0.12)))
-        : 1_380
-    );
-    const minimumActiveParticleCount = Math.min(
-      maximumActiveParticleCount,
-      livePerformanceMode
-        ? canvasWidth <= 760 ? 360 : 520
-        : canvasWidth <= 760 ? 480 : 620
-    );
-    const activeParticleCount = Math.max(
-      minimumActiveParticleCount,
-      Math.min(maximumActiveParticleCount, Math.round(maximumActiveParticleCount * adaptiveQuality))
-    );
-    const trailScale = seedMode === "stable" ? 1.18 : 1.08 + zoomSignal * 0.38;
-    const strokeScale = seedMode === "stable" ? 0.96 : 0.84 + zoomSignal * 0.24;
-    const opacityScale = seedMode === "stable" ? 0.94 : 0.9 + zoomSignal * 0.08;
-    canvas.dataset.activeParticleCount = String(activeParticleCount);
+    const trailScale = 1.12;
+    const strokeScale = 0.96;
+    const opacityScale = 0.94;
     canvas.dataset.qualityScale = adaptiveQuality.toFixed(2);
-    canvas.dataset.zoomSignal = zoomSignal.toFixed(2);
-    const paths = WIND_PARTICLE_STYLES.map(() => WIND_RIBBON_LAYERS.map(() => new Path2D()));
+    canvas.dataset.zoomSignal = policy.zoomSignal.toFixed(2);
+    const paths = WIND_PARTICLE_STYLES.map(() => WIND_RIBBON_LAYERS.map(() => WIND_OPACITY_BUCKETS.map(() => new Path2D())));
+    const pathCounts = WIND_PARTICLE_STYLES.map(() => WIND_RIBBON_LAYERS.map(() => WIND_OPACITY_BUCKETS.map(() => 0)));
     let rawTrailLengthTotal = 0;
     let renderedTrailLengthTotal = 0;
     let measuredTrailCount = 0;
     const impactTintCounts: Record<WindImpactTint, number> = { none: 0, r7: 0, r10: 0, r12: 0 };
     let reseedCount = 0;
     let densitySuppressedCount = 0;
-    const reseedBudget = Math.max(6, Math.ceil(activeParticleCount / 26));
+    let segmentBudgetUsed = 0;
+    let renderedParticleCount = 0;
+    const reseedBudget = Math.max(6, Math.ceil(particles.length / 26));
     // A streamline is a finite sample of the model field, rather than a
     // permanently released tracer.  That keeps a real closed or weak-wind
     // circulation from collecting every particle on its innermost orbit.
-    const simulationSeconds = 14_000 * deltaSeconds;
+    const simulationSecondsPerSecond = 18_000 - policy.zoomSignal * 4_000;
+    const simulationSeconds = simulationSecondsPerSecond * deltaSeconds;
+    canvas.dataset.simulationSecondsPerSecond = simulationSecondsPerSecond.toFixed(0);
     const visibleAmbientHeads = new Map<number, number>();
     const visibleCoreHeads = new Map<number, number>();
     const windSample = { u: 0, v: 0 };
-    const ambientHeadCellSize = Math.max(34, Math.min(46, canvasWidth / 35));
-    const coreHeadCellSize = Math.max(24, Math.min(34, canvasWidth / 52));
-    for (let index = 0; index < activeParticleCount; index += 1) {
+    const ambientHeadCellSize = policy.headSpacingPx;
+    const coreHeadCellSize = Math.max(24, policy.headSpacingPx * 0.72);
+    for (let index = 0; index < particles.length; index += 1) {
       const particle = particles[index];
+      particle.opacity = particle.state === "retiring"
+        ? Math.max(0, particle.opacity - deltaSeconds / fadeDurationSeconds)
+        : Math.min(1, particle.opacity + deltaSeconds / fadeDurationSeconds);
+      if (particle.opacity <= 0) continue;
       if (particle.kind === "core" && !cycloneCore) {
         Object.assign(particle, resetParticle(particle, bounds, cameraRevision));
       }
       if (particle.projectionRevision !== cameraRevision) {
-        particle.trailScreen = particle.trail.map((point) => map.project([point.lon, point.lat]));
-        particle.projectionRevision = cameraRevision;
+        continue;
       }
       if (!sampleCompositeWindVector(vectorIndex, particle.lon, particle.lat, windSample)) {
         if (reseedCount < reseedBudget) {
@@ -3345,6 +3451,7 @@ function startWindFieldRenderer(
       const vectorSpeed = Math.hypot(particle.u, particle.v);
       particle.lon += (particle.u * simulationSeconds) / longitudeScale;
       particle.lat += (particle.v * simulationSeconds) / latitudeScale;
+      particle.headScreen = map.project([particle.lon, particle.lat]);
       particle.life -= deltaSeconds;
       particle.travelKm += (vectorSpeed * simulationSeconds) / 1000;
       const trappedInCalm = vectorSpeed < 1.1 && particle.trail.length >= 7;
@@ -3361,18 +3468,21 @@ function startWindFieldRenderer(
         continue;
       }
 
-      particle.trail.push({ lon: particle.lon, lat: particle.lat });
-      if (particle.trail.length > trailPointLimit) particle.trail.shift();
-      particle.trailScreen.push(map.project([particle.lon, particle.lat]));
-      if (particle.trailScreen.length > trailPointLimit) particle.trailScreen.shift();
-      const projectedTrail = particle.trailScreen;
-      const displayTrail = projectedTrail;
+      const lastCommittedPoint = particle.trailScreen.at(-1);
+      if (!lastCommittedPoint || Math.hypot(particle.headScreen.x - lastCommittedPoint.x, particle.headScreen.y - lastCommittedPoint.y) >= policy.minimumSampleDistancePx) {
+        particle.trail.push({ lon: particle.lon, lat: particle.lat });
+        particle.trailScreen.push({ x: particle.headScreen.x, y: particle.headScreen.y });
+        if (particle.trail.length > policy.historyPointLimit) particle.trail.shift();
+        if (particle.trailScreen.length > policy.historyPointLimit) particle.trailScreen.shift();
+      }
+      const trimmedTrail = trimWindTrailToPixelLength(particle.trailScreen, particle.headScreen, policy.targetTrailPx);
+      const displayTrail = trimmedTrail.points;
       const head = displayTrail.at(-1);
-      if (!head) continue;
+      if (!head || displayTrail.length < 2) continue;
       const isCoreParticle = particle.kind === "core";
       const headCellSize = isCoreParticle ? coreHeadCellSize : ambientHeadCellSize;
       const visibleHeads = isCoreParticle ? visibleCoreHeads : visibleAmbientHeads;
-      const maximumHeads = isCoreParticle ? 3 : 5;
+      const maximumHeads = isCoreParticle ? 2 : 3;
       const headCell = Math.floor(head.x / headCellSize) + Math.floor(head.y / headCellSize) * 4096;
       const visibleHeadsInCell = visibleHeads.get(headCell) ?? 0;
       visibleHeads.set(headCell, visibleHeadsInCell + 1);
@@ -3380,33 +3490,48 @@ function startWindFieldRenderer(
         densitySuppressedCount += 1;
         continue;
       }
-      const trailLength = windTrailLength(displayTrail);
-      rawTrailLengthTotal += trailLength;
-      renderedTrailLengthTotal += trailLength;
+      const estimatedSegments = Math.min(8, Math.max(1, displayTrail.length - 1));
+      if (segmentBudgetUsed + estimatedSegments > policy.segmentBudget) {
+        densitySuppressedCount += 1;
+        continue;
+      }
+      segmentBudgetUsed += estimatedSegments;
+      rawTrailLengthTotal += windTrailLength(particle.trailScreen);
+      renderedTrailLengthTotal += trimmedTrail.lengthPx;
       measuredTrailCount += 1;
+      renderedParticleCount += 1;
       const bucket = windParticleStyleIndex(Math.hypot(particle.u, particle.v));
+      const opacityBucket = windOpacityBucketIndex(particle.opacity);
       impactTintCounts.none += 1;
       WIND_RIBBON_LAYERS.forEach((layer, layerIndex) => {
         const startIndex = Math.max(0, Math.floor((displayTrail.length - 1) * layer.start));
-        appendSmoothWindTrail(paths[bucket][layerIndex], displayTrail, startIndex);
+        appendSmoothWindTrail(paths[bucket][layerIndex][opacityBucket], displayTrail, startIndex);
+        pathCounts[bucket][layerIndex][opacityBucket] += 1;
       });
     }
+    particles = particles.filter((particle) => particle.opacity > 0 || particle.state !== "retiring");
+    canvas.dataset.activeParticleCount = String(renderedParticleCount);
     canvas.dataset.averageRawTrailPx = measuredTrailCount > 0 ? (rawTrailLengthTotal / measuredTrailCount).toFixed(1) : "0";
     canvas.dataset.averageRenderedTrailPx = measuredTrailCount > 0 ? (renderedTrailLengthTotal / measuredTrailCount).toFixed(1) : "0";
     canvas.dataset.renderedTrailCount = String(measuredTrailCount);
     canvas.dataset.impactTintCounts = JSON.stringify(impactTintCounts);
     canvas.dataset.densitySuppressedCount = String(densitySuppressedCount);
     canvas.dataset.reseedCount = String(reseedCount);
+    canvas.dataset.segmentBudgetUsed = String(segmentBudgetUsed);
+    canvas.dataset.retiringParticles = String(particles.filter((particle) => particle.state === "retiring").length);
     WIND_PARTICLE_STYLES.forEach((style, styleIndex) => {
       WIND_RIBBON_LAYERS.forEach((layer, layerIndex) => {
-        context.strokeStyle = windStrokeStyle(style.speed, 1);
-        context.globalAlpha = opacityScale * layer.alpha * 0.94;
-        context.lineWidth = style.width * strokeScale * layer.widthScale * trailScale * 1.12;
-        context.lineCap = "round";
-        context.lineJoin = "round";
-        context.shadowColor = windStrokeStyle(style.speed, 0.34);
-        context.shadowBlur = style.blur * strokeScale * 1.8;
-        context.stroke(paths[styleIndex][layerIndex]);
+        WIND_OPACITY_BUCKETS.forEach((opacity, opacityIndex) => {
+          if (pathCounts[styleIndex][layerIndex][opacityIndex] === 0) return;
+          context.strokeStyle = windStrokeStyle(style.speed, 1);
+          context.globalAlpha = opacityScale * layer.alpha * 0.94 * opacity;
+          context.lineWidth = style.width * strokeScale * layer.widthScale * trailScale * 1.12;
+          context.lineCap = "round";
+          context.lineJoin = "round";
+          context.shadowColor = windStrokeStyle(style.speed, 0.34);
+          context.shadowBlur = style.blur * strokeScale * 1.8;
+          context.stroke(paths[styleIndex][layerIndex][opacityIndex]);
+        });
       });
     });
     context.globalAlpha = 1;
@@ -3416,53 +3541,146 @@ function startWindFieldRenderer(
     renderTimingTotal += renderWorkMs;
     renderTimingMax = Math.max(renderTimingMax, renderWorkMs);
     renderTimingSamples += 1;
+    recentRenderTimes.push(renderWorkMs);
+    if (recentRenderTimes.length > 120) recentRenderTimes.shift();
     if (renderTimingSamples >= 20) {
       const averageRenderMs = renderTimingTotal / renderTimingSamples;
-      const minimumQuality = maximumActiveParticleCount > 0 ? minimumActiveParticleCount / maximumActiveParticleCount : 1;
-      if (averageRenderMs > targetRenderBudgetMs * 1.08) adaptiveQuality = Math.max(minimumQuality, adaptiveQuality - 0.08);
-      else if (averageRenderMs < targetRenderBudgetMs * 0.72) adaptiveQuality = Math.min(1, adaptiveQuality + 0.04);
+      const previousQuality = adaptiveQuality;
+      if (averageRenderMs > targetRenderBudgetMs * 1.08) {
+        adaptiveQuality = Math.max(0.35, adaptiveQuality - 0.08);
+        underBudgetFrameCount = 0;
+      } else if (averageRenderMs < targetRenderBudgetMs * 0.7) {
+        underBudgetFrameCount += renderTimingSamples;
+        if (underBudgetFrameCount >= 60) {
+          adaptiveQuality = Math.min(1, adaptiveQuality + 0.04);
+          underBudgetFrameCount = 0;
+        }
+      } else {
+        underBudgetFrameCount = 0;
+      }
       canvas.dataset.averageRenderMs = averageRenderMs.toFixed(1);
       canvas.dataset.maxRenderMs = renderTimingMax.toFixed(1);
       canvas.dataset.targetRenderMs = String(targetRenderBudgetMs);
+      const sortedRenderTimes = [...recentRenderTimes].sort((left, right) => left - right);
+      const p95Index = Math.max(0, Math.ceil(sortedRenderTimes.length * 0.95) - 1);
+      canvas.dataset.p95RenderMs = (sortedRenderTimes[p95Index] ?? 0).toFixed(1);
       renderTimingTotal = 0;
       renderTimingMax = 0;
       renderTimingSamples = 0;
+      if (adaptiveQuality !== previousQuality) reconcileParticlePool();
+    }
+    if (handoffReady) {
+      handoffReady = false;
+      canvas.style.opacity = "1";
+      if (interactionCanvas) {
+        interactionCanvas.style.opacity = "0";
+        window.clearTimeout(interactionHideTimer);
+        interactionHideTimer = window.setTimeout(() => {
+          interactionCanvas.style.visibility = "hidden";
+          interactionCanvas.style.transform = "none";
+          clearInteractionCanvas();
+        }, 130);
+      }
     }
     frame = window.requestAnimationFrame(render);
   };
 
+  const captureInteractionFrame = () => {
+    if (!interactionCanvas || !interactionContext) return false;
+    if (interactionCanvas.width !== canvas.width) interactionCanvas.width = canvas.width;
+    if (interactionCanvas.height !== canvas.height) interactionCanvas.height = canvas.height;
+    interactionContext.setTransform(1, 0, 0, 1, 0, 0);
+    interactionContext.clearRect(0, 0, interactionCanvas.width, interactionCanvas.height);
+    interactionContext.drawImage(canvas, 0, 0);
+    interactionCanvas.style.transition = "none";
+    interactionCanvas.style.transform = "none";
+    interactionCanvas.style.visibility = "visible";
+    interactionCanvas.style.opacity = "1";
+    canvas.style.opacity = "0";
+    requestAnimationFrame(() => {
+      if (interactionCanvas) interactionCanvas.style.transition = "opacity 120ms linear";
+    });
+    return true;
+  };
+
+  const cancelProjection = () => {
+    projectionGeneration += 1;
+    window.cancelAnimationFrame(projectionFrame);
+    projectionFrame = 0;
+    canvas.dataset.projectionQueueSize = "0";
+  };
+
   const beginCameraMove = () => {
+    window.clearTimeout(moveEndTimer);
+    window.clearTimeout(interactionHideTimer);
+    cancelProjection();
     if (cameraMoving) return;
     cameraMoving = true;
-    canvas.style.transform = "none";
-    cameraAnchors = captureCanvasCameraAnchors(map, canvas);
-    canvas.dataset.cameraInteraction = "affine-transform";
+    captureInteractionFrame();
+    cameraAnchors = captureCanvasCameraAnchors(map, interactionCanvas ?? canvas);
+    canvas.dataset.cameraInteraction = "snapshot-affine-transform";
   };
   const followCamera = () => {
     if (!cameraMoving || !cameraAnchors) return;
     const transform = canvasCameraTransform(map, cameraAnchors);
-    canvas.style.transformOrigin = "0 0";
-    canvas.style.transform = `matrix(${transform.a}, ${transform.b}, ${transform.c}, ${transform.d}, ${transform.e}, ${transform.f})`;
+    const target = interactionCanvas ?? canvas;
+    target.style.transformOrigin = "0 0";
+    target.style.transform = `matrix(${transform.a}, ${transform.b}, ${transform.c}, ${transform.d}, ${transform.e}, ${transform.f})`;
+  };
+  const finishProjectionHandoff = () => {
+    if (!cameraMoving) return;
+    const generation = ++projectionGeneration;
+    bounds = visibleWindBounds(map, 0.12);
+    cameraRevision += 1;
+    reconcileParticlePool();
+    canvas.dataset.cameraRevision = String(cameraRevision);
+    canvas.dataset.cameraInteraction = "chunked-geographic-projection";
+    syncCycloneCoreScreen();
+    const queue = [...particles];
+    let cursor = 0;
+    let totalProjectionWorkMs = 0;
+    let maximumProjectionChunkMs = 0;
+    const handoffStartedAt = performance.now();
+    const projectChunk = () => {
+      if (generation !== projectionGeneration || !cameraMoving) return;
+      const startedAt = performance.now();
+      while (cursor < queue.length && performance.now() - startedAt < 4) {
+        const particle = queue[cursor];
+        particle.trailScreen = particle.trail.map((point) => map.project([point.lon, point.lat]));
+        particle.headScreen = map.project([particle.lon, particle.lat]);
+        particle.projectionRevision = cameraRevision;
+        cursor += 1;
+      }
+      const chunkWorkMs = performance.now() - startedAt;
+      totalProjectionWorkMs += chunkWorkMs;
+      maximumProjectionChunkMs = Math.max(maximumProjectionChunkMs, chunkWorkMs);
+      canvas.dataset.projectionQueueSize = String(queue.length - cursor);
+      canvas.dataset.projectionWorkMs = totalProjectionWorkMs.toFixed(1);
+      canvas.dataset.projectionChunkMaxMs = maximumProjectionChunkMs.toFixed(1);
+      if (cursor < queue.length) {
+        projectionFrame = window.requestAnimationFrame(projectChunk);
+        return;
+      }
+      projectionFrame = 0;
+      cameraMoving = false;
+      cameraAnchors = null;
+      canvas.dataset.cameraInteraction = "geographic-handoff";
+      canvas.dataset.projectionQueueSize = "0";
+      canvas.dataset.projectionHandoffMs = (performance.now() - handoffStartedAt).toFixed(1);
+      handoffReady = true;
+      lastFrameTime = 0;
+    };
+    projectionFrame = window.requestAnimationFrame(projectChunk);
   };
   const finishCameraMove = () => {
     if (!cameraMoving) return;
-    cameraMoving = false;
-    cameraAnchors = null;
-    bounds = surface ? projectedCanvasWindBounds(map, surface, 0.04) : visibleWindBounds(map, 0.35);
-    cameraRevision += 1;
-    if (seedMode === "stable") seedStableParticles(bounds, particleBudget, cameraRevision, particles);
-    canvas.dataset.cameraRevision = String(cameraRevision);
-    canvas.dataset.cameraInteraction = "geographic-redraw";
-    syncCycloneCoreScreen();
-    pendingCameraRedraw = true;
+    window.clearTimeout(moveEndTimer);
+    moveEndTimer = window.setTimeout(finishProjectionHandoff, 80);
   };
   const resetForResize = () => {
+    beginCameraMove();
     resizeCanvas();
-    bounds = surface ? projectedCanvasWindBounds(map, surface, 0.04) : visibleWindBounds(map, 0.35);
-    cameraRevision += 1;
-    if (seedMode === "stable") seedStableParticles(bounds, particleBudget, cameraRevision, particles);
-    canvas.dataset.cameraRevision = String(cameraRevision);
-    pendingCameraRedraw = true;
+    finishCameraMove();
   };
 
   frame = window.requestAnimationFrame(render);
@@ -3474,12 +3692,22 @@ function startWindFieldRenderer(
 
   return () => {
     window.cancelAnimationFrame(frame);
+    window.cancelAnimationFrame(projectionFrame);
+    window.clearTimeout(moveEndTimer);
+    window.clearTimeout(interactionHideTimer);
     map.off("movestart", beginCameraMove);
     map.off("move", followCamera);
     map.off("moveend", finishCameraMove);
     map.off("resize", resetForResize);
     window.removeEventListener("resize", resetForResize);
     canvas.style.transform = "none";
+    canvas.style.opacity = "1";
+    if (interactionCanvas) {
+      interactionCanvas.style.transform = "none";
+      interactionCanvas.style.opacity = "0";
+      interactionCanvas.style.visibility = "hidden";
+    }
+    clearInteractionCanvas();
     clear();
   };
 }
@@ -3507,6 +3735,8 @@ const WIND_RIBBON_LAYERS = [
   { start: 0, alpha: 0.34, widthScale: 0.72 },
   { start: 0.62, alpha: 1, widthScale: 1 }
 ] as const;
+
+const WIND_OPACITY_BUCKETS = [0.25, 0.5, 0.75, 1] as const;
 
 function appendSmoothWindTrail(path: Path2D, points: Array<{ x: number; y: number }>, startIndex: number) {
   if (points.length - startIndex < 2) return;
@@ -3552,6 +3782,10 @@ function windParticleStyleIndex(speed: number) {
   return 0;
 }
 
+function windOpacityBucketIndex(opacity: number) {
+  return Math.max(0, Math.min(WIND_OPACITY_BUCKETS.length - 1, Math.ceil(opacity * WIND_OPACITY_BUCKETS.length) - 1));
+}
+
 interface WindParticleBounds {
   west: number;
   east: number;
@@ -3562,6 +3796,7 @@ interface WindParticleBounds {
 type WindParticleSeedMode = "stable" | "viewport";
 
 interface WindParticle {
+  id: string;
   kind: "ambient" | "core";
   lon: number;
   lat: number;
@@ -3573,8 +3808,12 @@ interface WindParticle {
   maxTravelKm: number;
   u: number;
   v: number;
+  opacity: number;
+  state: "active" | "retiring";
+  resetGeneration: number;
   trail: Array<{ lon: number; lat: number }>;
   trailScreen: Array<{ x: number; y: number }>;
+  headScreen: { x: number; y: number } | null;
   projectionRevision: number;
 }
 
@@ -3809,41 +4048,58 @@ function drawWindBarb(
 
 function randomWindParticle(
   bounds: WindParticleBounds,
-  projectionRevision = 0
+  projectionRevision = 0,
+  id = `viewport:${Math.random().toString(36).slice(2)}`,
+  opacity = 1
 ): WindParticle {
   return {
+    id,
     kind: "ambient",
     lon: bounds.west + Math.random() * (bounds.east - bounds.west),
     lat: bounds.south + Math.random() * (bounds.north - bounds.south),
     // Every particle gets an independent lifetime and distance budget.  This
     // deliberately avoids a periodic global reset while keeping the large
     // environmental flow readable over a long continuous path.
-    life: 15 + Math.random() * 15,
+    life: 45 + Math.random() * 35,
     travelKm: 0,
-    maxTravelKm: 1_260 + Math.random() * 1_080,
+    maxTravelKm: 7_000 + Math.random() * 4_000,
     u: 0,
     v: 0,
+    opacity,
+    state: "active",
+    resetGeneration: 0,
     trail: [],
     trailScreen: [],
+    headScreen: null,
     projectionRevision
   };
 }
 
-function stableWindParticle(seed: StableWindSeed, projectionRevision = 0): WindParticle {
+function stableWindParticle(
+  seed: StableWindSeed,
+  projectionRevision = 0,
+  id = `stable:${seed.key}`,
+  opacity = 1
+): WindParticle {
   return {
+    id,
     kind: "ambient",
     lon: seed.lon,
     lat: seed.lat,
     seedKey: seed.key,
     seedLon: seed.lon,
     seedLat: seed.lat,
-    life: 15 + Math.random() * 15,
+    life: 45 + Math.random() * 35,
     travelKm: 0,
-    maxTravelKm: 1_260 + Math.random() * 1_080,
+    maxTravelKm: 7_000 + Math.random() * 4_000,
     u: 0,
     v: 0,
+    opacity,
+    state: "active",
+    resetGeneration: 0,
     trail: [],
     trailScreen: [],
+    headScreen: null,
     projectionRevision
   };
 }
