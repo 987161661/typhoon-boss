@@ -164,6 +164,17 @@ a:focus-visible {
   filter: saturate(1.28) contrast(1.12);
 }
 
+/* The city briefing is composition-driven: show all risk dimensions without
+   letting the former rain-only layout hide heat or wind-led situations. */
+.live-city-risk-arcs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.live-city-official-warning { position:relative; z-index:10; display:grid; grid-template-columns:auto 1fr; gap:5px 10px; margin:4px 0 9px; padding:8px 10px; border:1px solid rgba(255,92,68,.62); background:rgba(96,18,14,.38); color:#fff2d6; }
+.live-city-official-warning b { color:#ffce66; letter-spacing:.08em; }
+.live-city-official-warning small { grid-column:2; color:#f2c8af; }
+.live-city-official-warning p { grid-column:1 / -1; margin:0; color:#ffe8d3; font-size:12px; line-height:1.45; }
+.live-city-data-gap { position:relative; z-index:10; margin:4px 0 9px; padding:8px 10px; border:1px solid rgba(255,190,74,.44); background:rgba(78,50,12,.34); color:#ffe7ac; font-size:12px; line-height:1.45; }
+.live-city-card.is-deploy .live-city-official-warning { opacity:0; transform:translateY(9px); }
+.live-city-card.is-card .live-city-official-warning { animation:cityInstrumentCharge .3s .05s ease-out both; }
+
 .official-alert-strip {
   position: absolute;
   z-index: 18;

@@ -46,8 +46,11 @@ export function createLiveCityEventId(prefix = "live-city") {
 }
 
 const MAX_COMMENT_LENGTH = 500;
-const MAX_CITY_LENGTH = 6;
-const CHINESE_CITY_MENTION = /@([\u3400-\u9fff]{2,6})(?=$|[\s,，。！？!？、:：;；#])/;
+// A live mention may include a country prefix and a full province-city path,
+// such as @中国北京 or @广东省广州市. Keep administrative suffixes: “市”
+// distinguishes a city from a same-name village in the resolver.
+const MAX_CITY_LENGTH = 16;
+const CHINESE_CITY_MENTION = /@([\u3400-\u9fff]{2,16})(?=$|[\s,，。！？!？、:：;；#])/;
 
 export function isHostLiveComment(value: unknown): value is HostLiveComment {
   if (!value || typeof value !== "object") return false;
@@ -69,7 +72,11 @@ export function isHostLiveComment(value: unknown): value is HostLiveComment {
 export function extractChinaCityMention(text: string): string | null {
   const match = text.trim().match(CHINESE_CITY_MENTION);
   if (!match) return null;
-  const city = match[1].replace(/(市|区|县)$/, "").trim();
+  const city = match[1].trim();
+  // Without punctuation Chinese chat text has no word boundary. Long mentions
+  // must therefore carry a city suffix; otherwise “@杭州今天会不会下雨” would
+  // be mistaken for a 9-character place name.
+  if (city.length > 6 && !city.endsWith("市")) return null;
   return city.length >= 2 && city.length <= MAX_CITY_LENGTH ? city : null;
 }
 

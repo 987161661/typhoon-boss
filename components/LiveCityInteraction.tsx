@@ -16,7 +16,7 @@ type Presentation =
   | { state: "flash"; request: CityInteractionRequest; briefing: CityBriefing }
   | { state: "deploy"; request: CityInteractionRequest; briefing: CityBriefing }
   | { state: "card"; request: CityInteractionRequest; briefing: CityBriefing }
-  | { state: "error"; request: CityInteractionRequest };
+  | { state: "error"; request: CityInteractionRequest; message: string };
 
 export function LiveCityInteraction({
   interaction,
@@ -77,7 +77,10 @@ export function LiveCityInteraction({
       signal: controller.signal
     })
       .then(async (response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        if (!response.ok) {
+          const body = await response.json().catch(() => null) as { error?: string } | null;
+          throw new Error(body?.error ?? `HTTP ${response.status}`);
+        }
         return response.json() as Promise<CityBriefing>;
       })
       .then((briefing) => {
@@ -111,9 +114,9 @@ export function LiveCityInteraction({
           if (!cancelled) onComplete(interaction.id);
         }, FLASH_DURATION_MS + CARD_DURATION_MS);
       })
-      .catch(() => {
+      .catch((error) => {
         if (cancelled || controller.signal.aborted) return;
-        setPresentation({ state: "error", request: interaction });
+        setPresentation({ state: "error", request: interaction, message: error instanceof Error ? error.message : "城市数据暂时不可用" });
         closeTimer = window.setTimeout(() => onComplete(interaction.id), 1_500);
       });
 
@@ -149,25 +152,18 @@ export function LiveCityInteraction({
     return <AcquisitionCard cardRef={cardRef} cityName={presentation.cityName} placement={placement} placementStyle={placementStyle} detail="坐标锁定，正在回收战区资料" />;
   }
   if (presentation.state === "error") {
-    return <aside ref={cardRef} className={`live-city-card is-error ${placement}`} style={placementStyle} role="status">{presentation.request.cityQuery} 暂无可用城市数据</aside>;
+    return <aside ref={cardRef} className={`live-city-card is-error ${placement}`} style={placementStyle} role="status">{presentation.message}</aside>;
   }
   if (presentation.state === "flash") {
     return <AcquisitionCard cardRef={cardRef} cityName={presentation.briefing.city.name} placement={placement} placementStyle={placementStyle} detail="战区资料解封中" />;
   }
 
   const { briefing, request } = presentation;
-  const currentMetrics: TacticalMetric[] = [
-    { label: "实况温度", value: numberLabel(briefing.current.temperatureC, "°C"), detail: `体感 ${numberLabel(briefing.current.apparentTemperatureC, "°C")}`, icon: Thermometer, level: temperatureProgress(briefing.current.temperatureC) },
-    { label: "相对湿度", value: percentageLabel(briefing.current.relativeHumidityPct), detail: "空气含水", icon: Droplets, level: briefing.current.relativeHumidityPct ?? 0 },
-    { label: "实况降水", value: numberLabel(briefing.current.precipitationMm, " mm"), detail: "当前时段", icon: CloudRain, level: precipitationProgress(briefing.current.precipitationMm) },
-    { label: "近地风速", value: numberLabel(briefing.current.windSpeedMps, " m/s"), detail: "当前实况", icon: Wind, level: windProgress(briefing.current.windSpeedMps) }
-  ];
-  const forecastMetrics: TacticalMetric[] = [
-    { label: "6小时累计", value: numberLabel(briefing.nextSixHours.precipitationMm, " mm"), detail: "降水总量", icon: CloudRain, level: precipitationProgress(briefing.nextSixHours.precipitationMm) },
-    { label: "小时峰值", value: numberLabel(briefing.nextSixHours.maxHourlyPrecipitationMm, " mm"), detail: "最大单小时", icon: Droplets, level: precipitationProgress(briefing.nextSixHours.maxHourlyPrecipitationMm) },
-    { label: "降水机会", value: percentageLabel(briefing.nextSixHours.maxPrecipitationProbabilityPct), detail: "未来6小时", icon: CloudRain, level: briefing.nextSixHours.maxPrecipitationProbabilityPct ?? 0 },
-    { label: "阵风峰值", value: numberLabel(briefing.nextSixHours.maxWindGustMps, " m/s"), detail: "未来6小时", icon: Wind, level: windProgress(briefing.nextSixHours.maxWindGustMps) }
-  ];
+  const { currentMetrics, forecastMetrics, currentTitle, forecastTitle } = buildTacticalDecks(briefing);
+  const warningSourceUnavailable = briefing.sources.some(
+    (source) => source.id === "qweather-warning" && source.status !== "available"
+  );
+  const cityLabel = [briefing.city.province, briefing.city.name].filter(Boolean).join(" · ");
   const windowLabel = timeWindow(briefing.nextSixHours.startsAt, briefing.nextSixHours.endsAt);
   const observedAt = briefing.current.observedAt ?? briefing.generatedAt;
   const riskScore = Math.max(...briefing.risks.map((risk) => riskProgress([risk], risk.kind)));
@@ -181,13 +177,30 @@ export function LiveCityInteraction({
       <div className="live-city-card-corners" aria-hidden="true"><i /><i /><i /><i /></div>
       <div className="live-city-card-signal" aria-hidden="true" />
       <header>
-        <div><span>STORM FRONTIER // CITY INSTANCE</span><strong>{briefing.city.name}<em>战区接入</em></strong></div>
+        <div><span>STORM FRONTIER // CITY INSTANCE</span><strong>{cityLabel}<em>战区接入</em></strong></div>
         <button type="button" onClick={() => onComplete(request.id)} aria-label="关闭城市战况卡"><X /></button>
       </header>
       <div className="live-city-card-command">
         <ThreatDial score={riskScore} />
         <TypewriterText text={briefing.narrative.summary} active={presentation.state === "card"} className="live-city-card-verdict city-card-tactical-copy" speed={42} />
       </div>
+      {briefing.officialWarnings[0] && (
+        <div className="live-city-official-warning" role="alert">
+          <b>官方预警</b>
+          <span>{briefing.officialWarnings[0].title}</span>
+          <small>{[
+            briefing.officialWarnings[0].senderName,
+            briefing.officialWarnings[0].issuedAt ? `发布 ${formatTime(briefing.officialWarnings[0].issuedAt)}` : "以属地最新发布为准"
+          ].filter(Boolean).join(" · ")}</small>
+          {briefing.officialWarnings[0].description && <p>{briefing.officialWarnings[0].description}</p>}
+          {briefing.officialWarnings[0].instruction && <p>防御指引：{briefing.officialWarnings[0].instruction}</p>}
+        </div>
+      )}
+      {!briefing.officialWarnings[0] && warningSourceUnavailable && (
+        <div className="live-city-data-gap" role="status">
+          官方预警数据当前不可用；以下风雨结论仅来自近实时与模式资料，不能据此确认“无风险”。
+        </div>
+      )}
       <div className="live-city-risk-arcs" aria-label="三项风险等级">
         {briefing.risks.map((risk) => (
           <article key={risk.kind} data-level={risk.level} style={{ "--city-risk-progress": `${riskProgress([risk], risk.kind)}%` } as CSSProperties}>
@@ -195,8 +208,8 @@ export function LiveCityInteraction({
           </article>
         ))}
       </div>
-      <TelemetryDeck title="实时链路" metrics={currentMetrics} />
-      <TelemetryDeck title="未来六小时" metrics={forecastMetrics} />
+      <TelemetryDeck title={currentTitle} metrics={currentMetrics} />
+      <TelemetryDeck title={forecastTitle} metrics={forecastMetrics} />
       <div className="live-city-nowcast">
         <span>短临降水推演</span>
         <b>未来2小时 {numberLabel(briefing.minutelyRain.precipitationNextTwoHoursMm, " mm")}</b>
@@ -288,6 +301,48 @@ function clamp(value: number, minimum: number, maximum: number) {
 }
 
 type TacticalMetric = { label: string; value: string; detail: string; icon: LucideIcon; level: number };
+
+function buildTacticalDecks(briefing: CityBriefing) {
+  const current = briefing.current;
+  const next = briefing.nextSixHours;
+  const commonCurrent: TacticalMetric[] = [
+    { label: "实况温度", value: numberLabel(current.temperatureC, "°C"), detail: `体感 ${numberLabel(current.apparentTemperatureC, "°C")}`, icon: Thermometer, level: temperatureProgress(current.temperatureC) },
+    { label: "相对湿度", value: percentageLabel(current.relativeHumidityPct), detail: "空气含水", icon: Droplets, level: current.relativeHumidityPct ?? 0 },
+    { label: "实况降水", value: numberLabel(current.precipitationMm, " mm"), detail: "当前时段", icon: CloudRain, level: precipitationProgress(current.precipitationMm) },
+    { label: "近地风速", value: numberLabel(current.windSpeedMps, " m/s"), detail: "近实时/模式", icon: Wind, level: windProgress(current.windSpeedMps) }
+  ];
+  const rainMetrics: TacticalMetric[] = [
+    { label: "6小时累计", value: numberLabel(next.precipitationMm, " mm"), detail: "降水总量", icon: CloudRain, level: precipitationProgress(next.precipitationMm) },
+    { label: "小时峰值", value: numberLabel(next.maxHourlyPrecipitationMm, " mm"), detail: "最大单小时", icon: Droplets, level: precipitationProgress(next.maxHourlyPrecipitationMm) },
+    { label: "降水机会", value: percentageLabel(next.maxPrecipitationProbabilityPct), detail: "未来6小时", icon: CloudRain, level: next.maxPrecipitationProbabilityPct ?? 0 },
+    { label: "阵风峰值", value: numberLabel(next.maxWindGustMps, " m/s"), detail: "未来6小时", icon: Wind, level: windProgress(next.maxWindGustMps) }
+  ];
+  const windMetrics: TacticalMetric[] = [
+    { label: "阵风峰值", value: numberLabel(next.maxWindGustMps, " m/s"), detail: "未来6小时", icon: Wind, level: windProgress(next.maxWindGustMps) },
+    { label: "当前风速", value: numberLabel(current.windSpeedMps, " m/s"), detail: "近实时/模式", icon: Wind, level: windProgress(current.windSpeedMps) },
+    { label: "6小时降水", value: numberLabel(next.precipitationMm, " mm"), detail: "不是主风险", icon: CloudRain, level: precipitationProgress(next.precipitationMm) },
+    { label: "对流条件", value: numberLabel(next.maxCapeJkg, " J/kg"), detail: "模式环境", icon: Droplets, level: convectionProgress(next.maxCapeJkg) }
+  ];
+  const convectionMetrics: TacticalMetric[] = [
+    { label: "CAPE", value: numberLabel(next.maxCapeJkg, " J/kg"), detail: "对流能量", icon: Droplets, level: convectionProgress(next.maxCapeJkg) },
+    { label: "小时雨强", value: numberLabel(next.maxHourlyPrecipitationMm, " mm"), detail: "模式峰值", icon: CloudRain, level: precipitationProgress(next.maxHourlyPrecipitationMm) },
+    { label: "阵风峰值", value: numberLabel(next.maxWindGustMps, " m/s"), detail: "未来6小时", icon: Wind, level: windProgress(next.maxWindGustMps) },
+    { label: "降水机会", value: percentageLabel(next.maxPrecipitationProbabilityPct), detail: "未来6小时", icon: CloudRain, level: next.maxPrecipitationProbabilityPct ?? 0 }
+  ];
+  const heatMetrics: TacticalMetric[] = [
+    { label: "实况温度", value: numberLabel(current.temperatureC, "°C"), detail: "当前", icon: Thermometer, level: temperatureProgress(current.temperatureC) },
+    { label: "体感温度", value: numberLabel(current.apparentTemperatureC, "°C"), detail: "优先关注", icon: Thermometer, level: temperatureProgress(current.apparentTemperatureC) },
+    { label: "相对湿度", value: percentageLabel(current.relativeHumidityPct), detail: "影响体感", icon: Droplets, level: current.relativeHumidityPct ?? 0 },
+    { label: "近地风速", value: numberLabel(current.windSpeedMps, " m/s"), detail: "散热条件", icon: Wind, level: windProgress(current.windSpeedMps) }
+  ];
+  const template = briefing.narrative.template;
+  return {
+    currentMetrics: template === "heat" ? heatMetrics : commonCurrent,
+    forecastMetrics: template === "wind" ? windMetrics : template === "convection" ? convectionMetrics : rainMetrics,
+    currentTitle: template === "heat" ? "体感链路" : "当前态势",
+    forecastTitle: template === "wind" ? "未来六小时风场" : template === "convection" ? "未来六小时对流" : "未来六小时"
+  };
+}
 
 function TelemetryDeck({ title, metrics }: { title: string; metrics: TacticalMetric[] }) {
   return <section className="live-city-telemetry" aria-label={title}>
@@ -394,6 +449,10 @@ function windProgress(value: number | null) {
 
 function temperatureProgress(value: number | null) {
   return Math.min(100, Math.max(0, ((value ?? 0) + 10) * 2.2));
+}
+
+function convectionProgress(value: number | null) {
+  return Math.min(100, Math.max(0, ((value ?? 0) / 2_000) * 100));
 }
 
 function levelLabel(level: CityBriefing["risks"][number]["level"]) {
