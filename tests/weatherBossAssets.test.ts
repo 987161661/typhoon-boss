@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import test from "node:test";
+import sharp from "sharp";
 
 type Dimensions = { width: number; height: number; unit: string };
 type Asset = {
@@ -22,6 +23,19 @@ type Asset = {
   reproducibility?: string;
   composition?: string[];
   derivedFrom?: string;
+  provenance?: {
+    kind?: string;
+    source?: string;
+    algorithm?: string;
+    runtime?: string;
+    callId?: string;
+    sourceFilename?: string;
+    sourceSha256?: string;
+    prompt?: string;
+    postProcessing?: string[];
+    reproduction?: string;
+    licenseTerms?: string;
+  };
 };
 
 type Manifest = {
@@ -36,11 +50,11 @@ const manifest = JSON.parse(readFileSync(resolve(assetRoot, "manifest.json"), "u
 const svgAssets = manifest.assets.filter((asset) => asset.filename.endsWith(".svg"));
 const pngAssets = manifest.assets.filter((asset) => asset.filename.endsWith(".png"));
 
-function hash(content: string) {
+function hash(content: string | Buffer) {
   return createHash("sha256").update(content).digest("hex");
 }
 
-test("Weather Boss manifest keeps SVG outputs generated and bitmap work planned", () => {
+test("Weather Boss manifest freezes generated vector and bitmap outputs", () => {
   assert.equal(manifest.status, "partially-generated");
   assert.equal(manifest.generatedAssetsPresent, true);
   assert.equal(svgAssets.length, 25);
@@ -63,7 +77,16 @@ test("Weather Boss manifest keeps SVG outputs generated and bitmap work planned"
     assert.equal(asset.reproducibility, `sha256:${asset.sha256}`);
   }
 
-  for (const asset of pngAssets) assert.equal(asset.status, "planned");
+  for (const asset of pngAssets) {
+    assert.equal(asset.status, "generated");
+    assert.equal(asset.generator, "scripts/generate_weather_boss_png_assets.mjs@1.0.0");
+    assert.match(asset.generatedOn ?? "", /^\d{4}-\d{2}-\d{2}$/);
+    assert.equal(asset.license, "LicenseRef-WeatherBoss-Project-Original");
+    assert.match(asset.sha256 ?? "", /^[a-f0-9]{64}$/);
+    assert.equal(asset.reproducibility, `sha256:${asset.sha256}`);
+    assert.ok(asset.provenance?.kind);
+    assert.ok(asset.provenance?.licenseTerms);
+  }
 });
 
 test("every generated SVG matches dimensions, viewBox, text policy, and sha256", () => {
@@ -110,11 +133,62 @@ test("asset families share masters and cover the complete primitive vocabulary",
   assert.equal(new Set(sealOutputs.map((asset) => asset.sha256)).size, sealOutputs.length);
 });
 
+test("generated PNGs match dimensions, RGBA transparency, sha256, and provenance", async () => {
+  for (const asset of pngAssets) {
+    const content = readFileSync(resolve(assetRoot, asset.filename));
+    const metadata = await sharp(content).metadata();
+    assert.equal(metadata.format, "png");
+    assert.equal(metadata.width, asset.dimensions.width);
+    assert.equal(metadata.height, asset.dimensions.height);
+    assert.equal(metadata.channels, 4);
+    assert.equal(metadata.hasAlpha, true);
+    assert.equal(hash(content), asset.sha256);
+
+    const { data, info } = await sharp(content).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+    let transparentPixels = 0;
+    let visiblePixels = 0;
+    for (let offset = 3; offset < data.length; offset += info.channels) {
+      if (data[offset] < 255) transparentPixels += 1;
+      if (data[offset] > 0) visiblePixels += 1;
+    }
+    assert.ok(transparentPixels > 0, `${asset.filename} lacks transparent pixels`);
+    assert.ok(visiblePixels > 0, `${asset.filename} lacks visible pixels`);
+  }
+
+  const deterministicAssets = pngAssets.filter((asset) => asset.provenance?.kind === "deterministic-script");
+  assert.deepEqual(deterministicAssets.map((asset) => asset.id).sort(), ["national-map-vignette", "scanline-texture"]);
+  for (const asset of deterministicAssets) {
+    assert.equal(asset.provenance?.source, "scripts/generate_weather_boss_png_assets.mjs");
+    assert.match(asset.provenance?.algorithm ?? "", /-v1$/);
+    assert.match(asset.provenance?.runtime ?? "", /^sharp@\d+\.\d+\.\d+$/);
+  }
+
+  const imagegenAssets = pngAssets.filter((asset) => asset.provenance?.kind === "imagegen-derived");
+  assert.deepEqual(imagegenAssets.map((asset) => asset.id).sort(), ["archive-paper-grain", "terminal-abrasion"]);
+  for (const asset of imagegenAssets) {
+    assert.match(asset.provenance?.callId ?? "", /^exec-[a-f0-9-]+$/);
+    assert.equal(asset.provenance?.sourceFilename, `${asset.provenance?.callId}.png`);
+    assert.match(asset.provenance?.sourceSha256 ?? "", /^[a-f0-9]{64}$/);
+    assert.match(asset.provenance?.prompt ?? "", /#00ff00 chroma-key background/);
+    assert.ok((asset.provenance?.postProcessing?.length ?? 0) >= 2);
+    assert.match(asset.provenance?.reproduction ?? "", /^node scripts\/generate_weather_boss_png_assets\.mjs --source=/);
+  }
+});
+
 test("generator check mode proves committed SVGs are reproducible", () => {
   const result = spawnSync(process.execPath, ["scripts/generate_weather_boss_svg_assets.mjs", "--check"], {
     cwd: repoRoot,
     encoding: "utf8"
   });
   assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
-  assert.match(result.stdout, /check passed \(25 generated SVG assets, 4 planned PNG assets\)/);
+  assert.match(result.stdout, /check passed \(25 generated SVG assets, 4 generated PNG assets, 0 planned PNG assets\)/);
+});
+
+test("PNG generator check proves deterministic outputs and imported provenance", () => {
+  const result = spawnSync(process.execPath, ["scripts/generate_weather_boss_png_assets.mjs", "--check"], {
+    cwd: repoRoot,
+    encoding: "utf8"
+  });
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /check passed \(4 generated PNG assets, 0 planned PNG asset\)/);
 });

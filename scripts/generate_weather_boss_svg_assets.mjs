@@ -474,11 +474,15 @@ async function checkOutputs(manifest, specs) {
     if ((spec.asset.derivedFrom ?? null) !== spec.derivedFrom) failures.push(`${spec.asset.filename}: manifest derivation does not match generator`);
   }
   const pngAssets = manifest.assets.filter((asset) => asset.filename.endsWith(".png"));
+  let generatedPngCount = 0;
+  let plannedPngCount = 0;
   for (const asset of pngAssets) {
-    if (asset.status !== "planned") failures.push(`${asset.filename}: PNG must remain planned`);
+    if (asset.status === "generated") generatedPngCount += 1;
+    else if (asset.status === "planned") plannedPngCount += 1;
+    else failures.push(`${asset.filename}: unsupported PNG status ${String(asset.status)}`);
   }
   if (failures.length) throw new Error(`Weather Boss SVG check failed:\n- ${failures.join("\n- ")}`);
-  console.log(`Weather Boss SVG check passed (${specs.length} generated SVG assets, ${pngAssets.length} planned PNG assets).`);
+  console.log(`Weather Boss SVG check passed (${specs.length} generated SVG assets, ${generatedPngCount} generated PNG assets, ${plannedPngCount} planned PNG assets).`);
 }
 
 async function generateOutputs(manifest, specs) {

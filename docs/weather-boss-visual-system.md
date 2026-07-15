@@ -1,7 +1,7 @@
 # Weather Boss 视觉系统冻结稿（阶段 D / 预研）
 
-> 状态：`draft-frozen-for-asset-review`
-> 范围：只定义视觉方向、token、布局母语和首批母资产；本稿不生成图片、不接入业务、不修改现有 CSS 或组件。
+> 状态：`asset-kit-generated-visual-qa-passed-pending-integration`
+> 范围：定义视觉方向、token、布局母语和首批母资产，冻结可复现的 SVG/PNG 生产与清单校验，并完成三套目标视口联系表与位图 1×/2× 透明边缘检查；本稿不接入业务、不修改现有 CSS 或组件。
 
 ## 1. 主题、受众与页面唯一任务
 
@@ -120,12 +120,27 @@
 
 ## 10. 回滚点与未解决风险
 
-**回滚点**：本阶段只有本文件与 `public/assets/weather-boss/manifest.json`。删除这两份文件即可完整回滚，现有 CSS、组件、业务和既有资产均未改变。后续生成资产必须独立提交，接入提交不得与资产生成混合。
+**回滚点**：本阶段的边界是本文件、`public/assets/weather-boss/`、`scripts/generate_weather_boss_*` 与 `tests/weatherBossAssets.test.ts`；现有 CSS、组件和业务均未改变。资产生产仍须与业务接入分开提交。
 
 **未解决风险**：
 
-- 尚未在三个目标分辨率完成新系统截图验证；当前只完成结构预研和 manifest。
+- 29 个资产已经在 `1920×1080`、`1366×768`、`1280×720-live` 三套联系表中完成视觉检查，四个位图也完成 1×/2× 与透明边缘检查；这些证据只证明资产包完整可读，尚未宣称页面接入验收通过。
 - `archive-command` 现有纸色主题与主雷达冷色主题的对比统一仍需实际页面 A/B，不能仅凭 token 推断。
 - 红/橙/黄/蓝官方预警的最终色值还需在真实地图底色上做对比度与色盲模拟；本稿冻结的是资产生产起点，不等于无障碍验收已通过。
 - 现有城市机械框若继续保留，可能与“无血迹、低装饰竞争”的新规则冲突；接入阶段需明确替换或降权策略。
 - 仓库尚无稳定的整页视觉基准图；临时截图不能作为长期回归证据。
+
+## 11. 位图生产与来源冻结
+
+四个位图均为无文字 RGBA 资产。扫描线与全国地图暗角由 `scripts/generate_weather_boss_png_assets.mjs` 的共享 RGBA 原语确定性生成；终端盐蚀与档案压力颗粒由内置 imagegen 生成纯色 chroma-key 源，再通过统一的去色键、缩放、灰度化与 PNG 编码管线导入。完整 prompt、调用 ID、源文件名、源 SHA256、后处理、许可说明和最终 SHA256 均登记在 manifest，不依赖 README 式口头说明。
+
+```powershell
+node scripts/generate_weather_boss_png_assets.mjs
+node scripts/generate_weather_boss_png_assets.mjs --source=terminal-abrasion=<absolute-source-path> --source=archive-paper-grain=<absolute-source-path>
+node scripts/generate_weather_boss_png_assets.mjs --check
+node scripts/generate_weather_boss_svg_assets.mjs --check
+```
+
+不带 `--source` 时只重建确定性资产，不会伪造或替换 imagegen 来源；带来源导入时，脚本先验证文件名与源 SHA256，再执行冻结的后处理。`--check` 对尺寸、RGBA、透明像素、可见像素、最终 SHA256、生成器、来源和许可做硬校验；文件存在但仍标记为 `planned` 会直接失败。
+
+视觉 QA 由 `scripts/generate_weather_boss_visual_qa.mjs` 生成，证据位于 `evidence/screenshots/weather-boss-assets-*.png`、`weather-boss-bitmap-alpha-2x-qa.png` 与 `weather-boss-assets-visual-qa.json`。联系表只组合 manifest 中登记的资产，不另造“示意资产”。

@@ -97,9 +97,26 @@
       },
       "transparency": true,
       "theme": "salt-worn-terminal",
-      "license": "Project-original; provenance required before approval.",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
       "containsText": false,
-      "status": "planned"
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_png_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "06db4cd6813824ba29336eda5ffaf2be4bb86280ded431630ed7c704f0155e02",
+      "reproducibility": "sha256:06db4cd6813824ba29336eda5ffaf2be4bb86280ded431630ed7c704f0155e02",
+      "provenance": {
+        "kind": "imagegen-derived",
+        "callId": "exec-23bb859b-f8ed-46b9-8ac3-1caa9c3db825",
+        "sourceFilename": "exec-23bb859b-f8ed-46b9-8ac3-1caa9c3db825.png",
+        "sourceSha256": "b08f0c2503375f2bee34ed7a14724af9cc6a3a7c7ae9197d3277a06230d27009",
+        "prompt": "Use case: stylized-concept. Asset type: seamless subtle UI abrasion alpha texture for a weather command terminal. Create sparse irregular salt abrasion, tiny chipped matte-coating flecks, hairline scuffs, and light pressure wear as WHITE AND LIGHT-GRAY opaque marks on a perfectly flat solid #00ff00 chroma-key background for background removal. The #00ff00 background must be one uniform exact color with no shadows, gradients, lighting variation, checkerboard, paper, texture, or reflections. Keep every abrasion mark fully separated from the background and use no #00ff00 in the marks. Leave a completely empty 48-pixel chroma-key safety border on all four edges so repeated tiles have no visible seam. No large focal shape, no border line, no text, no letters, no numbers, no symbols, no logo, no watermark, no cast shadow. Square texture, high-frequency organic detail, suitable at 6-10% opacity.",
+        "postProcessing": [
+          "remove_chroma_key.py --auto-key border --soft-matte --transparent-threshold 18 --opaque-threshold 150 --despill",
+          "sharp resize 512x512, then grayscale, then canonical PNG encoding"
+        ],
+        "reproduction": "node scripts/generate_weather_boss_png_assets.mjs --source=terminal-abrasion=<absolute-source-path>",
+        "licenseTerms": "OpenAI-generated project asset; use is governed by the OpenAI service terms applicable on 2026-07-15."
+      }
     },
     {
       "id": "scanline-texture",
@@ -112,9 +129,20 @@
       },
       "transparency": true,
       "theme": "night-radar",
-      "license": "Project-original; provenance required before approval.",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
       "containsText": false,
-      "status": "planned"
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_png_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "f4ab0e985e12d972ce9b13d6ca4e284f699f99971294ed58be28d573ef8176e9",
+      "reproducibility": "sha256:f4ab0e985e12d972ce9b13d6ca4e284f699f99971294ed58be28d573ef8176e9",
+      "provenance": {
+        "kind": "deterministic-script",
+        "source": "scripts/generate_weather_boss_png_assets.mjs",
+        "algorithm": "periodic-scanline-alpha-v1",
+        "runtime": "sharp@0.34.5",
+        "licenseTerms": "Project-original deterministic output; repository license applies."
+      }
     },
     {
       "id": "event-badge-master",
@@ -612,9 +640,20 @@
       },
       "transparency": true,
       "theme": "national-archive",
-      "license": "Project-original; provenance required before approval.",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
       "containsText": false,
-      "status": "planned"
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_png_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "bd243b72be0a0df743ebf1e96e607d89669eab0871e0ae30e9c2935a229424e0",
+      "reproducibility": "sha256:bd243b72be0a0df743ebf1e96e607d89669eab0871e0ae30e9c2935a229424e0",
+      "provenance": {
+        "kind": "deterministic-script",
+        "source": "scripts/generate_weather_boss_png_assets.mjs",
+        "algorithm": "symmetric-superellipse-vignette-v1",
+        "runtime": "sharp@0.34.5",
+        "licenseTerms": "Project-original deterministic output; repository license applies."
+      }
     },
     {
       "id": "city-dossier-fragment",
@@ -654,9 +693,26 @@
       },
       "transparency": true,
       "theme": "archive-dossier",
-      "license": "Project-original; provenance required before approval.",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
       "containsText": false,
-      "status": "planned"
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_png_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "3562fc09dc4183c94b359c26c1ed01e921bd43a5b5a5db88bda1d344b18588a8",
+      "reproducibility": "sha256:3562fc09dc4183c94b359c26c1ed01e921bd43a5b5a5db88bda1d344b18588a8",
+      "provenance": {
+        "kind": "imagegen-derived",
+        "callId": "exec-3588f60b-32b5-44ee-ae9a-428661f48df6",
+        "sourceFilename": "exec-3588f60b-32b5-44ee-ae9a-428661f48df6.png",
+        "sourceSha256": "f2df33d242befe1405ad186ec4d888ea64c0377506c02a33135cb8ebaaddce05",
+        "prompt": "Use case: stylized-concept. Asset type: subtle archive-pressure grain alpha texture for a weather command terminal HUD. Create sparse compressed paper-fiber impressions, fine archival pressure speckles, faint rubbed matte patches, and tiny dry-grain clusters as WHITE AND LIGHT-GRAY opaque marks on a perfectly flat solid #00ff00 chroma-key background for background removal. The #00ff00 background must be one uniform exact color with no shadows, gradients, lighting variation, checkerboard, paper sheet, texture, or reflections. Keep every grain mark fully separated from the background and use no #00ff00 in the marks. Leave a completely empty 48-pixel chroma-key safety border on all four edges. Low-density organic detail with no large focal form, suitable for a 512x512 transparent UI texture composited at 4-8% opacity. No border line, no text, no letters, no numbers, no symbols, no logo, no watermark, no cast shadow. Square texture.",
+        "postProcessing": [
+          "remove_chroma_key.py --auto-key border --soft-matte --transparent-threshold 18 --opaque-threshold 150 --despill",
+          "sharp resize 512x512, then grayscale, then canonical PNG encoding"
+        ],
+        "reproduction": "node scripts/generate_weather_boss_png_assets.mjs --source=archive-paper-grain=<absolute-source-path>",
+        "licenseTerms": "OpenAI-generated project asset; use is governed by the OpenAI service terms applicable on 2026-07-15."
+      }
     },
     {
       "id": "evidence-stamp-ring",
@@ -711,6 +767,9 @@
     "svgGenerator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
     "generatedOn": "2026-07-15",
     "algorithm": "deterministic-composable-svg-primitives-v1",
-    "license": "LicenseRef-WeatherBoss-Project-Original"
+    "license": "LicenseRef-WeatherBoss-Project-Original",
+    "pngGenerator": "scripts/generate_weather_boss_png_assets.mjs@1.0.0",
+    "pngGeneratedOn": "2026-07-15",
+    "pngAlgorithm": "deterministic-composable-rgba-primitives-v1"
   }
 }
