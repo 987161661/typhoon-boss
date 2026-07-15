@@ -12,6 +12,7 @@ import {
 const EMPTY_EVENTS = buildNationalEventFeatureCollection([]);
 
 export function installNationalEventLayer(map: MapLibreMap) {
+  if (!nationalEventMapHasStyle(map)) return;
   if (!map.getSource(NATIONAL_EVENT_SOURCE_ID)) {
     map.addSource(NATIONAL_EVENT_SOURCE_ID, { type: "geojson", data: EMPTY_EVENTS });
   }
@@ -85,16 +86,41 @@ export function installNationalEventLayer(map: MapLibreMap) {
       },
     });
   }
-  map.getContainer().dataset.nationalEvents = "enabled";
+  setNationalEventDataset(map, "enabled");
 }
 
 export function removeNationalEventLayer(map: MapLibreMap) {
+  // React may run the parent map-disposal effect before this child effect's
+  // cleanup. MapLibre keeps the Map object but clears `style`, so even
+  // getLayer/getSource throw after map.remove(). Treat that as already clean.
+  if (!nationalEventMapHasStyle(map)) {
+    setNationalEventDataset(map, "disabled", null);
+    return;
+  }
   [...Object.values(NATIONAL_EVENT_LAYER_IDS)].reverse().forEach((layerId) => {
     if (map.getLayer(layerId)) map.removeLayer(layerId);
   });
   if (map.getSource(NATIONAL_EVENT_SOURCE_ID)) map.removeSource(NATIONAL_EVENT_SOURCE_ID);
-  map.getContainer().dataset.nationalEvents = "disabled";
-  delete map.getContainer().dataset.nationalEventCount;
+  setNationalEventDataset(map, "disabled", null);
+}
+
+export function nationalEventMapHasStyle(map: MapLibreMap) {
+  try {
+    return Boolean(map.getStyle());
+  } catch {
+    return false;
+  }
+}
+
+function setNationalEventDataset(map: MapLibreMap, state: "enabled" | "disabled", count?: number | null) {
+  try {
+    const dataset = map.getContainer().dataset;
+    dataset.nationalEvents = state;
+    if (typeof count === "number") dataset.nationalEventCount = String(count);
+    else if (count === null) delete dataset.nationalEventCount;
+  } catch {
+    // The container may also be detached during a full MapLibre teardown.
+  }
 }
 
 export function NationalEventLayer({
@@ -118,9 +144,9 @@ export function NationalEventLayer({
   }, [enabled, map]);
 
   useEffect(() => {
-    if (!map || !enabled) return;
+    if (!map || !enabled || !nationalEventMapHasStyle(map)) return;
     (map.getSource(NATIONAL_EVENT_SOURCE_ID) as GeoJSONSource | undefined)?.setData(featureCollection);
-    map.getContainer().dataset.nationalEventCount = String(featureCollection.features.length);
+    setNationalEventDataset(map, "enabled", featureCollection.features.length);
   }, [enabled, featureCollection, map]);
 
   return null;

@@ -12,6 +12,8 @@ import {
   reduceRadarPlaybackState,
   shouldRunRadarPlaybackTimer
 } from "../components/map/nationalRadarPlaybackState";
+import { removeNationalEventLayer } from "../components/map/NationalEventLayer";
+import type { Map as MapLibreMap } from "maplibre-gl";
 import type { NationalWeatherEvent, VisualLayerSummary } from "../lib/nationalWeatherTypes";
 
 function event(overrides: Partial<NationalWeatherEvent> & Pick<NationalWeatherEvent, "id" | "level">): NationalWeatherEvent {
@@ -97,6 +99,22 @@ test("national event cleanup removes fixed layers in reverse order before its so
     NATIONAL_EVENT_LAYER_IDS.watch,
     NATIONAL_EVENT_SOURCE_ID
   ]);
+});
+
+test("national event cleanup is a no-op after the parent MapLibre instance is destroyed", () => {
+  let styleAccesses = 0;
+  const container = { dataset: { nationalEvents: "enabled", nationalEventCount: "1125" } };
+  const disposedMap = {
+    getStyle: () => { throw new TypeError("Map style was already removed"); },
+    getLayer: () => { styleAccesses += 1; throw new Error("must not inspect layers"); },
+    getSource: () => { styleAccesses += 1; throw new Error("must not inspect sources"); },
+    getContainer: () => container
+  } as unknown as MapLibreMap;
+
+  assert.doesNotThrow(() => removeNationalEventLayer(disposedMap));
+  assert.equal(styleAccesses, 0);
+  assert.equal(container.dataset.nationalEvents, "disabled");
+  assert.equal("nationalEventCount" in container.dataset, false);
 });
 
 test("radar playback starts on the latest frame and navigates both directions", () => {
