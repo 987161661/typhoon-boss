@@ -38,7 +38,7 @@ export async function GET() {
       {
         source: {
           primary: "Official warnings remain the source of truth.",
-          machineReadableTrackSource: "Typhoon Boss Radar",
+          machineReadableTrackSource: "Weather Boss Radar",
           updatedAt: new Date().toISOString()
         },
         count: 0,

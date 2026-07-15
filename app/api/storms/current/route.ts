@@ -30,7 +30,7 @@ export async function GET() {
   } catch (error) {
     return NextResponse.json(
       {
-        source: "Typhoon Boss Radar",
+        source: "Weather Boss Radar",
         updatedAt: new Date().toISOString(),
         count: 0,
         storms: [],

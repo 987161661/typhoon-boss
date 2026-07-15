@@ -3,8 +3,8 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "台风 Boss 雷达",
-  description: "实时台风路径、风圈与历史档案的全屏中文雷达大屏。"
+  title: "气象 Boss 雷达",
+  description: "全国预警、雷达与环境态势优先，并保留完整台风指挥能力的中文气象大屏。"
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
