@@ -69,7 +69,9 @@ import {
   reduceNationalMapState,
   selectedStormForMap
 } from "./map/nationalMapState";
-import { useNationalSituation } from "./useNationalSituation";
+import { NationalSituationHud } from "./NationalSituationHud";
+import nationalRailStyles from "./NationalSituationRail.module.css";
+import { useNationalSituation, type NationalSituationState } from "./useNationalSituation";
 import { HudPanel, StatusPill } from "./HudPrimitives";
 import { BossSkillSlotPanel, IntelPanel } from "./IntelPanel";
 import type { CityAttention, CityAttentionAnchor } from "@/lib/liveCityInteraction";
@@ -408,7 +410,17 @@ export function TyphoonMap({
     intervalMs: 5 * 60 * 1000,
     enabled: !isLiveView || showLiveStandbyEnvironment
   });
-  const nationalSituation = useNationalSituation({ enabled: !isLiveView });
+  const nationalSituation = useNationalSituation({ enabled: true });
+  const focusNationalEvent = useCallback((eventId: string) => {
+    const event = nationalSituation.snapshot?.events.find((candidate) => candidate.id === eventId);
+    const center = event?.geography.centroid;
+    const map = mapRef.current;
+    if (!map || !center) return;
+    map.easeTo({ center: [center.longitude, center.latitude], zoom: Math.max(map.getZoom(), 5.2), duration: 700 });
+  }, [nationalSituation.snapshot]);
+  const firstDeterministicCityEventId = useMemo(() => nationalSituation.snapshot?.events.find((event) =>
+    event.geography.cityAttribution === "deterministic" && event.geography.cityCode !== null && event.geography.centroid !== null
+  )?.id ?? null, [nationalSituation.snapshot]);
   const matchedEcmwfTracks = useMemo(() => matchEcmwfTracks(storm, ecmwfTrackLayer), [ecmwfTrackLayer, storm]);
   const activeWindField = viewportWindField ?? windField;
   // A viewport GFS field is valid without a tracked cyclone as long as it was
@@ -877,16 +889,19 @@ export function TyphoonMap({
 
   return (
     <main
-      className="radar-shell"
+      className={`radar-shell ${isLiveView
+        ? nationalRailStyles.hasNationalSideRail
+        : nationalMapState.mode === "national" ? nationalRailStyles.hasStandardNationalRail : ""}`.trim()}
       data-theme={theme}
       data-view={view}
       data-map-mode={nationalMapState.mode}
       data-live-deck={isLiveView ? liveDeck : undefined}
       data-live-standby={showLiveStandbyEnvironment ? "true" : undefined}
+      data-national-side-rail={isLiveView ? "true" : undefined}
       data-live-rail-collapsed={isLiveView && showLiveStandbyEnvironment && liveEnvironmentCollapsed ? "true" : undefined}
     >
       {!isLiveView ? <div className="boot-scan" /> : null}
-      <section className="map-stage" aria-label="台风 Boss 雷达地图">
+      <section className="map-stage" aria-label="气象 Boss 雷达全国气象地图">
         {mapFailed ? <FallbackMap storm={storm} /> : <div className="map-canvas" ref={mapNode} />}
         {!mapFailed && gfsScalarLayer ? <canvas className="gfs-scalar-canvas" ref={gfsScalarCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed && gfsWaveVisible ? <canvas className="gfs-wave-canvas" ref={gfsWaveCanvasRef} aria-hidden="true" /> : null}
@@ -1054,46 +1069,67 @@ export function TyphoonMap({
         {!isLiveView ? <DefenseDrawer defense={selectedDefense} onClose={() => setSelectedDefense(null)} /> : null}
       </section>
 
-      {isLiveView ? showLiveStandbyEnvironment ? (
-        <EnvironmentLayerPanel
-          className="live-standby-environment-panel"
-          collapsible
-          collapsed={liveEnvironmentCollapsed}
-          onCollapsedChange={() => setLiveEnvironmentCollapsed((current) => !current)}
-          layers={environmentLayers}
-          satellite={satelliteLayer}
-          windField={activeWindField}
-          detailWindField={compatibleCoreWindField}
-          impactArea={impactArea}
-          gfsScalarLayer={gfsScalarLayer}
-          gfsScalarPayload={viewportGfsLayer}
-          cwaRadar={cwaRadarLayer}
-          cwaRadarVisible={cwaRadarVisible}
-          gfsWave={viewportGfsWave}
-          gfsWaveVisible={gfsWaveVisible}
-          ecmwfTracks={ecmwfTrackLayer}
-          ecmwfTracksVisible={ecmwfTracksVisible}
-          ecmwfMemberCount={matchedEcmwfTracks.ensemble?.members.length ?? 0}
-          observations={regionalObservations}
-          observationsVisible={observationsVisible}
-          windRenderMode={windRenderMode}
-          onToggle={toggleEnvironmentLayer}
-          onGfsScalarLayerChange={setGfsScalarLayer}
-          onCwaRadarToggle={() => setCwaRadarVisible((current) => !current)}
-          onGfsWaveToggle={() => setGfsWaveVisible((current) => !current)}
-          onEcmwfTracksToggle={() => setEcmwfTracksVisible((current) => !current)}
-          onObservationsToggle={() => setObservationsVisible((current) => !current)}
-          onWindRenderModeChange={setWindRenderMode}
-        />
-      ) : liveDeck === "briefing" ? (
-        <LiveAudiencePanel
-          model={liveModel}
-          storm={storm}
-          satelliteLayer={satelliteLayer}
-          refreshSequence={refreshSequence}
-        />
-      ) : (
-        <LiveIntelPanel model={liveModel} storm={storm} satelliteLayer={satelliteLayer} />
+      {isLiveView ? (
+        <div className={nationalRailStyles.liveRail} aria-label="气象 Boss 雷达直播证据侧栏">
+          <NationalSituationSurface
+            state={nationalSituation}
+            variant="compact"
+            className={nationalRailStyles.compactHud}
+          />
+          {showLiveStandbyEnvironment ? (
+            <EnvironmentLayerPanel
+              className={nationalRailStyles.environmentInRail}
+              collapsible
+              collapsed={liveEnvironmentCollapsed}
+              onCollapsedChange={() => setLiveEnvironmentCollapsed((current) => !current)}
+              layers={environmentLayers}
+              satellite={satelliteLayer}
+              windField={activeWindField}
+              detailWindField={compatibleCoreWindField}
+              impactArea={impactArea}
+              gfsScalarLayer={gfsScalarLayer}
+              gfsScalarPayload={viewportGfsLayer}
+              cwaRadar={cwaRadarLayer}
+              cwaRadarVisible={cwaRadarVisible}
+              gfsWave={viewportGfsWave}
+              gfsWaveVisible={gfsWaveVisible}
+              ecmwfTracks={ecmwfTrackLayer}
+              ecmwfTracksVisible={ecmwfTracksVisible}
+              ecmwfMemberCount={matchedEcmwfTracks.ensemble?.members.length ?? 0}
+              observations={regionalObservations}
+              observationsVisible={observationsVisible}
+              windRenderMode={windRenderMode}
+              onToggle={toggleEnvironmentLayer}
+              onGfsScalarLayerChange={setGfsScalarLayer}
+              onCwaRadarToggle={() => setCwaRadarVisible((current) => !current)}
+              onGfsWaveToggle={() => setGfsWaveVisible((current) => !current)}
+              onEcmwfTracksToggle={() => setEcmwfTracksVisible((current) => !current)}
+              onObservationsToggle={() => setObservationsVisible((current) => !current)}
+              onWindRenderModeChange={setWindRenderMode}
+            />
+          ) : liveDeck === "briefing" ? (
+            <LiveAudiencePanel
+              model={liveModel}
+              storm={storm}
+              satelliteLayer={satelliteLayer}
+              refreshSequence={refreshSequence}
+            />
+          ) : (
+            <LiveIntelPanel model={liveModel} storm={storm} satelliteLayer={satelliteLayer} />
+          )}
+        </div>
+      ) : nationalMapState.mode === "national" ? (
+        <div className={nationalRailStyles.standardRail} aria-label="全国气象态势侧栏">
+          <NationalSituationSurface
+            state={nationalSituation}
+            variant="full"
+            className={nationalRailStyles.standardHud}
+            onSelectEvent={focusNationalEvent}
+            onOpenCitySituation={firstDeterministicCityEventId
+              ? () => focusNationalEvent(firstDeterministicCityEventId)
+              : undefined}
+          />
+        </div>
       ) : (
         <IntelPanel
           storm={storm}
@@ -1568,6 +1604,67 @@ function syncRegionalSatelliteLayer(map: MapLibreMap, layer: SatelliteLayerPaylo
   map.setLayoutProperty(REGIONAL_SATELLITE_LAYER_ID, "visibility", visible ? "visible" : "none");
 }
 
+function NationalSituationSurface({
+  state,
+  variant,
+  className,
+  onSelectEvent,
+  onOpenCitySituation
+}: {
+  state: NationalSituationState;
+  variant: "full" | "compact";
+  className?: string;
+  onSelectEvent?: (eventId: string) => void;
+  onOpenCitySituation?: () => void;
+}) {
+  if (state.snapshot) {
+    if (!state.error) return (
+      <NationalSituationHud
+        snapshot={state.snapshot}
+        variant={variant}
+        className={className}
+        onSelectEvent={onSelectEvent}
+        onOpenCitySituation={onOpenCitySituation}
+      />
+    );
+    return (
+      <div
+        className={`${nationalRailStyles.retainedWrap} ${className ?? ""}`.trim()}
+        data-variant={variant}
+        aria-busy={state.refreshing}
+      >
+        <p className={nationalRailStyles.retainedNotice} role="status">
+          全国态势刷新失败，继续显示最近有效统一快照；这不代表当前无风险。{state.error}
+        </p>
+        <NationalSituationHud
+          snapshot={state.snapshot}
+          variant={variant}
+          className={variant === "full" ? nationalRailStyles.standardHud : undefined}
+          onSelectEvent={onSelectEvent}
+          onOpenCitySituation={onOpenCitySituation}
+        />
+      </div>
+    );
+  }
+
+  const loading = !state.loaded;
+  return (
+    <section
+      className={`${nationalRailStyles.stateSurface} ${className ?? ""}`.trim()}
+      data-variant={variant}
+      aria-live="polite"
+      aria-busy={loading || state.refreshing}
+    >
+      <span>NATIONAL SITUATION</span>
+      <strong>{loading ? "正在加载全国态势快照" : "全国态势快照暂时不可用"}</strong>
+      <p>{loading
+        ? "正在核对官方预警、环境图层和来源时效。"
+        : `${state.error ?? "统一快照未返回记录"}；当前无法据此判断全国风险。`}</p>
+      {!loading ? <button type="button" onClick={state.refresh}>重新获取快照</button> : null}
+    </section>
+  );
+}
+
 function satelliteImageKey(
   imageUrl: string,
   bounds: { west: number; south: number; east: number; north: number }
@@ -1846,8 +1943,8 @@ function TopCommandBar({
     return (
       <header className="top-command dossier-command">
         <div className="dossier-command-brand">
-          <span>{"\u53f0\u98ce\u60c5\u62a5\u6863\u6848\u5ba4"}</span>
-          <strong>BOSS DOSSIER</strong>
+          <span>气象 Boss 雷达</span>
+          <strong>WEATHER EVIDENCE DOSSIER</strong>
           <b>HISTORICAL COMMAND FILE</b>
         </div>
 
@@ -1868,7 +1965,7 @@ function TopCommandBar({
             <RadioTower size={15} aria-hidden="true" />
             直播版
           </Link>
-          <Link className="main-console-link" href="/console" aria-label="打开台风雷达控制台">
+          <Link className="main-console-link" href="/console" aria-label="打开气象 Boss 雷达控制台">
             <Settings2 size={15} aria-hidden="true" />
             控制台
           </Link>
@@ -1881,7 +1978,7 @@ function TopCommandBar({
   return (
     <header className="top-command">
       <div className="brand-block">
-        <span>{"\u53f0\u98ce BOSS \u96f7\u8fbe"}<i aria-label={storm && !dataError ? "执行中" : "未执行"} className={`brand-run-indicator ${storm && !dataError ? "is-running" : ""}`} title={storm && !dataError ? "执行中" : "未执行"} /></span>
+        <span>气象 Boss 雷达<i aria-label={storm && !dataError ? "执行中" : "未执行"} className={`brand-run-indicator ${storm && !dataError ? "is-running" : ""}`} title={storm && !dataError ? "执行中" : "未执行"} /></span>
         <strong>实时气象战术态势</strong>
       </div>
       <div className="live-radar-band">

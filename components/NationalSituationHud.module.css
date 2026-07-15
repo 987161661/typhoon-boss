@@ -1,0 +1,540 @@
+.hud {
+  --terminal-void: #05080a;
+  --archive-ivory: #ecfbff;
+  --telemetry-cyan: #00d8ff;
+  --official-red: #ff3b32;
+  --official-orange: #ff8a2a;
+  --signal-amber: #ffb000;
+  width: min(34rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  overflow: auto;
+  padding: 0.75rem;
+  color: var(--archive-ivory);
+  background:
+    linear-gradient(110deg, rgb(5 8 10 / 96%), rgb(5 8 10 / 82%)),
+    repeating-linear-gradient(90deg, rgb(0 216 255 / 3%) 0 1px, transparent 1px 3rem);
+  border: 1px solid rgb(0 216 255 / 32%);
+  box-shadow: 0 1.5rem 4rem rgb(0 0 0 / 42%);
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+  scrollbar-color: rgb(0 216 255 / 52%) rgb(5 8 10 / 70%);
+  container-type: inline-size;
+}
+
+.compact {
+  width: 100%;
+  max-height: none;
+  min-height: 6.9rem;
+  padding: 0.55rem 0.7rem 0.62rem;
+  overflow: hidden;
+  border-width: 0 0 1px;
+  box-shadow: none;
+  container-type: normal;
+}
+
+.compactBrand {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid rgb(0 216 255 / 32%);
+}
+
+.compactBrand strong {
+  font-family: "Bahnschrift SemiCondensed", "Bahnschrift", "Microsoft YaHei UI", sans-serif;
+  font-size: 1.02rem;
+  letter-spacing: 0.035em;
+}
+
+.compactBrand time,
+.compactSource span,
+.compactSource small,
+.compactEvent > div > span,
+.compactEvent > div > small {
+  font-family: "Bahnschrift", "Consolas", "Microsoft YaHei UI", monospace;
+  font-size: 0.64rem;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.035em;
+}
+
+.compactBrand time,
+.compactEvent > div > small,
+.compactSource small {
+  color: rgb(236 251 255 / 58%);
+}
+
+.compactEvent {
+  display: grid;
+  grid-template-columns: 2.65rem minmax(0, 1fr) minmax(7rem, 0.42fr);
+  gap: 0.58rem;
+  align-items: center;
+  padding-top: 0.42rem;
+}
+
+.compactBadge {
+  width: 2.5rem;
+  aspect-ratio: 1;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  opacity: 0.82;
+}
+
+.level_watch .compactBadge { opacity: 0.4; }
+
+.compactEvent > div:not(.compactSource) {
+  min-width: 0;
+}
+
+.compactEvent > div > span,
+.compactEvent > div > strong,
+.compactEvent > div > small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compactEvent > div > span {
+  color: var(--telemetry-cyan);
+}
+
+.level_red .compactEvent > div > span { color: var(--official-red); }
+.level_orange .compactEvent > div > span { color: var(--official-orange); }
+.level_yellow .compactEvent > div > span,
+.level_watch .compactEvent > div > span { color: var(--signal-amber); }
+
+.compactEvent > div > strong {
+  margin: 0.15rem 0;
+  font-family: "Bahnschrift SemiCondensed", "Bahnschrift", "Microsoft YaHei UI", sans-serif;
+  font-size: 0.92rem;
+}
+
+.compactSource {
+  min-width: 0;
+  padding-left: 0.58rem;
+  border-left: 1px dashed rgb(0 216 255 / 34%);
+}
+
+.compactSource span,
+.compactSource small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compactSource span { color: var(--archive-ivory); }
+
+.brandRail,
+.ledgerHeading,
+.eventMeta {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.brandRail {
+  padding: 0.25rem 0.35rem 0.7rem;
+  border-bottom: 1px solid rgb(0 216 255 / 42%);
+}
+
+.eyebrow,
+.syncTime span,
+.eventMeta,
+.warningSummary > span,
+.cityEntry > span,
+.ledgerHeading span,
+.sourceStatus,
+.sourceRow time {
+  font-family: "Bahnschrift", "Consolas", "Microsoft YaHei UI", monospace;
+  font-size: 0.69rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.eyebrow {
+  display: block;
+  color: rgb(0 216 255 / 74%);
+}
+
+.brandRail h2 {
+  margin: 0.1rem 0 0;
+  font-family: "Bahnschrift SemiCondensed", "Bahnschrift", "Microsoft YaHei UI", sans-serif;
+  font-size: clamp(1.5rem, 6.4cqi, 2rem);
+  line-height: 1;
+  letter-spacing: 0.035em;
+}
+
+.syncTime {
+  display: grid;
+  justify-items: end;
+  color: rgb(236 251 255 / 62%);
+}
+
+.syncTime time {
+  color: var(--archive-ivory);
+  font-family: "Bahnschrift", "Consolas", monospace;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.mainDossier {
+  position: relative;
+  min-height: 16.25rem;
+  margin-top: 0.7rem;
+  isolation: isolate;
+  overflow: hidden;
+}
+
+.dossierSkin {
+  position: absolute;
+  z-index: -3;
+  inset: 0;
+  background: url("/assets/weather-boss/national-dossier-fragment.svg") center / 100% 100% no-repeat;
+  opacity: 0.88;
+}
+
+.riskSeal {
+  position: absolute;
+  z-index: -1;
+  inset: 2.6rem 0.35rem auto;
+  height: 4.2rem;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  opacity: 0.8;
+}
+
+.eventBadge {
+  position: absolute;
+  z-index: -2;
+  top: 1.35rem;
+  right: 1rem;
+  width: 6.1rem;
+  aspect-ratio: 1;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  opacity: 0.32;
+}
+
+.level_red .eventBadge,
+.level_orange .eventBadge {
+  opacity: 0.68;
+}
+
+.level_watch .eventBadge {
+  opacity: 0.26;
+  filter: saturate(0.72);
+}
+
+.eventCopy,
+.emptyEvent {
+  position: relative;
+  z-index: 1;
+  padding: 1.05rem 1.2rem 1.1rem;
+}
+
+.eventMeta {
+  justify-content: flex-start;
+  align-items: center;
+  min-height: 1.35rem;
+  padding-right: 5.5rem;
+  color: rgb(236 251 255 / 74%);
+}
+
+.eventMeta time {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.levelLabel,
+.evidenceLabel {
+  padding: 0.18rem 0.38rem;
+  border: 1px solid currentcolor;
+}
+
+.level_red .levelLabel {
+  color: var(--official-red);
+  border-style: double;
+  border-width: 3px;
+}
+
+.level_orange .levelLabel {
+  color: var(--official-orange);
+  border-width: 2px;
+}
+
+.level_yellow .levelLabel,
+.level_watch .levelLabel {
+  color: var(--signal-amber);
+}
+
+.level_watch .levelLabel {
+  border-style: dashed;
+}
+
+.level_blue .levelLabel {
+  color: var(--telemetry-cyan);
+  border-style: double;
+  border-width: 3px;
+}
+
+.evidenceLabel {
+  color: var(--archive-ivory);
+  border-color: rgb(236 251 255 / 38%);
+}
+
+.eventCopy h3,
+.emptyEvent h3 {
+  max-width: 86%;
+  margin: 1.25rem 0 0.25rem;
+  font-family: "Bahnschrift SemiCondensed", "Bahnschrift", "Microsoft YaHei UI", sans-serif;
+  font-size: clamp(1.45rem, 6.2cqi, 2rem);
+  line-height: 1.12;
+  text-wrap: balance;
+}
+
+.level_red .eventCopy h3,
+.level_orange .eventCopy h3 {
+  font-size: clamp(1.6rem, 6.8cqi, 2.2rem);
+}
+
+.location {
+  display: block;
+  color: var(--telemetry-cyan);
+  font-size: 0.9rem;
+}
+
+.fact {
+  margin: 0.7rem 0 0;
+  font-size: 0.94rem;
+  font-weight: 700;
+  line-height: 1.55;
+}
+
+.limitation,
+.emptyEvent p {
+  margin: 0.5rem 0 0;
+  color: rgb(236 251 255 / 66%);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.limitation span {
+  margin-right: 0.45rem;
+  color: var(--signal-amber);
+  font-family: "Bahnschrift", "Consolas", monospace;
+  letter-spacing: 0.08em;
+}
+
+.eventAction,
+.cityEntry:is(button) {
+  border: 1px solid rgb(0 216 255 / 56%);
+  color: var(--archive-ivory);
+  background: rgb(5 8 10 / 72%);
+  cursor: pointer;
+}
+
+.eventAction {
+  margin-top: 0.75rem;
+  padding: 0.42rem 0.7rem;
+  font: 700 0.76rem/1 "Microsoft YaHei UI", sans-serif;
+}
+
+.eventAction:hover,
+.cityEntry:is(button):hover {
+  border-color: var(--telemetry-cyan);
+  background: rgb(0 216 255 / 11%);
+}
+
+.eventAction:focus-visible,
+.cityEntry:is(button):focus-visible {
+  outline: 3px solid var(--signal-amber);
+  outline-offset: 3px;
+}
+
+.emptyEvent {
+  display: grid;
+  min-height: 16rem;
+  align-content: center;
+}
+
+.evidenceRail {
+  height: 1.75rem;
+  margin: -0.5rem 0 0;
+  background: url("/assets/weather-boss/source-health-connector.svg") center / 100% 100% no-repeat;
+  opacity: 0.78;
+}
+
+.summaryGrid {
+  display: grid;
+  grid-template-columns: 0.9fr 1.1fr;
+  gap: 0.55rem;
+}
+
+.warningSummary,
+.cityEntry {
+  min-width: 0;
+  padding: 0.72rem;
+  text-align: left;
+  border: 1px solid rgb(236 251 255 / 22%);
+  background: rgb(5 8 10 / 66%);
+}
+
+.warningSummary strong,
+.cityEntry strong {
+  display: block;
+  margin-top: 0.32rem;
+  font-family: "Bahnschrift SemiCondensed", "Bahnschrift", "Microsoft YaHei UI", sans-serif;
+  font-size: 1rem;
+  line-height: 1.25;
+}
+
+.warningSummary p,
+.warningSummary time,
+.cityEntry small {
+  display: block;
+  margin: 0.28rem 0 0;
+  color: rgb(236 251 255 / 62%);
+  font-size: 0.68rem;
+  line-height: 1.35;
+}
+
+.summary_red {
+  border-left: 0.42rem double var(--official-red);
+}
+
+.summary_red strong { color: var(--official-red); }
+
+.summary_orange {
+  border-left: 0.32rem solid var(--official-orange);
+}
+
+.summary_orange strong { color: var(--official-orange); }
+
+.summary_yellow { border-left: 0.24rem solid var(--signal-amber); }
+.summary_blue { border-left: 0.3rem double var(--telemetry-cyan); }
+.summary_none { border-left: 0.2rem dashed rgb(236 251 255 / 36%); }
+.city_events { border-bottom-color: var(--telemetry-cyan); }
+.city_quiet { border-bottom-style: dashed; }
+
+.sourceLedger {
+  margin-top: 0.62rem;
+  padding: 0.68rem;
+  border: 1px solid rgb(0 216 255 / 24%);
+  background: rgb(5 8 10 / 62%);
+}
+
+.ledgerHeading {
+  align-items: center;
+  padding-bottom: 0.48rem;
+  border-bottom: 1px solid rgb(0 216 255 / 18%);
+}
+
+.ledgerHeading h3 {
+  margin: 0;
+  font-family: "Bahnschrift SemiCondensed", "Bahnschrift", "Microsoft YaHei UI", sans-serif;
+  font-size: 0.95rem;
+}
+
+.sourceLedger ul {
+  display: grid;
+  gap: 0.2rem;
+  margin: 0.45rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.sourceRow {
+  display: grid;
+  grid-template-columns: 1.35rem minmax(0, 1fr) auto auto;
+  gap: 0.15rem 0.42rem;
+  align-items: center;
+  min-height: 2.35rem;
+  padding: 0.28rem 0.34rem;
+  border-left: 2px solid rgb(236 251 255 / 18%);
+}
+
+.sourceRow[data-primary-evidence="true"] {
+  background: linear-gradient(90deg, rgb(0 216 255 / 11%), transparent 72%);
+  border-left-color: var(--telemetry-cyan);
+}
+
+.healthGlyph {
+  width: 1.25rem;
+  height: 1.25rem;
+  background-image: url("/assets/weather-boss/source-health-glyph-symbols.svg");
+  background-repeat: no-repeat;
+  background-size: 6.25rem 1.25rem;
+}
+
+.glyph_fresh { background-position: 0 0; }
+.glyph_delayed { background-position: -1.25rem 0; }
+.glyph_expired { background-position: -2.5rem 0; }
+.glyph_unavailable { background-position: -3.75rem 0; }
+.glyph_no_record { background-position: -5rem 0; }
+
+.sourceName {
+  overflow: hidden;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sourceStatus {
+  color: var(--archive-ivory);
+}
+
+.source_fresh .sourceStatus { color: var(--telemetry-cyan); }
+.source_delayed .sourceStatus { color: var(--signal-amber); }
+.source_expired .sourceStatus { text-decoration: line-through; }
+.source_unavailable .sourceStatus { border-bottom: 1px dashed currentcolor; }
+.source_no-record .sourceStatus { opacity: 0.58; }
+
+.sourceRow time {
+  color: rgb(236 251 255 / 58%);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.sourceRow small {
+  grid-column: 2 / -1;
+  color: rgb(236 251 255 / 49%);
+  font-size: 0.62rem;
+}
+
+@container (max-width: 27rem) {
+  .summaryGrid { grid-template-columns: 1fr; }
+  .mainDossier { min-height: 17rem; }
+  .eventMeta { padding-right: 3.8rem; }
+  .eventMeta time { display: none; }
+  .eventBadge { width: 4.5rem; }
+  .sourceRow { grid-template-columns: 1.35rem minmax(0, 1fr) auto; }
+  .sourceRow time { display: none; }
+}
+
+@media (max-height: 760px) {
+  .hud:not(.compact) { width: min(30rem, calc(100vw - 1rem), 100%); padding: 0.55rem; }
+  .mainDossier { min-height: 13.5rem; }
+  .emptyEvent { min-height: 13.25rem; }
+  .eventCopy { padding-block: 0.85rem; }
+  .eventCopy h3 { margin-top: 0.85rem; }
+  .sourceRow { min-height: 2rem; }
+  .sourceRow small { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hud *,
+  .hud *::before,
+  .hud *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

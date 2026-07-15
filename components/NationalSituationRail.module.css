@@ -1,0 +1,251 @@
+.standardRail {
+  position: relative;
+  z-index: 8;
+  grid-column: 2;
+  min-width: 0;
+  min-height: 0;
+  height: 100vh;
+  overflow: hidden;
+  background: #05080a;
+  border-left: 1px solid rgb(0 216 255 / 38%);
+}
+
+.standardHud {
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  border: 0;
+  box-shadow: none;
+}
+
+.liveRail {
+  position: relative;
+  z-index: 18;
+  grid-column: 2;
+  grid-row: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #05080a;
+  border-left: 1px solid rgb(0 216 255 / 34%);
+}
+
+.compactHud {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.liveRail > :global(.live-audience-panel),
+.liveRail > :global(.live-intel-panel),
+.liveRail > :global(.live-professional-panel),
+.liveRail > :global(.environment-panel) {
+  grid-column: 1;
+  grid-row: 2;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  border-right: 0;
+  border-left: 0;
+}
+
+.environmentInRail {
+  position: relative;
+  inset: auto;
+  z-index: auto;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  padding: 12px 16px 16px;
+  box-shadow: none;
+}
+
+.environmentInRail :global(.environment-panel-heading) {
+  flex: 0 0 auto;
+}
+
+.environmentInRail :global(.environment-panel-content) {
+  display: grid;
+  grid-template-rows: minmax(0, 1fr);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.environmentInRail :global(.environment-panel-content-inner) {
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 3px;
+  scrollbar-color: rgb(0 216 255 / 58%) rgb(5 8 10 / 72%);
+}
+
+.stateSurface {
+  display: grid;
+  align-content: center;
+  min-height: 100%;
+  padding: 1rem;
+  color: #ecfbff;
+  background:
+    url("/assets/weather-boss/national-dossier-fragment.svg") center / 100% 100% no-repeat,
+    #05080a;
+  font-family: "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+}
+
+.stateSurface[data-variant="compact"] {
+  min-height: 6.9rem;
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid rgb(0 216 255 / 32%);
+  background: #05080a;
+}
+
+.stateSurface span {
+  color: rgb(0 216 255 / 76%);
+  font: 700 0.68rem/1.2 "Bahnschrift", "Consolas", monospace;
+  letter-spacing: 0.1em;
+}
+
+.stateSurface strong {
+  display: block;
+  margin-top: 0.4rem;
+  font-family: "Bahnschrift SemiCondensed", "Bahnschrift", "Microsoft YaHei UI", sans-serif;
+  font-size: 1.2rem;
+}
+
+.stateSurface p,
+.retainedNotice {
+  margin: 0.4rem 0 0;
+  color: rgb(236 251 255 / 66%);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.stateSurface button {
+  justify-self: start;
+  margin-top: 0.75rem;
+  padding: 0.45rem 0.7rem;
+  color: #ecfbff;
+  border: 1px solid rgb(0 216 255 / 56%);
+  background: rgb(0 216 255 / 9%);
+  font: 700 0.75rem/1 "Microsoft YaHei UI", sans-serif;
+  cursor: pointer;
+}
+
+.stateSurface button:focus-visible {
+  outline: 3px solid #ffb000;
+  outline-offset: 3px;
+}
+
+.retainedWrap {
+  position: relative;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+.retainedNotice {
+  position: absolute;
+  z-index: 3;
+  top: 0.35rem;
+  right: 0.45rem;
+  left: 0.45rem;
+  margin: 0;
+  padding: 0.38rem 0.55rem;
+  color: #fff0c4;
+  border: 1px dashed rgb(255 176 0 / 64%);
+  background: rgb(5 8 10 / 94%);
+}
+
+.retainedWrap[data-variant="compact"] {
+  height: auto;
+}
+
+.retainedWrap[data-variant="compact"] .retainedNotice {
+  position: relative;
+  inset: auto;
+  padding: 0.3rem 0.55rem;
+  border-width: 0 0 1px;
+  font-size: 0.68rem;
+}
+
+@media (min-width: 1000px) {
+  .hasNationalSideRail:global(.radar-shell[data-view="live"][data-live-standby="true"][data-national-side-rail="true"]) {
+    --live-info-rail-width: clamp(420px, 30vw, 560px);
+    grid-template-columns: var(--live-info-rail-width) minmax(0, 1fr);
+  }
+
+  .hasNationalSideRail:global(.radar-shell[data-view="live"][data-live-standby="true"][data-national-side-rail="true"]) :global(.map-stage) {
+    grid-column: 2;
+    border-left: 1px solid rgb(0 216 255 / 48%);
+  }
+
+  .hasNationalSideRail:global(.radar-shell[data-view="live"][data-live-standby="true"][data-national-side-rail="true"]) :global(.live-topbar) {
+    left: 16px;
+  }
+
+  .liveRail {
+    grid-column: 1;
+    grid-row: 1;
+    border-right: 1px solid rgb(0 216 255 / 34%);
+    border-left: 0;
+  }
+}
+
+@media (max-width: 1180px) {
+  .hasStandardNationalRail:global(.radar-shell[data-view="standard"]) {
+    --national-narrow-rail-width: min(360px, 47vw);
+    grid-template-columns: minmax(0, 1fr) var(--national-narrow-rail-width);
+  }
+
+  .standardRail {
+    position: relative;
+    inset: auto;
+    width: auto;
+    height: 100vh;
+    border-width: 0 0 0 1px;
+  }
+}
+
+@media (max-width: 999px) {
+  .hasNationalSideRail:global(.radar-shell[data-view="live"]) {
+    --live-narrow-rail-width: min(42vw, 20rem);
+    grid-template-columns: var(--live-narrow-rail-width) minmax(0, 1fr);
+  }
+
+  .hasNationalSideRail:global(.radar-shell[data-view="live"]) :global(.map-stage) {
+    grid-column: 2;
+    grid-row: 1;
+    width: auto;
+    border-left: 1px solid rgb(0 216 255 / 48%);
+  }
+
+  .hasNationalSideRail:global(.radar-shell[data-view="live"]) :global(.live-bottom-bar) {
+    grid-column: 1 / -1;
+  }
+
+  .liveRail {
+    grid-column: 1;
+    grid-row: 1;
+    width: auto;
+    justify-self: start;
+    border-right: 1px solid rgb(0 216 255 / 34%);
+    border-left: 0;
+  }
+}
+
+@media (max-height: 760px) {
+  .environmentInRail {
+    padding: 8px 12px 12px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .liveRail,
+  .standardRail {
+    scroll-behavior: auto;
+  }
+}

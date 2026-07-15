@@ -274,7 +274,7 @@ export function LiveTopBar({
   return (
     <header className={`live-topbar status-${model.status}`} key={`${deck}-${cycle}`}>
       <div className="live-topbar-brand">
-        <span>台风 BOSS 雷达</span>
+        <span>气象 Boss 雷达</span>
         <strong><i /> LIVE · {deck === "briefing" ? "观众态势" : "专业分析"}</strong>
       </div>
       <div className="live-topbar-target">
