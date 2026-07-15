@@ -2,6 +2,17 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  CITY_SCENE_MAX_IDLE_MS,
+  CITY_SCENE_MIN_MS,
+  createLiveDirectorQueueState,
+  retainQueuedRequestPayloads,
+  selectDirectorLens,
+  transitionLiveDirectorQueue,
+  type DirectorIdleContext,
+  type LiveDirectorQueueAction,
+  type LiveDirectorQueueState
+} from "@/lib/liveDirectorQueue";
+import {
   toCityInteractionRequest,
   type CityInteractionRequest,
   type HostLiveComment
@@ -10,42 +21,53 @@ import {
 const CITY_COOLDOWN_MS = 90_000;
 const EVENT_DEDUPLICATION_MS = 10 * 60_000;
 const MAX_PENDING_INTERACTIONS = 5;
-const MIN_ACTIVE_MS = 10_000;
 
-export function useLiveCityInteractionQueue() {
-  const [active, setActive] = useState<CityInteractionRequest | null>(null);
-  const [queueVersion, setQueueVersion] = useState(0);
-  const pendingRef = useRef<CityInteractionRequest[]>([]);
-  const activeStartedAtRef = useRef(0);
-  const preemptionTimerRef = useRef<number | null>(null);
+const DEFAULT_IDLE_CONTEXT: DirectorIdleContext = {
+  highestOfficialWarningLevel: null,
+  focusedStormId: null
+};
+
+export function useLiveCityInteractionQueue(idleContext: DirectorIdleContext = DEFAULT_IDLE_CONTEXT) {
+  const highestOfficialWarningLevel = idleContext.highestOfficialWarningLevel;
+  const focusedStormId = idleContext.focusedStormId;
+  const [machine, setMachine] = useState<LiveDirectorQueueState>(() => createLiveDirectorQueueState(idleContext));
+  const machineRef = useRef(machine);
   const seenEventAtRef = useRef(new Map<string, number>());
   const cityAcceptedAtRef = useRef(new Map<string, number>());
+  const interactionRequestsRef = useRef(new Map<string, CityInteractionRequest>());
 
-  const advance = useCallback(() => {
-    setActive((current) => {
-      if (current) return current;
-      const next = pendingRef.current.shift() ?? null;
-      if (next) activeStartedAtRef.current = Date.now();
-      return next;
-    });
-  }, []);
-
-  const schedulePreemption = useCallback(() => {
-    if (preemptionTimerRef.current !== null) return;
-    const wait = Math.max(0, MIN_ACTIVE_MS - (Date.now() - activeStartedAtRef.current));
-    preemptionTimerRef.current = window.setTimeout(() => {
-      preemptionTimerRef.current = null;
-      setActive(null);
-    }, wait);
+  const apply = useCallback((action: LiveDirectorQueueAction) => {
+    const next = transitionLiveDirectorQueue(machineRef.current, action);
+    machineRef.current = next;
+    setMachine(next);
+    return next;
   }, []);
 
   useEffect(() => {
-    if (!active) advance();
-  }, [active, advance, queueVersion]);
+    apply({
+      type: "idle-context",
+      context: { highestOfficialWarningLevel, focusedStormId },
+      now: Date.now()
+    });
+  }, [apply, focusedStormId, highestOfficialWarningLevel]);
 
-  useEffect(() => () => {
-    if (preemptionTimerRef.current !== null) window.clearTimeout(preemptionTimerRef.current);
-  }, []);
+  useEffect(() => {
+    const active = machine.active;
+    if (!active) return;
+    const releaseAt = active.startedAt + (
+      active.releaseRequested || machine.pending.length
+        ? CITY_SCENE_MIN_MS
+        : CITY_SCENE_MAX_IDLE_MS
+    );
+    const timer = window.setTimeout(() => {
+      apply({ type: "tick", now: Date.now() });
+    }, Math.max(0, releaseAt - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [apply, machine.active, machine.pending.length]);
+
+  useEffect(() => {
+    retainQueuedRequestPayloads(interactionRequestsRef.current, machine);
+  }, [machine]);
 
   const submitComment = useCallback((comment: HostLiveComment) => {
     const request = toCityInteractionRequest(comment);
@@ -55,65 +77,50 @@ export function useLiveCityInteractionQueue() {
     const seenAt = seenEventAtRef.current.get(request.id);
     if (seenAt && now - seenAt < EVENT_DEDUPLICATION_MS) return false;
     seenEventAtRef.current.set(request.id, now);
-    for (const [id, recordedAt] of seenEventAtRef.current) {
-      if (now - recordedAt > EVENT_DEDUPLICATION_MS) seenEventAtRef.current.delete(id);
-    }
+    pruneOlderThan(seenEventAtRef.current, now, EVENT_DEDUPLICATION_MS);
 
-    const cityKey = request.cityQuery.normalize("NFKC").toLocaleLowerCase("zh-CN");
+    const cityKey = normalizeCityKey(request.cityQuery);
     const acceptedAt = cityAcceptedAtRef.current.get(cityKey);
     if (!isRadarOperator && acceptedAt && now - acceptedAt < CITY_COOLDOWN_MS) return false;
 
-    // The local radar console is an operator control, not an audience spam
-    // source. It goes to the front of the waiting line, but it still respects
-    // the active card's minimum on-screen time.
-    if (isRadarOperator) {
-      cityAcceptedAtRef.current.set(cityKey, now);
-      if (!active) {
-        activeStartedAtRef.current = now;
-        setActive(request);
-        return true;
-      }
-      pendingRef.current = [request, ...pendingRef.current.filter((item) => item.cityQuery !== request.cityQuery)].slice(0, MAX_PENDING_INTERACTIONS);
-      schedulePreemption();
-      setQueueVersion((version) => version + 1);
-      return true;
-    }
+    const current = machineRef.current;
+    if (
+      current.active?.request.cityKey === cityKey
+      || current.pending.some((item) => item.cityKey === cityKey)
+      || current.pending.length >= MAX_PENDING_INTERACTIONS
+    ) return false;
 
-    if (active?.cityQuery === request.cityQuery || pendingRef.current.some((item) => item.cityQuery === request.cityQuery)) return false;
-
-    if (!active) {
-      cityAcceptedAtRef.current.set(cityKey, now);
-      activeStartedAtRef.current = now;
-      setActive(request);
-      return true;
-    }
-
-    if (pendingRef.current.length >= MAX_PENDING_INTERACTIONS) return false;
     cityAcceptedAtRef.current.set(cityKey, now);
-    for (const [city, recordedAt] of cityAcceptedAtRef.current) {
-      if (now - recordedAt > CITY_COOLDOWN_MS) cityAcceptedAtRef.current.delete(city);
-    }
-    pendingRef.current.push(request);
-    if (active) schedulePreemption();
-    setQueueVersion((version) => version + 1);
+    pruneOlderThan(cityAcceptedAtRef.current, now, CITY_COOLDOWN_MS);
+    interactionRequestsRef.current.set(request.id, request);
+    apply({
+      type: "request",
+      request: { id: request.id, cityKey, lensIntent: { kind: "national" } },
+      position: isRadarOperator ? "front" : "back",
+      now
+    });
     return true;
-  }, [active, schedulePreemption]);
+  }, [apply]);
 
   const completeActive = useCallback((id: string) => {
-    setActive((current) => {
-      if (current?.id !== id) return current;
-      if (preemptionTimerRef.current !== null) {
-        window.clearTimeout(preemptionTimerRef.current);
-        preemptionTimerRef.current = null;
-      }
-      return null;
-    });
-  }, []);
+    apply({ type: "complete", id, now: Date.now() });
+  }, [apply]);
 
   return {
-    active,
-    pendingCount: pendingRef.current.length,
+    active: machine.active ? interactionRequestsRef.current.get(machine.active.request.id) ?? null : null,
+    pendingCount: machine.pending.length,
+    lensIntent: selectDirectorLens(machine),
     submitComment,
     completeActive
   };
+}
+
+function normalizeCityKey(value: string) {
+  return value.normalize("NFKC").toLocaleLowerCase("zh-CN");
+}
+
+function pruneOlderThan(map: Map<string, number>, now: number, ttl: number) {
+  for (const [key, recordedAt] of map) {
+    if (now - recordedAt > ttl) map.delete(key);
+  }
 }

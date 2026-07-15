@@ -8,6 +8,7 @@ import { LiveOperatorControls } from "./LiveOperatorControls";
 import { LiveCityInteraction } from "./LiveCityInteraction";
 import { LiveCityTargetLock } from "./LiveCityTargetLock";
 import { useLiveCityInteractionQueue } from "./useLiveCityInteractionQueue";
+import { useNationalSituation } from "./useNationalSituation";
 import { createLiveCityEventId, type CityAttention, type CityAttentionAnchor, type HostLiveComment } from "@/lib/liveCityInteraction";
 import {
   DEFAULT_LIVE_CONTROL_SETTINGS,
@@ -35,7 +36,11 @@ export function LiveDirector() {
   const [cityOverlayHost, setCityOverlayHost] = useState<HTMLElement | null>(null);
   const transitionTimerRef = useRef<number | null>(null);
   const ready = loaded.briefing || loaded.analysis;
-  const cityInteractions = useLiveCityInteractionQueue();
+  const nationalSituation = useNationalSituation();
+  const cityInteractions = useLiveCityInteractionQueue({
+    highestOfficialWarningLevel: nationalSituation.snapshot?.warnings.highestLevel ?? null,
+    focusedStormId: nationalSituation.snapshot?.storms[0]?.id ?? null
+  });
 
   useEffect(() => {
     setCityOverlayHost(document.body);
@@ -153,6 +158,8 @@ export function LiveDirector() {
       data-active-scene={activeScene}
       data-ready={ready ? "true" : "false"}
       data-switching={switching ? "true" : "false"}
+      data-camera-intent={cityInteractions.lensIntent.kind}
+      data-camera-storm-id={cityInteractions.lensIntent.kind === "typhoon" ? cityInteractions.lensIntent.stormId : undefined}
     >
       <section
         className="live-director-scene is-active"
