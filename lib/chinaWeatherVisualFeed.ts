@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { assertWeatherProviderResponse, describeWeatherProviderFailure } from "./weatherProviderBoundary";
 
 const SNAPSHOT_PATH = resolve(process.cwd(), ".runtime/china-weather-visuals.json");
 const RADAR_INDEX = "https://d1.weather.com.cn/radar/JC_RADAR_CHN_JB_V3.html";
@@ -47,7 +48,7 @@ async function fetchRadar() {
     });
     return { status: "available" as const, frames: frames.slice(-12).reverse() };
   } catch (error) {
-    return { status: "unavailable" as const, frames: [], error: error instanceof Error ? error.message : String(error) };
+    return { status: "unavailable" as const, frames: [], error: describeWeatherProviderFailure("China Weather radar index", error).message };
   }
 }
 
@@ -62,7 +63,7 @@ async function fetchSatellite() {
     });
     return { status: "available" as const, frames: frames.slice(-12).reverse(), sourceEndpoint: SATELLITE_INDEX };
   } catch (error) {
-    return { status: "unavailable" as const, frames: [], sourceEndpoint: SATELLITE_INDEX, error: error instanceof Error ? error.message : String(error) };
+    return { status: "unavailable" as const, frames: [], sourceEndpoint: SATELLITE_INDEX, error: describeWeatherProviderFailure("China Weather satellite index", error).message };
   }
 }
 
@@ -72,8 +73,12 @@ async function fetchJsonp(url: string, callback: string) {
     cache: "no-store",
     signal: AbortSignal.timeout(15_000)
   });
-  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  assertWeatherProviderResponse(response, `China Weather ${callback} index`);
   const text = (await response.text()).trim();
+  return parseChinaWeatherJsonp(text, callback);
+}
+
+export function parseChinaWeatherJsonp(text: string, callback: string) {
   const prefix = `${callback}(`;
   if (!text.startsWith(prefix) || !text.endsWith(")")) throw new Error("Unexpected JSONP payload");
   // The official feed is JSONP-like rather than strict JSON: frame objects use

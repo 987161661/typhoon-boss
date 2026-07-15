@@ -52,13 +52,14 @@ test("TyphoonStormLayer installs fixed resources, updates by setData, and cleans
 
   const officialCenter = featureCollection("official-center");
   const fleetRoutes = featureCollection("fleet-route");
+  const officialWindRadius = featureCollection("official-wind-radius");
   updateTyphoonStormLayer(fixture.map, {
     storm: {
       track: officialCenter,
       forecast: featureCollection(),
       trackPoints: featureCollection(),
       forecastPoints: featureCollection(),
-      r7: featureCollection(),
+      r7: officialWindRadius,
       r10: featureCollection(),
       r12: featureCollection()
     },
@@ -69,9 +70,30 @@ test("TyphoonStormLayer installs fixed resources, updates by setData, and cleans
   assert.deepEqual(officialCenter.features[0].geometry, { type: "Point", coordinates: [121.25, 22.75] });
   assert.equal(fixture.canvas.dataset.fleetForecastRoutes, "1");
   assert.equal(fixture.canvas.dataset.fleetForecastAgencies, "CMA");
+  assert.equal(fixture.canvas.dataset.officialWindRadii, "visible");
+  assert.equal(fixture.sources.get(TYPHOON_STORM_SOURCE_IDS.windR7)?.data, officialWindRadius);
+  assert.equal(fixture.canvas.dataset.officialWindRadiusFeatures, "1");
+
+  updateTyphoonStormLayer(fixture.map, {
+    storm: {
+      track: officialCenter,
+      forecast: featureCollection(),
+      trackPoints: featureCollection(),
+      forecastPoints: featureCollection(),
+      r7: officialWindRadius,
+      r10: featureCollection(),
+      r12: featureCollection()
+    },
+    fleet: { routes: fleetRoutes, points: featureCollection() },
+    windRadiiVisible: false
+  });
+  assert.equal(fixture.sources.get(TYPHOON_STORM_SOURCE_IDS.windR7)?.data.features.length, 0);
+  assert.equal(fixture.canvas.dataset.officialWindRadii, "hidden");
+  assert.equal(fixture.canvas.dataset.officialWindRadiusFeatures, "0");
 
   removeTyphoonStormLayer(fixture.map);
   assert.equal(fixture.layers.size, 0);
   assert.equal(fixture.sources.size, 0);
   assert.equal(fixture.container.dataset.typhoonStormLayer, "removed");
+  assert.equal(fixture.canvas.dataset.officialWindRadii, undefined);
 });

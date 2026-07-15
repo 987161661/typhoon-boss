@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { assertWeatherProviderResponse } from "./weatherProviderBoundary";
 
 const SOURCE_URL = "https://product.weather.com.cn/alarm/grepalarm_cn.php";
 const SNAPSHOT_PATH = resolve(process.cwd(), ".runtime/china-weather-national-warnings.json");
@@ -42,8 +43,8 @@ export async function refreshChinaWeatherWarnings() {
     cache: "no-store",
     signal: AbortSignal.timeout(15_000)
   });
-  if (!response.ok) throw new Error(`China Weather warning feed HTTP ${response.status}`);
-  const payload = parseAlarmScript(await response.text());
+  assertWeatherProviderResponse(response, "China Weather warning feed");
+  const payload = parseChinaWeatherAlarmScript(await response.text());
   const warnings = payload.data.flatMap((row) => normalizeWarning(row));
   warnings.sort((a, b) => b.severity - a.severity || (Date.parse(b.issuedAt ?? "") || 0) - (Date.parse(a.issuedAt ?? "") || 0));
   const snapshot: ChinaWeatherWarningSnapshot = {
@@ -66,7 +67,7 @@ export async function readChinaWeatherWarnings() {
   }
 }
 
-function parseAlarmScript(script: string): { count?: string | number; data: unknown[][] } {
+export function parseChinaWeatherAlarmScript(script: string): { count?: string | number; data: unknown[][] } {
   const match = script.match(/var\s+alarminfo\s*=\s*(\{[\s\S]*\})\s*;?\s*$/);
   if (!match) throw new Error("China Weather warning feed format changed");
   const payload = JSON.parse(match[1]) as { count?: string | number; data?: unknown };

@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { assertWeatherProviderResponse, describeWeatherProviderFailure } from "./weatherProviderBoundary";
 
 const PRODUCT_API = "https://productsapi.weather.com.cn/products/getOldPicData?type=";
 const IMAGE_BASE = "https://pi.weather.com.cn/i/product/pic/l/";
@@ -70,20 +71,27 @@ export async function refreshChinaWeatherProducts(force = false) {
         cache: "no-store",
         signal: AbortSignal.timeout(15_000)
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const payload = JSON.parse(await response.text()) as { status?: string; result?: { list?: Array<{ fname?: string; ptime?: string; itime?: string }> } };
+      assertWeatherProviderResponse(response, `China Weather product ${definition.id}`);
+      const payload = parseChinaWeatherProductPayload(await response.text());
       const frames = (payload.result?.list ?? []).flatMap((frame) => {
         const filename = frame.fname?.trim();
         return filename ? [{ filename, imageUrl: `${IMAGE_BASE}${filename}`, productTime: frame.ptime?.trim() || null, ingestedAt: frame.itime?.trim() || null }] : [];
       });
       return { ...definition, frames: frames.slice(0, 8), status: "available" as const };
     } catch (error) {
-      return { ...definition, frames: [], status: "unavailable" as const, error: error instanceof Error ? error.message : String(error) };
+      return { ...definition, frames: [], status: "unavailable" as const, error: describeWeatherProviderFailure(`China Weather product ${definition.id}`, error).message };
     }
   });
   const snapshot: ChinaWeatherProductSnapshot = { fetchedAt: new Date().toISOString(), source: "China Weather professional product directory", refreshIntervalMinutes: REFRESH_INTERVAL_MS / 60_000, products };
   await writeJsonAtomic(SNAPSHOT_PATH, snapshot);
   return snapshot;
+}
+
+export function parseChinaWeatherProductPayload(text: string): {
+  status?: string;
+  result?: { list?: Array<{ fname?: string; ptime?: string; itime?: string }> };
+} {
+  return JSON.parse(text);
 }
 
 export async function readChinaWeatherProducts() {

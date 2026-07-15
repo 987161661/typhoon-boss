@@ -516,6 +516,9 @@ export function TyphoonMap({
     ),
     [canonicalStormWindField, snapshot?.environment.windCenters, storm?.id, storms]
   );
+  const officialWindRadiusFeatureCount = stormGeo.r7.features.length
+    + stormGeo.r10.features.length
+    + stormGeo.r12.features.length;
   const activeMarkerStorm = markerStorms.find((item) => item.id === storm?.id) ?? null;
   const provinceAlerts = useMemo(() => buildProvinceAlerts(storm, watchRegions), [storm, watchRegions]);
   const toggleEnvironmentLayer = useCallback((layer: EnvironmentLayerKey) => {
@@ -790,7 +793,11 @@ export function TyphoonMap({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
-    updateTyphoonStormLayer(map, { storm: stormGeo, fleet: stormFleetGeo });
+    updateTyphoonStormLayer(map, {
+      storm: stormGeo,
+      fleet: stormFleetGeo,
+      windRadiiVisible: environmentLayers.impact
+    });
     renderStormOnMap(map, activeMarkerStorm, markerRef, satelliteLayer, bossProfile);
     syncStormFleetMarkers(map, markerStorms, storm?.id ?? null, fleetMarkerRefs.current, bossProfiles, satelliteLayer);
     if (cityAttentionRef.current) return;
@@ -807,7 +814,7 @@ export function TyphoonMap({
       map.easeTo({ center: NATIONAL_CAMERA.center, zoom: NATIONAL_CAMERA.zoom, duration: 900 });
       focusedStormIdRef.current = null;
     }
-  }, [storm, storms, markerStorms, activeMarkerStorm, stormGeo, stormFleetGeo, mapReady, theme, satelliteLayer, bossProfile, bossProfiles, view]);
+  }, [storm, storms, markerStorms, activeMarkerStorm, stormGeo, stormFleetGeo, mapReady, theme, satelliteLayer, bossProfile, bossProfiles, view, environmentLayers.impact]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1005,6 +1012,7 @@ export function TyphoonMap({
                 windField={activeWindField}
                 detailWindField={compatibleCoreWindField}
                 impactArea={impactArea}
+                officialWindRadiusFeatureCount={officialWindRadiusFeatureCount}
                 gfsScalarLayer={gfsScalarLayer}
                 gfsScalarPayload={viewportGfsLayer}
                 cwaRadar={cwaRadarLayer}
@@ -1038,6 +1046,7 @@ export function TyphoonMap({
                 windField={activeWindField}
                 detailWindField={compatibleCoreWindField}
                 impactArea={impactArea}
+                officialWindRadiusFeatureCount={officialWindRadiusFeatureCount}
                 gfsScalarLayer={gfsScalarLayer}
                 gfsScalarPayload={viewportGfsLayer}
                 cwaRadar={cwaRadarLayer}
@@ -1087,6 +1096,7 @@ export function TyphoonMap({
               windField={activeWindField}
               detailWindField={compatibleCoreWindField}
               impactArea={impactArea}
+              officialWindRadiusFeatureCount={officialWindRadiusFeatureCount}
               gfsScalarLayer={gfsScalarLayer}
               gfsScalarPayload={viewportGfsLayer}
               cwaRadar={cwaRadarLayer}
@@ -1559,10 +1569,11 @@ function ProjectedMapOverlays({
 
 function syncRegionalSatelliteLayer(map: MapLibreMap, layer: SatelliteLayerPayload | null, visible: boolean) {
   const imageUrl = layer?.status === "available" ? layer.imageUrl : null;
-  if (!imageUrl || !layer) {
+  if (!visible || !imageUrl || !layer) {
     if (map.getLayer(REGIONAL_SATELLITE_LAYER_ID)) map.removeLayer(REGIONAL_SATELLITE_LAYER_ID);
     if (map.getSource(REGIONAL_SATELLITE_SOURCE_ID)) map.removeSource(REGIONAL_SATELLITE_SOURCE_ID);
     regionalSatelliteImageUrls.delete(map);
+    map.getContainer().dataset.regionalSatelliteLayer = "removed";
     return;
   }
 
@@ -1601,7 +1612,7 @@ function syncRegionalSatelliteLayer(map: MapLibreMap, layer: SatelliteLayerPaylo
       beforeLayer
     );
   }
-  map.setLayoutProperty(REGIONAL_SATELLITE_LAYER_ID, "visibility", visible ? "visible" : "none");
+  map.getContainer().dataset.regionalSatelliteLayer = "visible";
 }
 
 function NationalSituationSurface({
@@ -1675,10 +1686,11 @@ function satelliteImageKey(
 function syncGlobalSatelliteLayer(map: MapLibreMap, layer: SatelliteLayerPayload | null, visible: boolean) {
   const imageUrl = layer?.status === "available" ? layer.globalImageUrl : null;
   const bounds = layer?.globalBounds;
-  if (!imageUrl || !bounds) {
+  if (!visible || !imageUrl || !bounds) {
     if (map.getLayer(GLOBAL_SATELLITE_LAYER_ID)) map.removeLayer(GLOBAL_SATELLITE_LAYER_ID);
     if (map.getSource(GLOBAL_SATELLITE_SOURCE_ID)) map.removeSource(GLOBAL_SATELLITE_SOURCE_ID);
     globalSatelliteImageUrls.delete(map);
+    map.getContainer().dataset.globalSatelliteLayer = "removed";
     return;
   }
 
@@ -1722,7 +1734,7 @@ function syncGlobalSatelliteLayer(map: MapLibreMap, layer: SatelliteLayerPayload
       beforeLayer
     );
   }
-  map.setLayoutProperty(GLOBAL_SATELLITE_LAYER_ID, "visibility", visible ? "visible" : "none");
+  map.getContainer().dataset.globalSatelliteLayer = "visible";
 }
 
 function syncCwaRadarLayer(map: MapLibreMap, layer: RadarMosaicLayerPayload | null, visible: boolean) {
@@ -2119,6 +2131,7 @@ function EnvironmentLayerPanel({
   windField,
   detailWindField,
   impactArea,
+  officialWindRadiusFeatureCount,
   gfsScalarLayer,
   gfsScalarPayload,
   cwaRadar,
@@ -2148,6 +2161,7 @@ function EnvironmentLayerPanel({
   windField: WindFieldPayload | null;
   detailWindField: WindFieldPayload | null;
   impactArea: ImpactAreaPayload | null;
+  officialWindRadiusFeatureCount: number;
   gfsScalarLayer: GfsScalarLayerId | null;
   gfsScalarPayload: GfsScalarLayerPayload | null;
   cwaRadar: RadarMosaicLayerPayload | null;
@@ -2193,7 +2207,9 @@ function EnvironmentLayerPanel({
       id: "impact",
       icon: Shield,
       label: "官方风圈",
-      status: impactArea?.status === "available" ? `${impactArea.featureCount} 个风力阈值范围` : impactArea?.reason ?? "等待资料",
+      status: officialWindRadiusFeatureCount > 0
+        ? `${officialWindRadiusFeatureCount} 个官方风圈`
+        : impactArea?.status === "available" ? `${impactArea.featureCount} 个风力阈值范围` : impactArea?.reason ?? "等待资料",
       alert: impactArea?.status !== "available"
     },
     {

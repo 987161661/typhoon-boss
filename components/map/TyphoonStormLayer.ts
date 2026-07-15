@@ -14,6 +14,12 @@ export const TYPHOON_STORM_SOURCE_IDS = {
 } as const;
 
 export const TYPHOON_STORM_LAYER_IDS = [
+  "wind-r7-fill",
+  "wind-r7-line",
+  "wind-r10-fill",
+  "wind-r10-line",
+  "wind-r12-fill",
+  "wind-r12-line",
   "fleet-track-lines",
   "fleet-forecast-lines",
   "fleet-track-points",
@@ -42,6 +48,7 @@ export interface TyphoonStormFleetGeoData {
 export interface TyphoonStormLayerData {
   storm: TyphoonStormGeoData;
   fleet: TyphoonStormFleetGeoData;
+  windRadiiVisible?: boolean;
 }
 
 const emptyFeatureCollection = (): FeatureCollection => ({ type: "FeatureCollection", features: [] });
@@ -52,6 +59,9 @@ export function installTyphoonStormLayer(map: MapLibreMap) {
   });
 
   const layers: LayerSpecification[] = [
+    ...windRadiusLayers("wind-r7", TYPHOON_STORM_SOURCE_IDS.windR7, "#31d6f4", 0.09),
+    ...windRadiusLayers("wind-r10", TYPHOON_STORM_SOURCE_IDS.windR10, "#ffb000", 0.11),
+    ...windRadiusLayers("wind-r12", TYPHOON_STORM_SOURCE_IDS.windR12, "#ff4b3e", 0.14),
     {
       id: "fleet-track-lines", type: "line", source: TYPHOON_STORM_SOURCE_IDS.fleetRoutes,
       filter: ["==", ["get", "routeKind"], "track"],
@@ -123,6 +133,7 @@ export function installTyphoonStormLayer(map: MapLibreMap) {
 }
 
 export function updateTyphoonStormLayer(map: MapLibreMap, data: TyphoonStormLayerData) {
+  const windRadiiVisible = data.windRadiiVisible !== false;
   const sourceData: Record<keyof typeof TYPHOON_STORM_SOURCE_IDS, FeatureCollection> = {
     track: data.storm.track,
     forecast: data.storm.forecast,
@@ -130,9 +141,9 @@ export function updateTyphoonStormLayer(map: MapLibreMap, data: TyphoonStormLaye
     forecastPoints: data.storm.forecastPoints,
     fleetRoutes: data.fleet.routes,
     fleetPoints: data.fleet.points,
-    windR7: data.storm.r7,
-    windR10: data.storm.r10,
-    windR12: data.storm.r12
+    windR7: windRadiiVisible ? data.storm.r7 : emptyFeatureCollection(),
+    windR10: windRadiiVisible ? data.storm.r10 : emptyFeatureCollection(),
+    windR12: windRadiiVisible ? data.storm.r12 : emptyFeatureCollection()
   };
   Object.entries(sourceData).forEach(([key, featureCollection]) => {
     const sourceId = TYPHOON_STORM_SOURCE_IDS[key as keyof typeof TYPHOON_STORM_SOURCE_IDS];
@@ -144,6 +155,12 @@ export function updateTyphoonStormLayer(map: MapLibreMap, data: TyphoonStormLaye
   map.getCanvas().dataset.fleetForecastAgencies = [...new Set(forecastFeatures
     .map((feature) => String(feature.properties?.agencyCode ?? ""))
     .filter(Boolean))].join(",");
+  map.getCanvas().dataset.officialWindRadii = windRadiiVisible ? "visible" : "hidden";
+  map.getCanvas().dataset.officialWindRadiusFeatures = String(
+    windRadiiVisible
+      ? data.storm.r7.features.length + data.storm.r10.features.length + data.storm.r12.features.length
+      : 0
+  );
 }
 
 export function removeTyphoonStormLayer(map: MapLibreMap) {
@@ -156,4 +173,28 @@ export function removeTyphoonStormLayer(map: MapLibreMap) {
   map.getContainer().dataset.typhoonStormLayer = "removed";
   delete map.getCanvas().dataset.fleetForecastRoutes;
   delete map.getCanvas().dataset.fleetForecastAgencies;
+  delete map.getCanvas().dataset.officialWindRadii;
+  delete map.getCanvas().dataset.officialWindRadiusFeatures;
+}
+
+function windRadiusLayers(
+  id: string,
+  source: string,
+  color: string,
+  opacity: number
+): LayerSpecification[] {
+  return [
+    {
+      id: `${id}-fill`,
+      type: "fill",
+      source,
+      paint: { "fill-color": color, "fill-opacity": opacity }
+    },
+    {
+      id: `${id}-line`,
+      type: "line",
+      source,
+      paint: { "line-color": color, "line-width": 1.5, "line-opacity": 0.76 }
+    }
+  ];
 }
