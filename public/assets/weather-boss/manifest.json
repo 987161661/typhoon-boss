@@ -1,0 +1,716 @@
+{
+  "schemaVersion": "1.0.0",
+  "kit": "Weather Boss HUD Kit",
+  "status": "partially-generated",
+  "generatedAssetsPresent": true,
+  "theme": "night-radar-damaged-terminal-archive-command",
+  "textPolicy": "Assets must contain no body text, numbers, rankings, place names, warning titles, brands, logos, or watermarks. All copy is rendered by HTML.",
+  "licensePolicy": "Project-original asset. Record generator model, version, prompt, generation date, post-processing, and applicable model/license terms before promotion from planned.",
+  "tokens": {
+    "terminal-void": "#05080A",
+    "archive-ivory": "#ECFBFF",
+    "telemetry-cyan": "#00D8FF",
+    "official-red": "#FF3B32",
+    "official-orange": "#FF8A2A",
+    "signal-amber": "#FFB000"
+  },
+  "assets": [
+    {
+      "id": "hud-frame-master",
+      "filename": "hud-frame-nine-slice-master.svg",
+      "usage": "Scalable neutral command-panel frame and 9-slice geometry for map, event, timeline, and dossier panels.",
+      "dimensions": {
+        "width": 1600,
+        "height": 1000,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "neutral-terminal",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "1bd9aa8793e0197e53ecc0448a5982432cc381ec06f58062be33507ba6f46735",
+      "reproducibility": "sha256:1bd9aa8793e0197e53ecc0448a5982432cc381ec06f58062be33507ba6f46735",
+      "composition": [
+        "frame",
+        "corner",
+        "tick"
+      ]
+    },
+    {
+      "id": "hud-corners",
+      "filename": "hud-corner-registration-set.svg",
+      "usage": "Four reusable registration corners with meteorological scale ticks; CSS-controlled color.",
+      "dimensions": {
+        "width": 384,
+        "height": 384,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "neutral-terminal",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "2111af0a850ec8762b62c00737eee5ebfa5f7c21282c79efde3c224acb415545",
+      "reproducibility": "sha256:2111af0a850ec8762b62c00737eee5ebfa5f7c21282c79efde3c224acb415545",
+      "composition": [
+        "corner",
+        "tick"
+      ]
+    },
+    {
+      "id": "evidence-rail-divider",
+      "filename": "divider-evidence-upgrade-rail.svg",
+      "usage": "Signature source-to-time-to-seal divider; stretchable without changing tick density.",
+      "dimensions": {
+        "width": 1200,
+        "height": 48,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "evidence-runway",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "1d40cb0d4798cba54bef04269c55569ceb4eff1c06b08da1735cb95720772408",
+      "reproducibility": "sha256:1d40cb0d4798cba54bef04269c55569ceb4eff1c06b08da1735cb95720772408",
+      "composition": [
+        "connector",
+        "tick",
+        "notch"
+      ]
+    },
+    {
+      "id": "terminal-abrasion",
+      "filename": "texture-terminal-salt-abrasion-alpha.png",
+      "usage": "Tileable monochrome alpha wear for matte terminal surfaces; no colored stains.",
+      "dimensions": {
+        "width": 512,
+        "height": 512,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "salt-worn-terminal",
+      "license": "Project-original; provenance required before approval.",
+      "containsText": false,
+      "status": "planned"
+    },
+    {
+      "id": "scanline-texture",
+      "filename": "texture-scanline-subtle-alpha.png",
+      "usage": "Seamless low-contrast scanline alpha tile for terminal atmosphere; never placed over body text at full opacity.",
+      "dimensions": {
+        "width": 64,
+        "height": 64,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "night-radar",
+      "license": "Project-original; provenance required before approval.",
+      "containsText": false,
+      "status": "planned"
+    },
+    {
+      "id": "event-badge-master",
+      "filename": "event-badge-master.svg",
+      "usage": "Shared outline, safe area, stroke weights, and seal socket for all six event badge outputs.",
+      "dimensions": {
+        "width": 128,
+        "height": 128,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "meteorological-evidence",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "8f731134c8ebe266222546203bb6410342c9fe1da91525d6490ebd482525b50c",
+      "reproducibility": "sha256:8f731134c8ebe266222546203bb6410342c9fe1da91525d6490ebd482525b50c",
+      "composition": [
+        "frame",
+        "corner",
+        "tick"
+      ]
+    },
+    {
+      "id": "event-typhoon",
+      "filename": "event-badge-typhoon.svg",
+      "usage": "Typhoon event badge derived from event-badge-master; spiral and eye geometry must remain distinct at 24 px.",
+      "dimensions": {
+        "width": 128,
+        "height": 128,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "typhoon",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "b70bacf73fa86aefcd54c233b6ae845fc29e1d9d01692f63e5c0e92de960f7ff",
+      "reproducibility": "sha256:b70bacf73fa86aefcd54c233b6ae845fc29e1d9d01692f63e5c0e92de960f7ff",
+      "composition": [
+        "frame",
+        "corner",
+        "tick",
+        "glyph"
+      ],
+      "derivedFrom": "event-badge-master"
+    },
+    {
+      "id": "event-rainstorm",
+      "filename": "event-badge-rainstorm.svg",
+      "usage": "Rainstorm event badge derived from event-badge-master; cloud and dense vertical rain silhouette.",
+      "dimensions": {
+        "width": 128,
+        "height": 128,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "rainstorm",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "46624f316e5bed17ee32bb1586d79b5844b04398ac077ca8e804b824d08fd848",
+      "reproducibility": "sha256:46624f316e5bed17ee32bb1586d79b5844b04398ac077ca8e804b824d08fd848",
+      "composition": [
+        "frame",
+        "corner",
+        "tick",
+        "glyph"
+      ],
+      "derivedFrom": "event-badge-master"
+    },
+    {
+      "id": "event-convection",
+      "filename": "event-badge-severe-convection.svg",
+      "usage": "Severe-convection event badge derived from event-badge-master; anvil cloud plus split lightning silhouette.",
+      "dimensions": {
+        "width": 128,
+        "height": 128,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "severe-convection",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "5a0f82d2bfc3c8416d0b35ae35aee8482cabb985b95f4a23849cdace1a8f2844",
+      "reproducibility": "sha256:5a0f82d2bfc3c8416d0b35ae35aee8482cabb985b95f4a23849cdace1a8f2844",
+      "composition": [
+        "frame",
+        "corner",
+        "tick",
+        "glyph"
+      ],
+      "derivedFrom": "event-badge-master"
+    },
+    {
+      "id": "event-heat",
+      "filename": "event-badge-heat.svg",
+      "usage": "High-temperature event badge derived from event-badge-master; sun disc and thermometer notch without digits.",
+      "dimensions": {
+        "width": 128,
+        "height": 128,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "heat",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "fba161910107caf3885fa951b41c0f078fe4ca4b1274f70ec9add15eef5649e9",
+      "reproducibility": "sha256:fba161910107caf3885fa951b41c0f078fe4ca4b1274f70ec9add15eef5649e9",
+      "composition": [
+        "frame",
+        "corner",
+        "tick",
+        "glyph"
+      ],
+      "derivedFrom": "event-badge-master"
+    },
+    {
+      "id": "event-gale-dust",
+      "filename": "event-badge-gale-dust.svg",
+      "usage": "Gale or sand-dust event badge derived from event-badge-master; three wind strokes crossing a granular wedge.",
+      "dimensions": {
+        "width": 128,
+        "height": 128,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "gale-dust",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "349208ddacd525efccaff78cd175c6aad23b12ac5039b3e5c2b8261aaac1ca81",
+      "reproducibility": "sha256:349208ddacd525efccaff78cd175c6aad23b12ac5039b3e5c2b8261aaac1ca81",
+      "composition": [
+        "frame",
+        "corner",
+        "tick",
+        "glyph"
+      ],
+      "derivedFrom": "event-badge-master"
+    },
+    {
+      "id": "event-composite",
+      "filename": "event-badge-composite-warning.svg",
+      "usage": "Composite-warning event badge derived from event-badge-master; interlocked unequal wedges, not a generic alert triangle.",
+      "dimensions": {
+        "width": 128,
+        "height": 128,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "composite-warning",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "2efade0d080951c47f117dd2c75d4bc3d7f48d105413fb348feab4caa70bfe0c",
+      "reproducibility": "sha256:2efade0d080951c47f117dd2c75d4bc3d7f48d105413fb348feab4caa70bfe0c",
+      "composition": [
+        "frame",
+        "corner",
+        "tick",
+        "glyph"
+      ],
+      "derivedFrom": "event-badge-master"
+    },
+    {
+      "id": "risk-seal-master",
+      "filename": "risk-seal-master.svg",
+      "usage": "Shared scalable seal geometry and HTML text safe area for red, orange, yellow, blue, and watch outputs.",
+      "dimensions": {
+        "width": 960,
+        "height": 112,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "official-risk",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "1b7d951d1c0b690861ede108bb3a4e0910e9302db2315deb2babf5177a46250c",
+      "reproducibility": "sha256:1b7d951d1c0b690861ede108bb3a4e0910e9302db2315deb2babf5177a46250c",
+      "composition": [
+        "frame",
+        "corner",
+        "tick",
+        "notch",
+        "seal"
+      ]
+    },
+    {
+      "id": "risk-red",
+      "filename": "risk-seal-red.svg",
+      "usage": "Official red warning seal output; solid double edge and three cut notches, derived from risk-seal-master.",
+      "dimensions": {
+        "width": 960,
+        "height": 112,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "official-red",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "ac8ca06f4c9cc29254011194cb5a371791c0b237e77012c215e096a3ce3b5283",
+      "reproducibility": "sha256:ac8ca06f4c9cc29254011194cb5a371791c0b237e77012c215e096a3ce3b5283",
+      "composition": [
+        "frame",
+        "corner",
+        "tick",
+        "notch",
+        "seal"
+      ],
+      "derivedFrom": "risk-seal-master"
+    },
+    {
+      "id": "risk-orange",
+      "filename": "risk-seal-orange.svg",
+      "usage": "Official orange warning seal output; solid edge and two cut notches, derived from risk-seal-master.",
+      "dimensions": {
+        "width": 960,
+        "height": 112,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "official-orange",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "175d4b711d8ebf1134699bdb31b1b6cb2da55072386c6ea737a3a47103d9b208",
+      "reproducibility": "sha256:175d4b711d8ebf1134699bdb31b1b6cb2da55072386c6ea737a3a47103d9b208",
+      "composition": [
+        "frame",
+        "corner",
+        "tick",
+        "notch",
+        "seal"
+      ],
+      "derivedFrom": "risk-seal-master"
+    },
+    {
+      "id": "risk-yellow",
+      "filename": "risk-seal-yellow.svg",
+      "usage": "Official yellow warning seal output; single edge and triangular registration marks, derived from risk-seal-master.",
+      "dimensions": {
+        "width": 960,
+        "height": 112,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "official-yellow",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "75dc93e031b98423c6196ab1ffb4982bccdbe46a5fd25fc5697e45c357f4b7b4",
+      "reproducibility": "sha256:75dc93e031b98423c6196ab1ffb4982bccdbe46a5fd25fc5697e45c357f4b7b4",
+      "composition": [
+        "frame",
+        "corner",
+        "tick",
+        "notch",
+        "seal"
+      ],
+      "derivedFrom": "risk-seal-master"
+    },
+    {
+      "id": "risk-blue",
+      "filename": "risk-seal-blue.svg",
+      "usage": "Official blue warning seal output; double cyan line and square registration marks, derived from risk-seal-master.",
+      "dimensions": {
+        "width": 960,
+        "height": 112,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "official-blue",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "873a848d835aacf670c631d2265dc2c601bfba5a1565a51cfa5e033a00e40a75",
+      "reproducibility": "sha256:873a848d835aacf670c631d2265dc2c601bfba5a1565a51cfa5e033a00e40a75",
+      "composition": [
+        "frame",
+        "corner",
+        "tick",
+        "notch",
+        "seal"
+      ],
+      "derivedFrom": "risk-seal-master"
+    },
+    {
+      "id": "risk-watch",
+      "filename": "risk-seal-watch.svg",
+      "usage": "Observation-state seal output; dashed amber edge and eye-shaped gap, explicitly lower weight than official warnings.",
+      "dimensions": {
+        "width": 960,
+        "height": 112,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "watch",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "5240800ed4be4e956cb5d00a8c12e483560ed5de9d8dd1d3d4be60c41c06397e",
+      "reproducibility": "sha256:5240800ed4be4e956cb5d00a8c12e483560ed5de9d8dd1d3d4be60c41c06397e",
+      "composition": [
+        "frame",
+        "corner",
+        "tick",
+        "notch",
+        "seal"
+      ],
+      "derivedFrom": "risk-seal-master"
+    },
+    {
+      "id": "radar-timeline-track",
+      "filename": "radar-timeline-track.svg",
+      "usage": "Stretchable radar playback timeline with major/minor tick sockets and no baked timestamps.",
+      "dimensions": {
+        "width": 1400,
+        "height": 72,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "radar-playback",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "8f7297f64e8941b5e9d54b97dd2518c011850aeff841dfde96cd02c624ec6dd9",
+      "reproducibility": "sha256:8f7297f64e8941b5e9d54b97dd2518c011850aeff841dfde96cd02c624ec6dd9",
+      "composition": [
+        "connector",
+        "tick",
+        "corner"
+      ]
+    },
+    {
+      "id": "radar-timeline-scrubber",
+      "filename": "radar-timeline-scrubber.svg",
+      "usage": "Keyboard-focus-compatible visual scrubber shell; semantic state and focus ring remain CSS/HTML.",
+      "dimensions": {
+        "width": 72,
+        "height": 72,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "radar-playback",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "4672b0148d547de16a7687ee1eedd305f7975fac0053d28133be921c60c8ba55",
+      "reproducibility": "sha256:4672b0148d547de16a7687ee1eedd305f7975fac0053d28133be921c60c8ba55",
+      "composition": [
+        "glyph",
+        "tick"
+      ]
+    },
+    {
+      "id": "layer-control-rail",
+      "filename": "layer-control-rail.svg",
+      "usage": "Neutral scalable rail for satellite, radar, wind, wave, forecast, and observation layer controls.",
+      "dimensions": {
+        "width": 640,
+        "height": 96,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "layer-control",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "6948bd9efab9d20d422b9b141c6e31e8e4bf7b79eec01f45bf57c196aa2c3c41",
+      "reproducibility": "sha256:6948bd9efab9d20d422b9b141c6e31e8e4bf7b79eec01f45bf57c196aa2c3c41",
+      "composition": [
+        "frame",
+        "corner",
+        "tick",
+        "glyph"
+      ]
+    },
+    {
+      "id": "source-health-glyphs",
+      "filename": "source-health-glyph-symbols.svg",
+      "usage": "SVG symbol set for latest, delayed, expired, unavailable, and no-record states; each uses a unique outline.",
+      "dimensions": {
+        "width": 400,
+        "height": 80,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "source-health",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "d927c20e4d0316702361e3acd826631157d105fee32bdd8471f83ff665bc3505",
+      "reproducibility": "sha256:d927c20e4d0316702361e3acd826631157d105fee32bdd8471f83ff665bc3505",
+      "composition": [
+        "glyph"
+      ]
+    },
+    {
+      "id": "source-health-connector",
+      "filename": "source-health-connector.svg",
+      "usage": "Stretchable provenance connector joining source health, observed time, evidence level, and event seal.",
+      "dimensions": {
+        "width": 720,
+        "height": 40,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "evidence-runway",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "25efb5def24d83f9ded86ff2d1021804e1a68cc615b5ad4752dab08d1e5ff9e6",
+      "reproducibility": "sha256:25efb5def24d83f9ded86ff2d1021804e1a68cc615b5ad4752dab08d1e5ff9e6",
+      "composition": [
+        "connector",
+        "notch"
+      ]
+    },
+    {
+      "id": "national-dossier-fragment",
+      "filename": "national-dossier-fragment.svg",
+      "usage": "Responsive national-overview dossier fragment for highest-risk event, source time, and limitation copy.",
+      "dimensions": {
+        "width": 960,
+        "height": 360,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "national-archive",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "6d3fc515a6a5231eb7a8bb2c097f66cc37e26fc0521390ff1c830e83796e382d",
+      "reproducibility": "sha256:6d3fc515a6a5231eb7a8bb2c097f66cc37e26fc0521390ff1c830e83796e382d",
+      "composition": [
+        "dossier",
+        "frame",
+        "connector",
+        "corner",
+        "tick",
+        "notch"
+      ]
+    },
+    {
+      "id": "national-map-vignette",
+      "filename": "national-map-vignette-alpha.png",
+      "usage": "Soft edge alpha vignette that protects map labels without darkening the central national weather field.",
+      "dimensions": {
+        "width": 1024,
+        "height": 1024,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "national-archive",
+      "license": "Project-original; provenance required before approval.",
+      "containsText": false,
+      "status": "planned"
+    },
+    {
+      "id": "city-dossier-fragment",
+      "filename": "city-dossier-fragment.svg",
+      "usage": "Responsive city battle-report fragment with slots for warning, anomaly, rank scope, and evidence strip.",
+      "dimensions": {
+        "width": 720,
+        "height": 480,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "city-archive",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "eadcc7b272a30044a59dbb2ffca079289cd7e26b311f2d5684d46975ed0a8296",
+      "reproducibility": "sha256:eadcc7b272a30044a59dbb2ffca079289cd7e26b311f2d5684d46975ed0a8296",
+      "composition": [
+        "dossier",
+        "frame",
+        "connector",
+        "corner",
+        "tick",
+        "notch"
+      ]
+    },
+    {
+      "id": "archive-paper-grain",
+      "filename": "texture-archive-pressure-grain-alpha.png",
+      "usage": "Tileable monochrome alpha grain for national and city dossier surfaces; evokes pressure marks, not decorative paper color.",
+      "dimensions": {
+        "width": 512,
+        "height": 512,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "archive-dossier",
+      "license": "Project-original; provenance required before approval.",
+      "containsText": false,
+      "status": "planned"
+    },
+    {
+      "id": "evidence-stamp-ring",
+      "filename": "evidence-stamp-ring.svg",
+      "usage": "Text-free broken registration ring for evidence confirmation; HTML supplies all labels and dates.",
+      "dimensions": {
+        "width": 192,
+        "height": 192,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "archive-dossier",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "062aeac6a596539c237f35bc29bea4aa265c58a0adf6d401d4cd3df70daa0982",
+      "reproducibility": "sha256:062aeac6a596539c237f35bc29bea4aa265c58a0adf6d401d4cd3df70daa0982",
+      "composition": [
+        "glyph",
+        "tick",
+        "notch"
+      ]
+    },
+    {
+      "id": "warning-edge-chevron",
+      "filename": "warning-edge-chevron-master.svg",
+      "usage": "Tintable edge-only warning decoration for national and city dossiers; never used as a full-width decorative tape.",
+      "dimensions": {
+        "width": 1024,
+        "height": 96,
+        "unit": "px"
+      },
+      "transparency": true,
+      "theme": "official-risk",
+      "license": "LicenseRef-WeatherBoss-Project-Original",
+      "containsText": false,
+      "status": "generated",
+      "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+      "generatedOn": "2026-07-15",
+      "sha256": "99a56e753802155d1a10244ec4b4e25ba67056e921960ba19b9dd3335f8f35f1",
+      "reproducibility": "sha256:99a56e753802155d1a10244ec4b4e25ba67056e921960ba19b9dd3335f8f35f1",
+      "composition": [
+        "corner",
+        "tick",
+        "notch"
+      ]
+    }
+  ],
+  "generation": {
+    "svgGenerator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
+    "generatedOn": "2026-07-15",
+    "algorithm": "deterministic-composable-svg-primitives-v1",
+    "license": "LicenseRef-WeatherBoss-Project-Original"
+  }
+}

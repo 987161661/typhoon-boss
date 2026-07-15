@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="96" viewBox="0 0 1024 96" fill="none" shape-rendering="geometricPrecision" aria-hidden="true">
+  <line x1="24" y1="82" x2="1000" y2="82" stroke="#FF3B32" stroke-width="3"/>
+  <polyline points="34,67.19999999999999 52,28.799999999999997 70,67.19999999999999" fill="none" stroke="#FF3B32" stroke-opacity="0.82" stroke-width="4"/>
+  <polyline points="96.93333333333334,67.19999999999999 114.93333333333334,28.799999999999997 132.93333333333334,67.19999999999999" fill="none" stroke="#FF3B32" stroke-opacity="0.34" stroke-width="2"/>
+  <polyline points="159.86666666666667,67.19999999999999 177.86666666666667,28.799999999999997 195.86666666666667,67.19999999999999" fill="none" stroke="#FF3B32" stroke-opacity="0.34" stroke-width="2"/>
+  <polyline points="222.79999999999998,67.19999999999999 240.79999999999998,28.799999999999997 258.79999999999995,67.19999999999999" fill="none" stroke="#FF3B32" stroke-opacity="0.82" stroke-width="4"/>
+  <polyline points="285.73333333333335,67.19999999999999 303.73333333333335,28.799999999999997 321.73333333333335,67.19999999999999" fill="none" stroke="#FF3B32" stroke-opacity="0.34" stroke-width="2"/>
+  <polyline points="348.66666666666663,67.19999999999999 366.66666666666663,28.799999999999997 384.66666666666663,67.19999999999999" fill="none" stroke="#FF3B32" stroke-opacity="0.34" stroke-width="2"/>
+  <polyline points="411.59999999999997,67.19999999999999 429.59999999999997,28.799999999999997 447.59999999999997,67.19999999999999" fill="none" stroke="#FF3B32" stroke-opacity="0.82" stroke-width="4"/>
+  <polyline points="474.5333333333333,67.19999999999999 492.5333333333333,28.799999999999997 510.5333333333333,67.19999999999999" fill="none" stroke="#FF3B32" stroke-opacity="0.34" stroke-width="2"/>
+  <polyline points="537.4666666666667,67.19999999999999 555.4666666666667,28.799999999999997 573.4666666666667,67.19999999999999" fill="none" stroke="#FF3B32" stroke-opacity="0.34" stroke-width="2"/>
+  <polyline points="600.4,67.19999999999999 618.4,28.799999999999997 636.4,67.19999999999999" fill="none" stroke="#FF3B32" stroke-opacity="0.82" stroke-width="4"/>
+  <polyline points="663.3333333333333,67.19999999999999 681.3333333333333,28.799999999999997 699.3333333333333,67.19999999999999" fill="none" stroke="#FF3B32" stroke-opacity="0.34" stroke-width="2"/>
+  <polyline points="726.2666666666667,67.19999999999999 744.2666666666667,28.799999999999997 762.2666666666667,67.19999999999999" fill="none" stroke="#FF3B32" stroke-opacity="0.34" stroke-width="2"/>
+  <polyline points="789.1999999999999,67.19999999999999 807.1999999999999,28.799999999999997 825.1999999999999,67.19999999999999" fill="none" stroke="#FF3B32" stroke-opacity="0.82" stroke-width="4"/>
+  <polyline points="852.1333333333333,67.19999999999999 870.1333333333333,28.799999999999997 888.1333333333333,67.19999999999999" fill="none" stroke="#FF3B32" stroke-opacity="0.34" stroke-width="2"/>
+  <polyline points="915.0666666666666,67.19999999999999 933.0666666666666,28.799999999999997 951.0666666666666,67.19999999999999" fill="none" stroke="#FF3B32" stroke-opacity="0.34" stroke-width="2"/>
+  <g transform="translate(12 12)"><path d="M 0 23 V 7 L 7 0 H 23" fill="none" stroke="#FF3B32" stroke-width="2" stroke-linecap="square" stroke-linejoin="bevel" vector-effect="non-scaling-stroke"/><line x1="11" y1="11" x2="19" y2="11" stroke="#FF3B32" stroke-opacity="0.36" stroke-width="1" vector-effect="non-scaling-stroke"/></g>
+  <line x1="56" y1="16" x2="56" y2="26" stroke="#FFB000" stroke-opacity="0.8" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <line x1="138.9090909090909" y1="16" x2="138.9090909090909" y2="21" stroke="#FFB000" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="221.8181818181818" y1="16" x2="221.8181818181818" y2="21" stroke="#FFB000" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="304.72727272727275" y1="16" x2="304.72727272727275" y2="21" stroke="#FFB000" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="387.6363636363636" y1="16" x2="387.6363636363636" y2="26" stroke="#FFB000" stroke-opacity="0.8" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <line x1="470.5454545454545" y1="16" x2="470.5454545454545" y2="21" stroke="#FFB000" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="553.4545454545455" y1="16" x2="553.4545454545455" y2="21" stroke="#FFB000" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="636.3636363636364" y1="16" x2="636.3636363636364" y2="21" stroke="#FFB000" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="719.2727272727273" y1="16" x2="719.2727272727273" y2="26" stroke="#FFB000" stroke-opacity="0.8" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <line x1="802.1818181818181" y1="16" x2="802.1818181818181" y2="21" stroke="#FFB000" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="885.090909090909" y1="16" x2="885.090909090909" y2="21" stroke="#FFB000" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="968" y1="16" x2="968" y2="21" stroke="#FFB000" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+</svg>

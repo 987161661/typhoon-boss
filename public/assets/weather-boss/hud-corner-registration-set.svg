@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="384" height="384" viewBox="0 0 384 384" fill="none" shape-rendering="geometricPrecision" aria-hidden="true">
+  <g transform="translate(28 28)"><path d="M 0 81 V 25 L 25 0 H 81" fill="none" stroke="#00D8FF" stroke-width="8" stroke-linecap="square" stroke-linejoin="bevel" vector-effect="non-scaling-stroke"/><line x1="29" y1="29" x2="77" y2="29" stroke="#00D8FF" stroke-opacity="0.36" stroke-width="1" vector-effect="non-scaling-stroke"/></g>
+  <g transform="translate(356 28) rotate(90)"><path d="M 0 81 V 25 L 25 0 H 81" fill="none" stroke="#00D8FF" stroke-width="8" stroke-linecap="square" stroke-linejoin="bevel" vector-effect="non-scaling-stroke"/><line x1="29" y1="29" x2="77" y2="29" stroke="#00D8FF" stroke-opacity="0.36" stroke-width="1" vector-effect="non-scaling-stroke"/></g>
+  <g transform="translate(356 356) rotate(180)"><path d="M 0 81 V 25 L 25 0 H 81" fill="none" stroke="#00D8FF" stroke-width="8" stroke-linecap="square" stroke-linejoin="bevel" vector-effect="non-scaling-stroke"/><line x1="29" y1="29" x2="77" y2="29" stroke="#00D8FF" stroke-opacity="0.36" stroke-width="1" vector-effect="non-scaling-stroke"/></g>
+  <g transform="translate(28 356) rotate(270)"><path d="M 0 81 V 25 L 25 0 H 81" fill="none" stroke="#00D8FF" stroke-width="8" stroke-linecap="square" stroke-linejoin="bevel" vector-effect="non-scaling-stroke"/><line x1="29" y1="29" x2="77" y2="29" stroke="#00D8FF" stroke-opacity="0.36" stroke-width="1" vector-effect="non-scaling-stroke"/></g>
+  <line x1="148" y1="28" x2="148" y2="38" stroke="#ECFBFF" stroke-opacity="0.8" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <line x1="163" y1="28" x2="163" y2="33" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="178" y1="28" x2="178" y2="33" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="193" y1="28" x2="193" y2="33" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="208" y1="28" x2="208" y2="38" stroke="#ECFBFF" stroke-opacity="0.8" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <line x1="223" y1="28" x2="223" y2="33" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="238" y1="28" x2="238" y2="33" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="28" y1="148" x2="38" y2="148" stroke="#ECFBFF" stroke-opacity="0.8" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <line x1="28" y1="163" x2="33" y2="163" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="28" y1="178" x2="33" y2="178" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="28" y1="193" x2="33" y2="193" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="28" y1="208" x2="38" y2="208" stroke="#ECFBFF" stroke-opacity="0.8" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <line x1="28" y1="223" x2="33" y2="223" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="28" y1="238" x2="33" y2="238" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+</svg>

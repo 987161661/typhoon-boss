@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="360" viewBox="0 0 960 360" fill="none" shape-rendering="geometricPrecision" aria-hidden="true">
+  <path d="M 18 0 H 942 L 960 18 V 342 L 942 360 H 18 L 0 342 V 18 Z" fill="#05080A" fill-opacity="0.38" stroke="#00D8FF" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <path d="M 18 8 H 942 L 952 18 V 342 L 942 352 H 18 L 8 342 V 18 Z" fill="none" stroke="#00D8FF" stroke-opacity="0.34" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <path d="M 28 0 H 208 L 220 43 H 28" fill="#00D8FF" fill-opacity="0.1" stroke="#00D8FF" stroke-opacity="0.72" stroke-width="2"/>
+  <line x1="30" y1="314" x2="930" y2="314" stroke="#00D8FF" stroke-opacity="0.38" stroke-width="1"/>
+  <line x1="42" y1="324" x2="42" y2="314" stroke="#00D8FF" stroke-opacity="0.8" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <line x1="94" y1="324" x2="94" y2="319" stroke="#00D8FF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="146" y1="324" x2="146" y2="319" stroke="#00D8FF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="198" y1="324" x2="198" y2="319" stroke="#00D8FF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="250" y1="324" x2="250" y2="314" stroke="#00D8FF" stroke-opacity="0.8" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <line x1="302" y1="324" x2="302" y2="319" stroke="#00D8FF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="354" y1="324" x2="354" y2="319" stroke="#00D8FF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="406" y1="324" x2="406" y2="319" stroke="#00D8FF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="458" y1="324" x2="458" y2="314" stroke="#00D8FF" stroke-opacity="0.8" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <line x1="510" y1="324" x2="510" y2="319" stroke="#00D8FF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="562" y1="324" x2="562" y2="319" stroke="#00D8FF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="614" y1="324" x2="614" y2="319" stroke="#00D8FF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="666" y1="324" x2="666" y2="314" stroke="#00D8FF" stroke-opacity="0.8" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <line x1="718" y1="324" x2="718" y2="319" stroke="#00D8FF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="770" y1="324" x2="770" y2="319" stroke="#00D8FF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="822" y1="324" x2="822" y2="319" stroke="#00D8FF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <polyline points="36,223.2 268.8,223.2 307.2,211.2 662.4,211.2 700.8,223.2 924,223.2" fill="none" stroke="#00D8FF" stroke-width="2" stroke-linecap="square" stroke-linejoin="bevel" vector-effect="non-scaling-stroke"/>
+  <polygon points="36,217.2 42,223.2 36,229.2 30,223.2" fill="#05080A" stroke="#00D8FF" stroke-width="2"/>
+  <polygon points="924,217.2 930,223.2 924,229.2 918,223.2" fill="#05080A" stroke="#00D8FF" stroke-width="1.5"/>
+  <g transform="translate(18 18)"><path d="M 0 24 V 7 L 7 0 H 24" fill="none" stroke="#ECFBFF" stroke-width="2" stroke-linecap="square" stroke-linejoin="bevel" vector-effect="non-scaling-stroke"/><line x1="11" y1="11" x2="20" y2="11" stroke="#ECFBFF" stroke-opacity="0.36" stroke-width="1" vector-effect="non-scaling-stroke"/></g>
+  <rect x="899.5" y="43.5" width="9" height="9" fill="none" stroke="#00D8FF" stroke-width="2"/>
+</svg>
