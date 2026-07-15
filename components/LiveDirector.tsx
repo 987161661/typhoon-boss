@@ -9,7 +9,7 @@ import { LiveCityInteraction } from "./LiveCityInteraction";
 import { LiveCityTargetLock } from "./LiveCityTargetLock";
 import { useLiveCityInteractionQueue } from "./useLiveCityInteractionQueue";
 import { useNationalSituation } from "./useNationalSituation";
-import { createLiveCityEventId, type CityAttention, type CityAttentionAnchor, type HostLiveComment } from "@/lib/liveCityInteraction";
+import { createLiveCityEventId, type CityAttention, type CityAttentionAnchor, type HostLiveEvent } from "@/lib/liveCityInteraction";
 import {
   DEFAULT_LIVE_CONTROL_SETTINGS,
   normalizeLiveControlSettings,
@@ -46,8 +46,8 @@ export function LiveDirector() {
     setCityOverlayHost(document.body);
   }, []);
 
-  const handleLiveComment = useCallback((comment: HostLiveComment) => {
-    cityInteractions.submitComment(comment);
+  const handleLiveEvent = useCallback((event: HostLiveEvent) => {
+    cityInteractions.submitEvent(event);
   }, [cityInteractions]);
 
   const handleRadarChat = useCallback((text: string) => {
@@ -178,7 +178,7 @@ export function LiveDirector() {
         scene={activeScene}
         visible={hostVisible}
         chatRequest={chatRequest}
-        onLiveComment={handleLiveComment}
+        onLiveEvent={handleLiveEvent}
       />
       {/* City reports are broadcast overlays, outside the map scene and side
           rail stacking contexts. */}

@@ -160,12 +160,11 @@
       "status": "generated",
       "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
       "generatedOn": "2026-07-15",
-      "sha256": "8f731134c8ebe266222546203bb6410342c9fe1da91525d6490ebd482525b50c",
-      "reproducibility": "sha256:8f731134c8ebe266222546203bb6410342c9fe1da91525d6490ebd482525b50c",
+      "sha256": "37f752426657a7b67cff8fd396b8eeb79c97b0885881b03f3713b702f870f5bb",
+      "reproducibility": "sha256:37f752426657a7b67cff8fd396b8eeb79c97b0885881b03f3713b702f870f5bb",
       "composition": [
-        "frame",
-        "corner",
-        "tick"
+        "ring",
+        "glyph"
       ]
     },
     {
@@ -184,12 +183,9 @@
       "status": "generated",
       "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
       "generatedOn": "2026-07-15",
-      "sha256": "b70bacf73fa86aefcd54c233b6ae845fc29e1d9d01692f63e5c0e92de960f7ff",
-      "reproducibility": "sha256:b70bacf73fa86aefcd54c233b6ae845fc29e1d9d01692f63e5c0e92de960f7ff",
+      "sha256": "a509d2c977159990c27668186f92cf49d04f3861f9504584ac43d07619b93531",
+      "reproducibility": "sha256:a509d2c977159990c27668186f92cf49d04f3861f9504584ac43d07619b93531",
       "composition": [
-        "frame",
-        "corner",
-        "tick",
         "glyph"
       ],
       "derivedFrom": "event-badge-master"
@@ -210,12 +206,9 @@
       "status": "generated",
       "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
       "generatedOn": "2026-07-15",
-      "sha256": "46624f316e5bed17ee32bb1586d79b5844b04398ac077ca8e804b824d08fd848",
-      "reproducibility": "sha256:46624f316e5bed17ee32bb1586d79b5844b04398ac077ca8e804b824d08fd848",
+      "sha256": "4f6a85b9f73a2233a6d5fabe23255899a797ff2d1ca8070703085a1341fa6015",
+      "reproducibility": "sha256:4f6a85b9f73a2233a6d5fabe23255899a797ff2d1ca8070703085a1341fa6015",
       "composition": [
-        "frame",
-        "corner",
-        "tick",
         "glyph"
       ],
       "derivedFrom": "event-badge-master"
@@ -236,12 +229,9 @@
       "status": "generated",
       "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
       "generatedOn": "2026-07-15",
-      "sha256": "5a0f82d2bfc3c8416d0b35ae35aee8482cabb985b95f4a23849cdace1a8f2844",
-      "reproducibility": "sha256:5a0f82d2bfc3c8416d0b35ae35aee8482cabb985b95f4a23849cdace1a8f2844",
+      "sha256": "594a62583aec3783969efa77cb62c02070beef4ff41f012aa2216f9f55b4b11e",
+      "reproducibility": "sha256:594a62583aec3783969efa77cb62c02070beef4ff41f012aa2216f9f55b4b11e",
       "composition": [
-        "frame",
-        "corner",
-        "tick",
         "glyph"
       ],
       "derivedFrom": "event-badge-master"
@@ -262,12 +252,9 @@
       "status": "generated",
       "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
       "generatedOn": "2026-07-15",
-      "sha256": "fba161910107caf3885fa951b41c0f078fe4ca4b1274f70ec9add15eef5649e9",
-      "reproducibility": "sha256:fba161910107caf3885fa951b41c0f078fe4ca4b1274f70ec9add15eef5649e9",
+      "sha256": "c1dc2c3c47b781fcb3ea69037511cba708a703107f0a5729b5bcbcb7007e2174",
+      "reproducibility": "sha256:c1dc2c3c47b781fcb3ea69037511cba708a703107f0a5729b5bcbcb7007e2174",
       "composition": [
-        "frame",
-        "corner",
-        "tick",
         "glyph"
       ],
       "derivedFrom": "event-badge-master"
@@ -288,12 +275,9 @@
       "status": "generated",
       "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
       "generatedOn": "2026-07-15",
-      "sha256": "349208ddacd525efccaff78cd175c6aad23b12ac5039b3e5c2b8261aaac1ca81",
-      "reproducibility": "sha256:349208ddacd525efccaff78cd175c6aad23b12ac5039b3e5c2b8261aaac1ca81",
+      "sha256": "ed3a50211c5921a92470b07b1e3003296880e1b956e2028097eb7319dbec88ac",
+      "reproducibility": "sha256:ed3a50211c5921a92470b07b1e3003296880e1b956e2028097eb7319dbec88ac",
       "composition": [
-        "frame",
-        "corner",
-        "tick",
         "glyph"
       ],
       "derivedFrom": "event-badge-master"
@@ -314,12 +298,9 @@
       "status": "generated",
       "generator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
       "generatedOn": "2026-07-15",
-      "sha256": "2efade0d080951c47f117dd2c75d4bc3d7f48d105413fb348feab4caa70bfe0c",
-      "reproducibility": "sha256:2efade0d080951c47f117dd2c75d4bc3d7f48d105413fb348feab4caa70bfe0c",
+      "sha256": "8606163beb2901e030629acb64db4f805414832bdc993cc7b84d1b07bbf968ef",
+      "reproducibility": "sha256:8606163beb2901e030629acb64db4f805414832bdc993cc7b84d1b07bbf968ef",
       "composition": [
-        "frame",
-        "corner",
-        "tick",
         "glyph"
       ],
       "derivedFrom": "event-badge-master"
@@ -767,9 +748,6 @@
     "svgGenerator": "scripts/generate_weather_boss_svg_assets.mjs@1.0.0",
     "generatedOn": "2026-07-15",
     "algorithm": "deterministic-composable-svg-primitives-v1",
-    "license": "LicenseRef-WeatherBoss-Project-Original",
-    "pngGenerator": "scripts/generate_weather_boss_png_assets.mjs@1.0.0",
-    "pngGeneratedOn": "2026-07-15",
-    "pngAlgorithm": "deterministic-composable-rgba-primitives-v1"
+    "license": "LicenseRef-WeatherBoss-Project-Original"
   }
 }

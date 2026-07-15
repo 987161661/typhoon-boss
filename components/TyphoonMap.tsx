@@ -70,6 +70,7 @@ import {
   selectedStormForMap
 } from "./map/nationalMapState";
 import { NationalSituationHud } from "./NationalSituationHud";
+import { FutureWeatherArchivePanel } from "./FutureWeatherArchivePanel";
 import nationalRailStyles from "./NationalSituationRail.module.css";
 import { useNationalSituation, type NationalSituationState } from "./useNationalSituation";
 import { HudPanel, StatusPill } from "./HudPrimitives";
@@ -1626,10 +1627,17 @@ function NationalSituationSurface({
   onOpenCitySituation?: () => void;
 }) {
   if (state.snapshot) {
-    if (!state.error) return (
+    if (!state.error) return variant === "full" ? (
+      <FutureWeatherArchivePanel
+        snapshot={state.snapshot}
+        className={className}
+        onSelectEvent={onSelectEvent}
+        onOpenCitySituation={onOpenCitySituation}
+      />
+    ) : (
       <NationalSituationHud
         snapshot={state.snapshot}
-        variant={variant}
+        variant="compact"
         className={className}
         onSelectEvent={onSelectEvent}
         onOpenCitySituation={onOpenCitySituation}
@@ -1644,13 +1652,21 @@ function NationalSituationSurface({
         <p className={nationalRailStyles.retainedNotice} role="status">
           全国态势刷新失败，继续显示最近有效统一快照；这不代表当前无风险。{state.error}
         </p>
-        <NationalSituationHud
-          snapshot={state.snapshot}
-          variant={variant}
-          className={variant === "full" ? nationalRailStyles.standardHud : undefined}
-          onSelectEvent={onSelectEvent}
-          onOpenCitySituation={onOpenCitySituation}
-        />
+        {variant === "full" ? (
+          <FutureWeatherArchivePanel
+            snapshot={state.snapshot}
+            className={nationalRailStyles.standardHud}
+            onSelectEvent={onSelectEvent}
+            onOpenCitySituation={onOpenCitySituation}
+          />
+        ) : (
+          <NationalSituationHud
+            snapshot={state.snapshot}
+            variant="compact"
+            onSelectEvent={onSelectEvent}
+            onOpenCitySituation={onOpenCitySituation}
+          />
+        )}
       </div>
     );
   }

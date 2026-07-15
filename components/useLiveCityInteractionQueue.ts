@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import {
   CITY_SCENE_MAX_IDLE_MS,
   CITY_SCENE_MIN_MS,
@@ -14,8 +14,11 @@ import {
 } from "@/lib/liveDirectorQueue";
 import {
   toCityInteractionRequest,
+  viewerIdentityKey,
   type CityInteractionRequest,
-  type HostLiveComment
+  type HostLiveComment,
+  type HostLiveEvent,
+  type HostViewerRelationEvent
 } from "@/lib/liveCityInteraction";
 
 const CITY_COOLDOWN_MS = 90_000;
@@ -34,7 +37,10 @@ export function useLiveCityInteractionQueue(idleContext: DirectorIdleContext = D
   const machineRef = useRef(machine);
   const seenEventAtRef = useRef(new Map<string, number>());
   const cityAcceptedAtRef = useRef(new Map<string, number>());
+  const viewerCityAccessRef = useRef(new Map<string, CityInteractionRequest["followEvidence"]>());
+  const followedViewersRef = useRef(new Map<string, number>());
   const interactionRequestsRef = useRef(new Map<string, CityInteractionRequest>());
+  const [, publishPayloadChange] = useReducer((value: number) => value + 1, 0);
 
   const apply = useCallback((action: LiveDirectorQueueAction) => {
     const next = transitionLiveDirectorQueue(machineRef.current, action);
@@ -70,8 +76,13 @@ export function useLiveCityInteractionQueue(idleContext: DirectorIdleContext = D
   }, [machine]);
 
   const submitComment = useCallback((comment: HostLiveComment) => {
-    const request = toCityInteractionRequest(comment);
-    if (!request) return false;
+    const parsedRequest = toCityInteractionRequest(comment);
+    if (!parsedRequest) return false;
+    const viewerKey = viewerIdentityKey(parsedRequest.platform, parsedRequest.viewerId);
+    const followedAt = viewerKey ? followedViewersRef.current.get(viewerKey) : undefined;
+    const request = followedAt && parsedRequest.followEvidence !== "observed"
+      ? { ...parsedRequest, followEvidence: "observed" as const, followObservedAt: followedAt }
+      : parsedRequest;
     const isRadarOperator = comment.platform === "radar-chat";
     const now = Date.now();
     const seenAt = seenEventAtRef.current.get(request.id);
@@ -81,7 +92,10 @@ export function useLiveCityInteractionQueue(idleContext: DirectorIdleContext = D
 
     const cityKey = normalizeCityKey(request.cityQuery);
     const acceptedAt = cityAcceptedAtRef.current.get(cityKey);
-    if (!isRadarOperator && acceptedAt && now - acceptedAt < CITY_COOLDOWN_MS) return false;
+    const viewerCityKey = viewerKey ? `${viewerKey}|${cityKey}` : null;
+    const previousAccess = viewerCityKey ? viewerCityAccessRef.current.get(viewerCityKey) : undefined;
+    const upgradedAfterLockedQuery = request.followEvidence === "observed" && previousAccess === "unknown";
+    if (!isRadarOperator && !upgradedAfterLockedQuery && acceptedAt && now - acceptedAt < CITY_COOLDOWN_MS) return false;
 
     const current = machineRef.current;
     if (
@@ -91,6 +105,7 @@ export function useLiveCityInteractionQueue(idleContext: DirectorIdleContext = D
     ) return false;
 
     cityAcceptedAtRef.current.set(cityKey, now);
+    if (viewerCityKey) viewerCityAccessRef.current.set(viewerCityKey, request.followEvidence);
     pruneOlderThan(cityAcceptedAtRef.current, now, CITY_COOLDOWN_MS);
     interactionRequestsRef.current.set(request.id, request);
     apply({
@@ -102,6 +117,31 @@ export function useLiveCityInteractionQueue(idleContext: DirectorIdleContext = D
     return true;
   }, [apply]);
 
+  const submitRelation = useCallback((event: HostViewerRelationEvent) => {
+    const viewerKey = viewerIdentityKey(event.platform, event.viewerId);
+    if (!viewerKey) return false;
+    followedViewersRef.current.set(viewerKey, event.observedAt);
+    let changed = false;
+    for (const [id, request] of interactionRequestsRef.current) {
+      if (viewerIdentityKey(request.platform, request.viewerId) !== viewerKey) continue;
+      if (request.followEvidence === "observed" && request.followObservedAt === event.observedAt) continue;
+      interactionRequestsRef.current.set(id, {
+        ...request,
+        followEvidence: "observed",
+        followObservedAt: event.observedAt
+      });
+      changed = true;
+    }
+    if (changed) publishPayloadChange();
+    return true;
+  }, []);
+
+  const submitEvent = useCallback((event: HostLiveEvent) => {
+    return event.type === "aituber:viewer-relation"
+      ? submitRelation(event)
+      : submitComment(event);
+  }, [submitComment, submitRelation]);
+
   const completeActive = useCallback((id: string) => {
     apply({ type: "complete", id, now: Date.now() });
   }, [apply]);
@@ -111,6 +151,7 @@ export function useLiveCityInteractionQueue(idleContext: DirectorIdleContext = D
     pendingCount: machine.pending.length,
     lensIntent: selectDirectorLens(machine),
     submitComment,
+    submitEvent,
     completeActive
   };
 }

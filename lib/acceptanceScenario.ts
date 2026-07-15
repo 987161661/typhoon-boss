@@ -3,6 +3,7 @@ export const ACCEPTANCE_SCENARIOS = [
   "single-storm",
   "multi-storm",
   "official-red",
+  "warning-carousel",
   "ordinary-city",
   "source-failure"
 ] as const;

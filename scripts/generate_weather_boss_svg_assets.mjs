@@ -166,17 +166,6 @@ function svgDocument(width, height, body) {
   ].join("\n");
 }
 
-function badgeShell(width, height, color, accent) {
-  const size = Math.min(width, height);
-  return [
-    ...framePrimitive(width, height, color, { cut: 18, fillOpacity: 0.22, strokeWidth: 2.2 }),
-    cornerPrimitive(24, accent, "translate(12 12)"),
-    cornerPrimitive(24, accent, `translate(${width - 12} ${height - 12}) rotate(180)`),
-    circle(width / 2, height / 2, size * 0.31, { fill: "none", stroke: color, "stroke-opacity": 0.26, "stroke-dasharray": "2 7", "stroke-width": 1 }),
-    ticksPrimitive({ x: width * 0.27, y: height - 16, count: 7, step: width * 0.075, color: accent, reverse: true })
-  ];
-}
-
 const glyphRenderers = {
   "event-typhoon": (cx, cy, color) => [
     path(`M ${cx - 35} ${cy + 4} C ${cx - 24} ${cy - 28} ${cx + 12} ${cy - 34} ${cx + 28} ${cy - 12} C ${cx + 41} ${cy + 6} ${cx + 24} ${cy + 30} ${cx + 2} ${cy + 28}`, { fill: "none", stroke: color, "stroke-width": 7, "stroke-linecap": "round" }),
@@ -267,11 +256,22 @@ function renderEvidenceRail(asset, colors) {
   ]);
 }
 
+const badgeColors = {
+  "event-typhoon": "#1457A6",
+  "event-rainstorm": "#007DAD",
+  "event-convection": "#6056C7",
+  "event-heat": "#D28A14",
+  "event-gale-dust": "#229D8F",
+  "event-composite": "#7C8795"
+};
+
 function renderBadge(asset, colors, glyphId) {
   const { width, height } = asset.dimensions;
-  const body = badgeShell(width, height, colors["archive-ivory"], colors["telemetry-cyan"]);
-  if (glyphId) body.push(group(glyphRenderers[glyphId](width / 2, height / 2 - 2, colors["telemetry-cyan"]), { id: glyphId }));
-  return svgDocument(width, height, body);
+  if (!glyphId) return svgDocument(width, height, [
+    circle(width / 2, height / 2, Math.min(width, height) * 0.33, { fill: "none", stroke: colors["archive-ivory"], "stroke-opacity": 0.22, "stroke-width": 1.5, "stroke-dasharray": "3 9" }),
+    circle(width / 2, height / 2, Math.min(width, height) * 0.08, { fill: colors["telemetry-cyan"], "fill-opacity": 0.16, stroke: colors["telemetry-cyan"], "stroke-width": 1.5 })
+  ]);
+  return svgDocument(width, height, [group(glyphRenderers[glyphId](width / 2, height / 2 - 2, badgeColors[glyphId]), { id: glyphId })]);
 }
 
 function renderSeal(asset, colors, variant) {
@@ -416,10 +416,10 @@ function createSpecs(manifest) {
 
   return svgAssets.map((asset) => {
     if (asset.id === "event-badge-master") {
-      return { asset, content: renderBadge(asset, colors), composition: ["frame", "corner", "tick"], derivedFrom: null };
+      return { asset, content: renderBadge(asset, colors), composition: ["ring", "glyph"], derivedFrom: null };
     }
     if (glyphRenderers[asset.id]) {
-      return { asset, content: renderBadge(asset, colors, asset.id), composition: ["frame", "corner", "tick", "glyph"], derivedFrom: "event-badge-master" };
+      return { asset, content: renderBadge(asset, colors, asset.id), composition: ["glyph"], derivedFrom: "event-badge-master" };
     }
     if (asset.id === "risk-seal-master") {
       return { asset, content: renderSeal(asset, colors), composition: ["frame", "corner", "tick", "notch", "seal"], derivedFrom: null };

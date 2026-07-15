@@ -1,0 +1,1252 @@
+.cabinet {
+  --cabinet-ink: #090a0f;
+  --cabinet-deep: #05060a;
+  --lacquer-violet: #1b1928;
+  --specimen-resin: #4d4864;
+  --archive-paper: #e8e0ca;
+  --paper-dim: #b9b19f;
+  --oxidized-brass: #a88d60;
+  --echo-lilac: #9d97c8;
+  --seal-vermilion: #c84d40;
+  --official-level: #7e8b96;
+  --official-level-soft: rgb(126 139 150 / 22%);
+  position: relative;
+  width: 100%;
+  height: 100%;
+  max-height: 100%;
+  overflow: hidden;
+  isolation: isolate;
+  padding: 14px 26px 14px 16px;
+  color: var(--archive-paper);
+  background:
+    linear-gradient(90deg, rgb(255 255 255 / 2%), transparent 11% 88%, rgb(0 0 0 / 38%)),
+    linear-gradient(180deg, #15131d 0, #0b0b11 22%, #08090d 100%);
+  box-shadow:
+    inset 8px 0 20px rgb(0 0 0 / 32%),
+    inset -15px 0 24px rgb(0 0 0 / 68%);
+  font-family: "DengXian", "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
+  scrollbar-color: var(--oxidized-brass) #08090d;
+  scrollbar-width: thin;
+  container-type: inline-size;
+}
+
+.cabinet::before,
+.cabinet::after,
+.cabinetGrain {
+  position: absolute;
+  pointer-events: none;
+  content: "";
+}
+
+.cabinet::before {
+  z-index: -2;
+  inset: 0;
+  background: url("/assets/future-weather-archive/cabinet-grain-v1.webp") center top / 720px auto repeat-y;
+  mix-blend-mode: soft-light;
+  opacity: 0.52;
+}
+
+.cabinet::after {
+  z-index: 10;
+  inset: 0 13px 0 auto;
+  width: 2px;
+  background: linear-gradient(180deg, transparent, var(--oxidized-brass) 9%, #4c3e2d 51%, var(--oxidized-brass) 88%, transparent);
+  box-shadow: -1px 0 rgb(255 255 255 / 9%), 4px 0 10px rgb(0 0 0 / 90%);
+  opacity: 0.74;
+}
+
+.cabinetGrain {
+  z-index: -1;
+  inset: 0;
+  background:
+    radial-gradient(circle at 10% 0, rgb(157 151 200 / 10%), transparent 27%),
+    radial-gradient(circle at 90% 46%, rgb(168 141 96 / 7%), transparent 33%);
+}
+
+.indexSpine {
+  position: fixed;
+  z-index: 12;
+  top: 20px;
+  right: 3px;
+  display: grid;
+  justify-items: center;
+  width: 18px;
+  color: #baaa85;
+  font-family: "Bahnschrift SemiCondensed", "Arial Narrow", monospace;
+  pointer-events: none;
+}
+
+.indexSpine > span {
+  writing-mode: vertical-rl;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+}
+
+.indexSpine i {
+  width: 1px;
+  height: min(56vh, 580px);
+  margin: 10px 0;
+  background: repeating-linear-gradient(180deg, #8c7957 0 1px, transparent 1px 13px);
+  opacity: 0.6;
+}
+
+.indexSpine small {
+  writing-mode: vertical-rl;
+  font-size: 8px;
+  letter-spacing: 0.2em;
+}
+
+.bureauPlaque {
+  position: relative;
+  display: grid;
+  grid-template-columns: 50px minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  min-height: 72px;
+  padding: 9px 10px 10px 8px;
+  background:
+    url("/assets/future-weather-archive/plaque-surface-v1.webp") center / 100% 100% no-repeat,
+    linear-gradient(100deg, #211f2a, #0e0e14 70%);
+  box-shadow:
+    0 9px 18px rgb(0 0 0 / 25%),
+    inset 0 1px rgb(255 255 255 / 6%);
+}
+
+.bureauPlaque::after {
+  position: absolute;
+  right: 9px;
+  bottom: -2px;
+  left: 9px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #b49b70 12% 82%, transparent);
+  content: "";
+  opacity: 0.7;
+}
+
+.bureauSeal {
+  width: 46px;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 2px double var(--oxidized-brass);
+  border-radius: 50%;
+  background: url("/assets/future-weather-archive/bureau-seal-v1.webp") center / 156% no-repeat;
+  box-shadow: inset 0 0 0 3px rgb(9 10 15 / 68%);
+  filter: drop-shadow(0 4px 5px rgb(0 0 0 / 52%));
+}
+
+.bureauIdentity {
+  min-width: 0;
+}
+
+.protocol,
+.shiftReadout,
+.caseMeta,
+.sectionLabel,
+.controlCounter,
+.ticketIndex,
+.ticketMeta,
+.archiveFooter {
+  font-family: "Bahnschrift SemiCondensed", "Bahnschrift", "Arial Narrow", "Microsoft YaHei UI", sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+.protocol {
+  display: block;
+  color: var(--oxidized-brass);
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.2em;
+}
+
+.bureauIdentity h2 {
+  margin: 3px 0 2px;
+  color: var(--archive-paper);
+  font-family: "SimSun", "Songti SC", serif;
+  font-size: clamp(17px, 5.1cqi, 23px);
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-shadow: 0 2px 7px rgb(0 0 0 / 66%);
+}
+
+.bureauIdentity p {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: #918b80;
+  font-size: 9px;
+  line-height: 1.2;
+}
+
+.bureauIdentity p i {
+  width: 12px;
+  height: 1px;
+  background: var(--seal-vermilion);
+}
+
+.shiftReadout {
+  display: grid;
+  justify-items: end;
+  align-self: stretch;
+  align-content: center;
+  gap: 2px;
+  min-width: 76px;
+  padding-left: 9px;
+  border-left: 1px solid rgb(168 141 96 / 22%);
+  text-align: right;
+}
+
+.shiftReadout > span {
+  color: #8f866f;
+  font-size: 8px;
+  letter-spacing: 0.12em;
+}
+
+.shiftReadout time {
+  color: var(--archive-paper);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+}
+
+.shiftReadout small {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--echo-lilac);
+  font-size: 8px;
+}
+
+.stormSpecimen {
+  position: relative;
+  margin: 13px 0 0 -7px;
+  overflow: hidden;
+  isolation: isolate;
+  background:
+    url("/assets/future-weather-archive/specimen-frame-v1.webp") center / 100% 100% no-repeat,
+    #12121a;
+  box-shadow:
+    0 18px 30px rgb(0 0 0 / 46%),
+    -4px 5px 0 rgb(77 72 100 / 17%),
+    inset 0 1px rgb(255 255 255 / 8%);
+  transform: translateZ(0);
+}
+
+.specimenArt {
+  position: relative;
+  height: 216px;
+  overflow: hidden;
+  isolation: isolate;
+  background:
+    linear-gradient(180deg, transparent 48%, rgb(9 10 15 / 38%) 77%, #111119 100%),
+    #171b23;
+}
+
+.hazardScene {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  filter: saturate(0.92) contrast(1.06);
+  transform-origin: 52% 48%;
+  animation: performanceReveal 2.5s cubic-bezier(0.2, 0.72, 0.24, 1) both;
+}
+
+.hazardScene::after {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(circle at 52% 45%, color-mix(in srgb, var(--official-level) 34%, transparent), transparent 34%),
+    linear-gradient(100deg, transparent 38%, rgb(255 255 255 / 20%) 49%, transparent 59%);
+  content: "";
+  mix-blend-mode: screen;
+  animation: performanceFlash 900ms ease-out both;
+}
+
+.specimenArt::before,
+.specimenArt::after {
+  position: absolute;
+  pointer-events: none;
+  content: "";
+}
+
+.specimenArt::before {
+  z-index: 2;
+  inset: 0;
+  background: url("/assets/future-weather-archive/specimen-overlay-v1.webp") center / 100% 100% no-repeat;
+  mix-blend-mode: screen;
+  opacity: 0.62;
+}
+
+.specimenArt::after {
+  z-index: 3;
+  inset: 0;
+  box-shadow: inset 0 0 0 8px rgb(5 6 10 / 48%), inset 0 -48px 50px rgb(9 10 15 / 72%);
+}
+
+.opticalBloom {
+  position: absolute;
+  z-index: 1;
+  top: 15%;
+  left: 20%;
+  width: 32%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--official-level) 35%, transparent);
+  filter: blur(38px);
+  opacity: 0.52;
+  animation: resinDrift 11s ease-in-out infinite alternate;
+}
+
+.hazardCrest {
+  position: absolute;
+  z-index: 4;
+  top: 17px;
+  right: 20px;
+  width: 84px;
+  aspect-ratio: 1;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+  filter: grayscale(0.72) sepia(0.28) saturate(0.5) drop-shadow(0 7px 10px rgb(0 0 0 / 68%));
+  mix-blend-mode: screen;
+  opacity: 0.24;
+}
+
+.calibrationMarks {
+  position: absolute;
+  z-index: 4;
+  inset: 12px;
+  background: url("/assets/future-weather-archive/calibration-marks-v1.webp") center / 100% 100% no-repeat;
+  opacity: 0.68;
+}
+
+.echoLabel {
+  position: absolute;
+  z-index: 5;
+  top: 15px;
+  left: 18px;
+  color: rgb(232 224 202 / 62%);
+  font: 800 8px/1 "Bahnschrift", "Arial Narrow", monospace;
+  letter-spacing: 0.18em;
+}
+
+.specimenSeal {
+  position: absolute;
+  z-index: 6;
+  top: 166px;
+  left: 16px;
+  display: grid;
+  min-width: 116px;
+  padding: 8px 11px 7px;
+  color: var(--official-level);
+  border: 2px solid currentcolor;
+  background: rgb(9 10 15 / 82%);
+  box-shadow: 0 8px 16px rgb(0 0 0 / 38%), inset 0 0 0 1px rgb(255 255 255 / 7%);
+  font-family: "SimSun", "Songti SC", serif;
+  transform: rotate(-2.3deg);
+}
+
+.specimenSeal::before {
+  position: absolute;
+  inset: 3px;
+  border: 1px solid currentcolor;
+  content: "";
+  opacity: 0.5;
+}
+
+.specimenSeal span,
+.specimenSeal small {
+  position: relative;
+  z-index: 1;
+}
+
+.specimenSeal span {
+  font-size: 14px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.specimenSeal small {
+  margin-top: 2px;
+  color: #b8b09e;
+  font-size: 8px;
+  letter-spacing: 0.08em;
+}
+
+.specimenCaption {
+  position: relative;
+  z-index: 5;
+  margin-top: -1px;
+  padding: 12px 16px 13px;
+  background:
+    linear-gradient(120deg, rgb(28 27 37 / 92%), rgb(10 11 16 / 96%) 73%),
+    url("/assets/future-weather-archive/caption-paper-v1.webp") center / cover no-repeat;
+}
+
+.caseMeta {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 7px;
+  align-items: center;
+  color: #948a76;
+  font-size: 9px;
+  letter-spacing: 0.07em;
+}
+
+.caseMeta > span {
+  color: var(--oxidized-brass);
+  font-weight: 800;
+}
+
+.caseMeta code {
+  overflow: hidden;
+  color: var(--echo-lilac);
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.caseMeta time {
+  color: #c7c0b1;
+  white-space: nowrap;
+}
+
+.specimenCaption h3,
+.emptySpecimenCopy h3 {
+  margin: 8px 0 4px;
+  color: #f1ead8;
+  font-family: "Microsoft YaHei UI", "PingFang SC", sans-serif;
+  font-size: clamp(19px, 5.6cqi, 27px);
+  font-weight: 850;
+  line-height: 1.18;
+  letter-spacing: -0.025em;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+}
+
+.location {
+  display: block;
+  color: var(--official-level);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.fact,
+.boundary {
+  margin: 8px 0 0;
+  color: #d5cebe;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.boundary {
+  color: #918a7e;
+  font-size: 10px;
+}
+
+.boundary span {
+  margin-right: 7px;
+  color: var(--oxidized-brass);
+  font-family: "SimSun", "Songti SC", serif;
+  font-weight: 700;
+}
+
+.cabinetControls {
+  position: relative;
+  z-index: 6;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) minmax(102px, auto);
+  gap: 8px;
+  align-items: center;
+  padding: 9px 12px 11px;
+  background:
+    url("/assets/future-weather-archive/control-deck-v1.webp") center / 100% 100% no-repeat,
+    #0c0d12;
+  box-shadow: inset 0 1px rgb(255 255 255 / 6%), inset 0 10px 18px rgb(0 0 0 / 28%);
+}
+
+.controlCounter {
+  color: var(--archive-paper);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+
+.reelControls {
+  display: grid;
+  grid-template-columns: 1fr 0.82fr 1fr;
+  gap: 4px;
+}
+
+.reelControls button,
+.projectAction,
+.cityGate:is(button) {
+  border: 0;
+  color: var(--archive-paper);
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 7%), transparent 44%),
+    #24212d;
+  box-shadow:
+    inset 0 0 0 1px rgb(168 141 96 / 24%),
+    inset 0 -3px rgb(0 0 0 / 38%),
+    0 4px 7px rgb(0 0 0 / 32%);
+  cursor: pointer;
+  transition: color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+
+.reelControls button,
+.projectAction {
+  clip-path: polygon(5px 0, calc(100% - 5px) 0, 100% 5px, 100% 100%, 0 100%, 0 5px);
+}
+
+.reelControls button:nth-child(2) {
+  color: #d6c59c;
+  background:
+    linear-gradient(180deg, rgb(168 141 96 / 19%), transparent 48%),
+    #211f29;
+}
+
+.reelControls button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-height: 34px;
+  padding: 5px 4px;
+  font: 700 9px/1 "Microsoft YaHei UI", sans-serif;
+}
+
+.reelControls button:hover:not(:disabled),
+.projectAction:hover,
+.cityGate:is(button):hover {
+  color: #fff8e8;
+  box-shadow:
+    inset 0 0 0 1px rgb(157 151 200 / 58%),
+    inset 0 -3px rgb(0 0 0 / 42%),
+    0 5px 9px rgb(0 0 0 / 42%);
+  transform: translateY(-1px);
+}
+
+.reelControls button:active:not(:disabled),
+.projectAction:active,
+.cityGate:is(button):active {
+  box-shadow: inset 0 0 0 1px rgb(168 141 96 / 42%), inset 0 2px 5px rgb(0 0 0 / 65%);
+  transform: translateY(1px);
+}
+
+.reelControls button:disabled {
+  color: #65616b;
+  cursor: default;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 6%), inset 0 2px 5px rgb(0 0 0 / 32%);
+}
+
+.projectAction {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 34px;
+  padding: 6px 9px;
+  color: var(--echo-lilac);
+  font: 800 10px/1 "Microsoft YaHei UI", sans-serif;
+  white-space: nowrap;
+}
+
+.loadProgress {
+  position: absolute;
+  z-index: 8;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: var(--official-level);
+  transform-origin: left;
+  animation: loadCase 2.5s linear both;
+}
+
+.loadProgressPaused {
+  animation-play-state: paused;
+}
+
+.emptySpecimen {
+  min-height: 310px;
+}
+
+.emptySpecimen .specimenArt {
+  height: 170px;
+  filter: saturate(0.2);
+  opacity: 0.72;
+}
+
+.emptySpecimenCopy {
+  position: relative;
+  z-index: 4;
+  padding: 16px 18px 20px;
+  background: #171720;
+}
+
+.emptySpecimenCopy > span {
+  color: var(--oxidized-brass);
+  font: 800 9px/1 "Bahnschrift", monospace;
+  letter-spacing: 0.13em;
+}
+
+.emptySpecimenCopy p {
+  margin: 7px 0 0;
+  color: #aaa294;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.caseRack,
+.evidenceRibbon {
+  margin-top: 16px;
+}
+
+.sectionLabel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 26px;
+  padding: 0 4px 5px;
+  color: #8f8779;
+}
+
+.sectionLabel > div {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.sectionLabel svg {
+  color: var(--oxidized-brass);
+}
+
+.sectionLabel h3 {
+  margin: 0;
+  color: var(--archive-paper);
+  font-family: "SimSun", "Songti SC", serif;
+  font-size: 13px;
+  letter-spacing: 0.08em;
+}
+
+.sectionLabel > span {
+  font-size: 9px;
+  letter-spacing: 0.06em;
+}
+
+.caseRack ol,
+.evidenceRibbon ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.caseRack ol {
+  display: grid;
+  gap: 5px;
+  padding: 2px 0 3px 5px;
+}
+
+.caseTab {
+  position: relative;
+  display: grid;
+  grid-template-columns: 23px auto minmax(0, 1fr) 17px;
+  gap: 7px;
+  align-items: center;
+  min-height: 52px;
+  padding: 6px 9px 6px 7px;
+  overflow: hidden;
+  color: #d8d0bd;
+  background:
+    linear-gradient(90deg, rgb(16 16 23 / 74%), rgb(25 24 32 / 91%)),
+    url("/assets/future-weather-archive/case-tab-v1.webp") center / 100% 100% no-repeat,
+    #25222d;
+  box-shadow: 0 6px 11px rgb(0 0 0 / 24%), inset 0 1px rgb(255 255 255 / 5%);
+  transform-origin: left center;
+}
+
+.caseTab:nth-child(2) {
+  margin-right: 6px;
+  transform: translateX(5px);
+}
+
+.caseTab:nth-child(3) {
+  margin-right: 11px;
+  transform: translateX(10px);
+}
+
+.caseTab::before {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 4px;
+  background: var(--official-level);
+  content: "";
+}
+
+.tabIndex {
+  color: #7f786b;
+  font: 800 10px/1 "Bahnschrift", monospace;
+}
+
+.tabSeal {
+  min-width: 57px;
+  padding: 4px 5px;
+  color: var(--official-level);
+  background: rgb(0 0 0 / 23%);
+  font-family: "SimSun", "Songti SC", serif;
+  font-size: 9px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.tabCopy {
+  min-width: 0;
+}
+
+.tabCopy strong,
+.tabCopy small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tabCopy strong {
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tabCopy small {
+  margin-top: 3px;
+  color: #8f887d;
+  font-size: 9px;
+}
+
+.caseTab > svg {
+  color: #726c63;
+}
+
+.emptyRack {
+  margin: 0;
+  padding: 12px 14px;
+  color: #989083;
+  background: rgb(77 72 100 / 12%);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.warningSignalBoard {
+  position: relative;
+  margin-top: 14px;
+  padding: 10px 11px 9px;
+  overflow: hidden;
+  color: inherit;
+  background:
+    linear-gradient(110deg, rgb(14 15 21 / 76%), rgb(22 21 29 / 91%)),
+    url("/assets/future-weather-archive/gate-plate-v1.webp") center / 100% 100% no-repeat,
+    #17171f;
+  box-shadow: 0 8px 14px rgb(0 0 0 / 26%), inset 0 1px rgb(255 255 255 / 5%);
+}
+
+.warningSignalBoard::before {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  background: linear-gradient(90deg, #d85246 0 25%, #d38a4b 25% 50%, #c4a258 50% 75%, #6d91b7 75%);
+  content: "";
+}
+
+.warningSignalBoard > header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 9px;
+  align-items: end;
+}
+
+.warningSignalBoard > header div > span {
+  color: var(--oxidized-brass);
+  font: 800 8px/1 "Bahnschrift", "Arial Narrow", monospace;
+  letter-spacing: 0.14em;
+}
+
+.warningSignalBoard h3 {
+  margin: 3px 0 0;
+  color: var(--archive-paper);
+  font-family: "SimSun", "Songti SC", serif;
+  font-size: 14px;
+  letter-spacing: 0.06em;
+}
+
+.warningSignalBoard > header > strong {
+  color: #f2ead7;
+  font: 800 24px/0.86 "Bahnschrift SemiCondensed", "Arial Narrow", sans-serif;
+  font-variant-numeric: tabular-nums;
+}
+
+.warningSignalBoard > header > strong small {
+  color: #8e877a;
+  font-size: 8px;
+  font-weight: 700;
+}
+
+.warningSignalBoard > header > time {
+  color: #8e877a;
+  font: 700 8px/1 "Bahnschrift", monospace;
+}
+
+.warningLevelGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+  margin-top: 9px;
+}
+
+.warningLevelGrid article {
+  position: relative;
+  min-width: 0;
+  min-height: 57px;
+  padding: 6px 7px 5px;
+  overflow: hidden;
+  background: linear-gradient(180deg, var(--official-level-soft), rgb(5 6 10 / 62%));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--official-level) 30%, transparent);
+}
+
+.warningLevelGrid article[data-highest="true"] {
+  box-shadow: inset 0 0 0 1px var(--official-level), 0 0 12px var(--official-level-soft);
+}
+
+.warningLevelGrid article > span,
+.warningLevelGrid article > small {
+  display: block;
+  color: var(--official-level);
+  font-size: 8px;
+  font-weight: 800;
+}
+
+.warningLevelGrid article > strong {
+  display: block;
+  margin-top: 1px;
+  color: #f2ead7;
+  font: 850 clamp(22px, 7.5cqi, 31px)/0.98 "Bahnschrift SemiCondensed", "Arial Narrow", sans-serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.035em;
+}
+
+.warningLevelGrid article > small {
+  position: absolute;
+  right: 5px;
+  bottom: 4px;
+  font-size: 6px;
+  letter-spacing: 0.12em;
+  opacity: 0.58;
+}
+
+.warningSignalBoard > p {
+  margin: 6px 1px 0;
+  color: #817b72;
+  font-size: 8px;
+}
+
+.warningSignalBoard > p strong {
+  color: var(--official-level);
+  font-weight: 800;
+}
+
+.evidenceRibbon {
+  margin-top: 10px;
+}
+
+.evidenceRibbon > summary {
+  min-height: 36px;
+  padding: 5px 8px;
+  border: 1px solid rgb(168 141 96 / 18%);
+  background: linear-gradient(90deg, rgb(157 151 200 / 8%), rgb(12 13 18 / 72%));
+  cursor: pointer;
+  list-style: none;
+}
+
+.evidenceRibbon > summary::-webkit-details-marker {
+  display: none;
+}
+
+.evidenceSummary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--echo-lilac);
+}
+
+.evidenceSummary small {
+  color: #817b72;
+  font-size: 8px;
+}
+
+.evidenceSummary svg {
+  transition: transform 160ms ease;
+}
+
+.evidenceRibbon[open] .evidenceSummary svg {
+  transform: rotate(180deg);
+}
+
+.evidenceRibbon ul {
+  position: relative;
+  display: grid;
+  gap: 4px;
+  max-height: 230px;
+  margin-top: 5px;
+  overflow-y: auto;
+  padding-left: 11px;
+}
+
+.evidenceRibbon ul::before {
+  position: absolute;
+  top: 13px;
+  bottom: 13px;
+  left: 4px;
+  width: 2px;
+  background: url("/assets/future-weather-archive/evidence-thread-v1.webp") center / 100% 100% no-repeat;
+  content: "";
+}
+
+.evidenceTicket {
+  position: relative;
+  display: grid;
+  grid-template-columns: 20px 22px minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  min-height: 52px;
+  padding: 6px 9px 6px 7px;
+  background:
+    linear-gradient(90deg, rgb(17 18 23 / 78%), rgb(22 22 29 / 94%)),
+    url("/assets/future-weather-archive/evidence-ticket-v1.webp") center / 100% 100% no-repeat,
+    #17171e;
+  box-shadow: 0 4px 9px rgb(0 0 0 / 22%);
+}
+
+.evidenceTicket[data-primary-evidence="true"] {
+  background:
+    linear-gradient(90deg, rgb(157 151 200 / 14%), transparent 58%),
+    linear-gradient(90deg, rgb(17 18 23 / 72%), rgb(22 22 29 / 92%)),
+    url("/assets/future-weather-archive/evidence-ticket-v1.webp") center / 100% 100% no-repeat,
+    #17171e;
+  box-shadow: -3px 0 var(--echo-lilac), 0 5px 10px rgb(0 0 0 / 28%);
+}
+
+.ticketPunch {
+  position: absolute;
+  top: 50%;
+  left: -10px;
+  width: 8px;
+  height: 8px;
+  border: 2px solid #7d725d;
+  border-radius: 50%;
+  background: #090a0f;
+  box-shadow: 0 0 0 2px rgb(168 141 96 / 12%);
+  transform: translateY(-50%);
+}
+
+.ticketIndex {
+  color: #766f64;
+  font-size: 9px;
+}
+
+.ticketState {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  aspect-ratio: 1;
+  color: var(--echo-lilac);
+  background: rgb(157 151 200 / 10%);
+  font: 800 11px/1 monospace;
+}
+
+.ticketCopy {
+  min-width: 0;
+}
+
+.ticketCopy strong,
+.ticketCopy small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ticketCopy strong {
+  color: #ddd5c4;
+  font-size: 10px;
+}
+
+.ticketCopy small {
+  margin-top: 3px;
+  color: #817b72;
+  font-size: 8px;
+}
+
+.ticketMeta {
+  display: grid;
+  justify-items: end;
+  gap: 3px;
+  font-size: 8px;
+}
+
+.ticketMeta b {
+  color: var(--echo-lilac);
+}
+
+.ticketMeta time {
+  color: #7f796f;
+}
+
+.source_delayed .ticketState,
+.source_delayed .ticketMeta b {
+  color: #c4a258;
+}
+
+.source_expired .ticketState,
+.source_expired .ticketMeta b {
+  color: #a87560;
+}
+
+.source_unavailable .ticketState,
+.source_unavailable .ticketMeta b {
+  color: var(--seal-vermilion);
+}
+
+.source_no_record .ticketState,
+.source_no_record .ticketMeta b {
+  color: #807b74;
+}
+
+.archiveFooter {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 39px;
+  gap: 9px;
+  align-items: center;
+  margin-top: 8px;
+  padding: 6px 7px 2px;
+  color: #69655f;
+  border-top: 1px solid rgb(168 141 96 / 18%);
+  font-size: 8px;
+  letter-spacing: 0.05em;
+}
+
+.archiveFooter b {
+  margin-left: 4px;
+  color: #aaa18f;
+}
+
+.archiveFooter i {
+  display: grid;
+  place-items: center;
+  width: 36px;
+  aspect-ratio: 1;
+  color: var(--seal-vermilion);
+  border: 2px double currentcolor;
+  border-radius: 50%;
+  font-family: "SimSun", "Songti SC", serif;
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 800;
+  transform: rotate(-7deg);
+  opacity: 0.72;
+}
+
+.level_red,
+.cabinet [data-level="red"] {
+  --official-level: #d85246;
+  --official-level-soft: rgb(216 82 70 / 20%);
+}
+
+.level_orange,
+.cabinet [data-level="orange"] {
+  --official-level: #d38a4b;
+  --official-level-soft: rgb(211 138 75 / 20%);
+}
+
+.level_yellow,
+.cabinet [data-level="yellow"] {
+  --official-level: #c4a258;
+  --official-level-soft: rgb(196 162 88 / 20%);
+}
+
+.level_blue,
+.cabinet [data-level="blue"] {
+  --official-level: #6d91b7;
+  --official-level-soft: rgb(109 145 183 / 20%);
+}
+
+.level_watch,
+.cabinet [data-level="watch"] {
+  --official-level: #9d97c8;
+  --official-level-soft: rgb(157 151 200 / 18%);
+}
+
+.level_none,
+.cabinet [data-level="none"] {
+  --official-level: #7d7975;
+  --official-level-soft: rgb(125 121 117 / 16%);
+}
+
+@keyframes loadCase {
+  from { transform: scaleX(0); }
+  to { transform: scaleX(1); }
+}
+
+@keyframes resinDrift {
+  from { transform: translate3d(-7%, -2%, 0) scale(0.92); opacity: 0.34; }
+  to { transform: translate3d(9%, 7%, 0) scale(1.13); opacity: 0.58; }
+}
+
+@keyframes performanceReveal {
+  0% { opacity: 0; filter: saturate(0.45) contrast(1.35) brightness(1.6); transform: scale(1.09); }
+  18% { opacity: 1; }
+  100% { opacity: 1; filter: saturate(0.92) contrast(1.06) brightness(1); transform: scale(1.015); }
+}
+
+@keyframes performanceFlash {
+  0% { opacity: 0; transform: translateX(-28%); }
+  14% { opacity: 0.9; }
+  42%, 100% { opacity: 0; transform: translateX(24%); }
+}
+
+@container (max-width: 390px) {
+  .cabinet {
+    padding-inline: 12px 23px;
+  }
+
+  .bureauPlaque {
+    grid-template-columns: 42px minmax(0, 1fr);
+  }
+
+  .bureauSeal {
+    width: 40px;
+  }
+
+  .shiftReadout {
+    display: none;
+  }
+
+  .specimenArt {
+    height: 196px;
+  }
+
+  .specimenSeal {
+    top: 147px;
+  }
+
+  .cabinetControls {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .projectAction {
+    grid-column: 1 / -1;
+  }
+
+  .caseTab {
+    grid-template-columns: 20px minmax(0, 1fr) 16px;
+  }
+
+  .tabSeal {
+    display: none;
+  }
+
+  .ticketCopy small {
+    white-space: normal;
+  }
+}
+
+@media (max-height: 800px) {
+  .specimenArt {
+    height: 188px;
+  }
+
+  .specimenSeal {
+    top: 139px;
+  }
+
+  .fact {
+    display: -webkit-box;
+    overflow: hidden;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+  }
+
+  .boundary {
+    display: none;
+  }
+
+  .caseRack,
+  .evidenceRibbon,
+  .warningSignalBoard {
+    margin-top: 11px;
+  }
+
+  .bureauPlaque {
+    min-height: 62px;
+  }
+
+  .specimenCaption {
+    padding-block: 9px;
+  }
+
+  .caseTab {
+    min-height: 44px;
+  }
+
+  .caseTab:nth-child(n + 2) {
+    display: none;
+  }
+
+  .warningLevelGrid article {
+    min-height: 50px;
+  }
+
+  .archiveFooter {
+    display: none;
+  }
+}
+
+@media (max-width: 700px) {
+  .cabinet {
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+
+  .cabinet::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .opticalBloom,
+  .loadProgress,
+  .hazardScene,
+  .hazardScene::after {
+    animation: none;
+  }
+
+  .reelControls button,
+  .projectAction,
+  .evidenceSummary svg {
+    transition: none;
+  }
+}
+
+.reelControls button:focus-visible,
+.projectAction:focus-visible,
+.evidenceRibbon > summary:focus-visible {
+  outline: 2px solid #eee2b6;
+  outline-offset: 3px;
+  box-shadow: 0 0 0 5px rgb(157 151 200 / 28%), inset 0 0 0 1px #eee2b6;
+}

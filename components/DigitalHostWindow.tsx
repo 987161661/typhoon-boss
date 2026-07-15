@@ -8,7 +8,11 @@ import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent
 } from "react";
-import { isHostLiveComment, type HostLiveComment } from "@/lib/liveCityInteraction";
+import {
+  isHostLiveComment,
+  isHostViewerRelationEvent,
+  type HostLiveEvent
+} from "@/lib/liveCityInteraction";
 
 type DirectorScene = "briefing" | "analysis";
 
@@ -19,7 +23,7 @@ export type HostChatRequest = {
   viewerName?: string;
 };
 
-export type { HostLiveComment } from "@/lib/liveCityInteraction";
+export type { HostLiveEvent } from "@/lib/liveCityInteraction";
 
 type HostHealth = {
   queueDepth?: number;
@@ -80,12 +84,12 @@ export function DigitalHostWindow({
   scene,
   visible = true,
   chatRequest,
-  onLiveComment
+  onLiveEvent
 }: {
   scene: DirectorScene;
   visible?: boolean;
   chatRequest?: HostChatRequest | null;
-  onLiveComment?: (comment: HostLiveComment) => void;
+  onLiveEvent?: (event: HostLiveEvent) => void;
 }) {
   const hostWindowRef = useRef<HTMLElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -100,7 +104,7 @@ export function DigitalHostWindow({
     attempts: number;
     acknowledged: boolean;
   } | null>(null);
-  const onLiveCommentRef = useRef(onLiveComment);
+  const onLiveEventRef = useRef(onLiveEvent);
   const [frameLoaded, setFrameLoaded] = useState(false);
   const frameLoadedRef = useRef(false);
   const [hostFrameReady, setHostFrameReady] = useState(false);
@@ -124,8 +128,8 @@ export function DigitalHostWindow({
   }, [scene]);
 
   useEffect(() => {
-    onLiveCommentRef.current = onLiveComment;
-  }, [onLiveComment]);
+    onLiveEventRef.current = onLiveEvent;
+  }, [onLiveEvent]);
 
   useEffect(() => {
     frameLoadedRef.current = frameLoaded;
@@ -194,8 +198,8 @@ export function DigitalHostWindow({
   useEffect(() => {
     const handleHostMessage = (event: MessageEvent<unknown>) => {
       if (event.origin !== hostOrigin || event.source !== iframeRef.current?.contentWindow) return;
-      if (isHostLiveComment(event.data)) {
-        onLiveCommentRef.current?.(event.data);
+      if (isHostLiveComment(event.data) || isHostViewerRelationEvent(event.data)) {
+        onLiveEventRef.current?.(event.data);
         return;
       }
       const data = event.data as { type?: unknown; requestId?: unknown };

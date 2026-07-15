@@ -11,6 +11,7 @@ import {
   createAcceptanceNationalSituation,
   createAcceptanceRadarSnapshot,
   createAcceptanceStorms,
+  createAcceptanceCityBriefing,
   createOrdinaryCityBriefing
 } from "@/lib/acceptanceScenarioFixtures";
 import { resolveServerAcceptanceScenario } from "@/lib/acceptanceScenarioServer";
@@ -63,6 +64,13 @@ test("official-red fixture is official, deterministic, and city-scoped", () => {
   assert.equal(event.geography.cityCode, "340100");
 });
 
+test("warning-carousel fixture provides twenty official warnings across the required hazard styles", () => {
+  const snapshot = createAcceptanceNationalSituation("warning-carousel");
+  assert.equal(snapshot.warnings.total, 20);
+  assert.deepEqual(new Set(snapshot.events.map((event) => event.hazard)), new Set(["heat", "rain", "convection", "typhoon", "wind"]));
+  assert.deepEqual(new Set(snapshot.events.map((event) => event.level)), new Set(["red", "orange", "yellow", "blue"]));
+});
+
 test("source-failure fixture retains the last good warning and never converts failure to no-risk", () => {
   const snapshot = createAcceptanceNationalSituation("source-failure");
   const failedSource = snapshot.sourceHealth.find((source) => source.sourceId === "china-weather-alert");
@@ -89,12 +97,46 @@ test("ordinary-city fixture stays in ordinary weather semantics without fabricat
   assert.doesNotMatch(briefing.headline, /已发布|红色|橙色|灾害已发生/);
 });
 
-test("all six scenarios are routed through the real national, radar, and city API paths", async () => {
+test("official-red fixture enters the city briefing path with an active city-scoped warning", () => {
+  const briefing = createAcceptanceCityBriefing("official-red");
+  assert.equal(briefing.city.cityCode, "340100");
+  assert.equal(briefing.situation?.mode, "official-warning");
+  assert.equal(briefing.situation?.primaryWarning?.level, "red");
+  assert.equal(briefing.officialWarnings[0]?.severity, "Red");
+  assert.equal(briefing.sources.find((source) => source.id === "qweather-warning")?.status, "available");
+  assert.match(briefing.headline, /暴雨红色预警/);
+});
+
+test("source-failure city fixture retains last-good red warning and marks the feed delayed", () => {
+  const briefing = createAcceptanceCityBriefing("source-failure");
+  const warningSource = briefing.sources.find((source) => source.id === "qweather-warning");
+  assert.equal(briefing.status, "degraded");
+  assert.equal(warningSource?.status, "unavailable");
+  assert.equal(briefing.situation?.primaryWarning?.level, "red");
+  assert.equal(briefing.officialWarnings.length, 1);
+  assert.match([
+    briefing.headline,
+    briefing.narrative.summary,
+    briefing.narrative.caveat,
+    warningSource?.limitation,
+    ...briefing.warnings,
+    ...(briefing.situation?.limitations ?? [])
+  ].filter(Boolean).join(" "), /最近成功快照/);
+  assert.doesNotMatch([
+    briefing.headline,
+    briefing.narrative.summary,
+    warningSource?.limitation,
+    ...briefing.warnings
+  ].filter(Boolean).join(" "), /当前无有效官方预警|当前无预警|安全|无风险$/);
+});
+
+test("all acceptance scenarios are routed through the real national, radar, and city API paths", async () => {
   assert.deepEqual(ACCEPTANCE_SCENARIOS, [
     "no-storm",
     "single-storm",
     "multi-storm",
     "official-red",
+    "warning-carousel",
     "ordinary-city",
     "source-failure"
   ]);
@@ -113,6 +155,10 @@ test("all six scenarios are routed through the real national, radar, and city AP
   }
   assert.doesNotMatch(nationalHook, /acceptanceScenario=["']/);
   assert.doesNotMatch(radarHook, /acceptanceScenario=["']/);
+  assert.match(cityRoute, /acceptanceScenario === "ordinary-city"/);
+  assert.match(cityRoute, /acceptanceScenario === "official-red"/);
+  assert.match(cityRoute, /acceptanceScenario === "source-failure"/);
+  assert.match(cityRoute, /stage"\) === "location" \? briefing\.city : briefing/);
 });
 
 async function read(path: string) {

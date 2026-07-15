@@ -1,0 +1,64 @@
+{
+  "schemaVersion": 1,
+  "collection": "hud-console",
+  "purpose": "Static, transparent decorative overlays for the National Situation HUD. They never encode alert severity, live values, control state, or data freshness.",
+  "deliveryStandard": {
+    "format": "PNG / RGBA",
+    "canvas": "1254x1254 px",
+    "background": "transparent",
+    "motion": "static only; CSS may fade them in only when motion is allowed",
+    "content": "no text, no numbers, no logos, no watermark",
+    "usage": "decorative only; exclude from accessibility tree and do not place over readable or interactive content"
+  },
+  "tokens": {
+    "consoleCyan": "#67B6C8",
+    "oceanBlue": "#1457A6",
+    "slateBlue": "#7897A8",
+    "frost": "#DBE9E6",
+    "baseInk": "#070B0F"
+  },
+  "assets": [
+    {
+      "file": "radar-sector-overlay.png",
+      "dimensions": "1254x1254",
+      "layer": "panel background / outer left-lower edge",
+      "safePlacement": "Keep the dense lower-left sector outside title, data reading and buttons; use object-position:left bottom or a clipped pseudo-element.",
+      "recommendedCss": "opacity: 0.035-0.09; mix-blend-mode: screen; pointer-events: none",
+      "reducedMotion": "Use unchanged; it must not be rotated or swept when prefers-reduced-motion is enabled.",
+      "tokens": ["#67B6C8", "#1457A6", "#DBE9E6"],
+      "provenance": {
+        "method": "OpenAI built-in image generation followed by local chroma-key alpha extraction",
+        "sourcePrompt": "Restrained meteorological radar sector with partial circular sweep, azimuth ticks, contour arcs and sparse tracking points; professional weather watch desk; flat chroma-key backdrop; no text or watermarks.",
+        "generatedAt": "2026-07-15"
+      }
+    },
+    {
+      "file": "synoptic-contours-overlay.png",
+      "dimensions": "1254x1254",
+      "layer": "panel background / source ledger or summary edge",
+      "safePlacement": "Keep the empty center free for data. Use it behind the content at top-right and bottom-left only.",
+      "recommendedCss": "opacity: 0.04-0.12; mix-blend-mode: screen; pointer-events: none",
+      "reducedMotion": "Use unchanged; no pan, drift or animated parallax in reduced-motion mode.",
+      "tokens": ["#7897A8", "#67B6C8", "#DBE9E6"],
+      "provenance": {
+        "method": "OpenAI built-in image generation followed by local chroma-key alpha extraction",
+        "sourcePrompt": "Fine synoptic isobar contours, sparse wind-flow traces and calibration dots at outer corners; sober professional weather analysis drafting; flat chroma-key backdrop; no text or watermarks.",
+        "generatedAt": "2026-07-15"
+      }
+    },
+    {
+      "file": "polar-calibration-corner.png",
+      "dimensions": "1254x1254",
+      "layer": "panel foreground / top-right outer corner only",
+      "safePlacement": "Reserve an empty inner 70 percent of the canvas for content; crop to the panel corner and keep it away from controls.",
+      "recommendedCss": "opacity: 0.18-0.32; mix-blend-mode: screen; pointer-events: none",
+      "reducedMotion": "Use unchanged; do not animate ticks, rotate the ring or pulse beacons in reduced-motion mode.",
+      "tokens": ["#67B6C8", "#1457A6", "#DBE9E6"],
+      "provenance": {
+        "method": "OpenAI built-in image generation followed by local chroma-key alpha extraction",
+        "sourcePrompt": "Compact partial polar calibration ring with fine radial ticks and beacon points in the extreme top-right corner; professional meteorological instrument drafting; flat chroma-key backdrop; no text or watermarks.",
+        "generatedAt": "2026-07-15"
+      }
+    }
+  ]
+}

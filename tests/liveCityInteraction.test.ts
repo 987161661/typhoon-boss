@@ -3,7 +3,9 @@ import test from "node:test";
 import {
   extractChinaCityMention,
   isHostLiveComment,
-  toCityInteractionRequest
+  isHostViewerRelationEvent,
+  toCityInteractionRequest,
+  viewerIdentityKey
 } from "../lib/liveCityInteraction";
 
 test("city interaction only accepts a bounded Chinese @city mention", () => {
@@ -34,9 +36,32 @@ test("host bridge comment is shape-checked before it can enter the city queue", 
   assert.deepEqual(toCityInteractionRequest(comment), {
     id: "comment-1",
     cityQuery: "北京",
+    viewerId: null,
     viewerName: "测试观众",
+    platform: null,
+    followEvidence: "unknown",
+    followObservedAt: null,
     receivedAt: 1_783_000_000_000
   });
   assert.equal(isHostLiveComment({ ...comment, text: "" }), false);
   assert.equal(isHostLiveComment({ ...comment, version: 2 }), false);
+});
+
+test("viewer relation requires an exact platform and viewer id", () => {
+  const event = {
+    type: "aituber:viewer-relation",
+    version: 1,
+    id: "follow-1",
+    relation: "follow",
+    state: "verified",
+    viewerId: "U-42",
+    viewerName: "同名观众",
+    platform: "BILIBILI",
+    observedAt: 1_783_000_000_100
+  } as const;
+  assert.equal(isHostViewerRelationEvent(event), true);
+  assert.equal(viewerIdentityKey(event.platform, event.viewerId), "bilibili:U-42");
+  assert.notEqual(viewerIdentityKey("bilibili", "U-42"), viewerIdentityKey("douyin", "U-42"));
+  assert.notEqual(viewerIdentityKey("bilibili", "U-42"), viewerIdentityKey("bilibili", "u-42"));
+  assert.equal(isHostViewerRelationEvent({ ...event, viewerId: " " }), false);
 });

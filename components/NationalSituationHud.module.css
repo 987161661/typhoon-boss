@@ -1,540 +1,148 @@
 .hud {
-  --terminal-void: #05080a;
-  --archive-ivory: #ecfbff;
-  --telemetry-cyan: #00d8ff;
-  --official-red: #ff3b32;
-  --official-orange: #ff8a2a;
-  --signal-amber: #ffb000;
-  width: min(34rem, calc(100vw - 2rem));
+  --void: #081014;
+  --paper: #f1f5ee;
+  --muted: #8ea4a8;
+  --line: rgb(177 210 204 / 17%);
+  --phosphor: #73dbe5;
+  --phosphor-dim: rgb(115 219 229 / 13%);
+  --panel-ink: #101a1e;
+  --level: #80a8c5;
+  --hazard: #7c8795;
+  --hazard-wash: rgb(124 135 149 / 12%);
+  position: relative;
+  width: min(36rem, calc(100vw - 2rem));
   max-height: calc(100dvh - 2rem);
   overflow: auto;
-  padding: 0.75rem;
-  color: var(--archive-ivory);
-  background:
-    linear-gradient(110deg, rgb(5 8 10 / 96%), rgb(5 8 10 / 82%)),
-    repeating-linear-gradient(90deg, rgb(0 216 255 / 3%) 0 1px, transparent 1px 3rem);
-  border: 1px solid rgb(0 216 255 / 32%);
-  box-shadow: 0 1.5rem 4rem rgb(0 0 0 / 42%);
+  padding: 1rem;
+  color: var(--paper);
+  background: linear-gradient(180deg, #10191d, #070d10 42%);
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
   font-family: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", sans-serif;
-  scrollbar-color: rgb(0 216 255 / 52%) rgb(5 8 10 / 70%);
   container-type: inline-size;
+}
+
+.hud[data-signal-desk="national"] { isolation: isolate; }
+.hud[data-signal-desk="national"] > * { position: relative; z-index: 1; }
+.hud[data-signal-desk="national"]::before, .hud[data-signal-desk="national"]::after { content: ""; position: absolute; z-index: 0; pointer-events: none; }
+.hud[data-signal-desk="national"]::before { top: .5rem; right: .5rem; width: 4.4rem; height: 4.4rem; background: url("/assets/hud-console/polar-calibration-corner.png") top right / contain no-repeat; opacity: .12; }
+.hud[data-signal-desk="national"]::after { inset: 0; background:
+  url("/assets/hud-console/synoptic-contours-overlay.png") right top / 88% auto no-repeat;
+  opacity: .025;
 }
 
 .compact {
   width: 100%;
   max-height: none;
-  min-height: 6.9rem;
-  padding: 0.55rem 0.7rem 0.62rem;
+  min-height: 6.55rem;
   overflow: hidden;
+  padding: 0.5rem 0.7rem 0.54rem;
   border-width: 0 0 1px;
   box-shadow: none;
   container-type: normal;
 }
 
-.compactBrand {
+.compactBrand, .brandRail, .signalMeta, .compactFooter, .ledgerHeading, .eventMeta {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 0.75rem;
-  padding-bottom: 0.35rem;
-  border-bottom: 1px solid rgb(0 216 255 / 32%);
-}
-
-.compactBrand strong {
-  font-family: "Bahnschrift SemiCondensed", "Bahnschrift", "Microsoft YaHei UI", sans-serif;
-  font-size: 1.02rem;
-  letter-spacing: 0.035em;
-}
-
-.compactBrand time,
-.compactSource span,
-.compactSource small,
-.compactEvent > div > span,
-.compactEvent > div > small {
-  font-family: "Bahnschrift", "Consolas", "Microsoft YaHei UI", monospace;
-  font-size: 0.64rem;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.035em;
-}
-
-.compactBrand time,
-.compactEvent > div > small,
-.compactSource small {
-  color: rgb(236 251 255 / 58%);
-}
-
-.compactEvent {
-  display: grid;
-  grid-template-columns: 2.65rem minmax(0, 1fr) minmax(7rem, 0.42fr);
-  gap: 0.58rem;
   align-items: center;
-  padding-top: 0.42rem;
-}
-
-.compactBadge {
-  width: 2.5rem;
-  aspect-ratio: 1;
-  background-position: center;
-  background-repeat: no-repeat;
-  background-size: contain;
-  opacity: 0.82;
-}
-
-.level_watch .compactBadge { opacity: 0.4; }
-
-.compactEvent > div:not(.compactSource) {
-  min-width: 0;
-}
-
-.compactEvent > div > span,
-.compactEvent > div > strong,
-.compactEvent > div > small {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.compactEvent > div > span {
-  color: var(--telemetry-cyan);
-}
-
-.level_red .compactEvent > div > span { color: var(--official-red); }
-.level_orange .compactEvent > div > span { color: var(--official-orange); }
-.level_yellow .compactEvent > div > span,
-.level_watch .compactEvent > div > span { color: var(--signal-amber); }
-
-.compactEvent > div > strong {
-  margin: 0.15rem 0;
-  font-family: "Bahnschrift SemiCondensed", "Bahnschrift", "Microsoft YaHei UI", sans-serif;
-  font-size: 0.92rem;
-}
-
-.compactSource {
-  min-width: 0;
-  padding-left: 0.58rem;
-  border-left: 1px dashed rgb(0 216 255 / 34%);
-}
-
-.compactSource span,
-.compactSource small {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.compactSource span { color: var(--archive-ivory); }
-
-.brandRail,
-.ledgerHeading,
-.eventMeta {
-  display: flex;
-  align-items: flex-end;
   justify-content: space-between;
-  gap: 0.75rem;
+  gap: 0.65rem;
 }
 
-.brandRail {
-  padding: 0.25rem 0.35rem 0.7rem;
-  border-bottom: 1px solid rgb(0 216 255 / 42%);
-}
+.compactBrand { padding-bottom: 0.34rem; border-bottom: 1px solid var(--line); }
+.compactBrand strong, .brandRail h2 { font-family: "Bahnschrift SemiCondensed", "Bahnschrift", "Microsoft YaHei UI", sans-serif; letter-spacing: .035em; }
+.compactBrand strong { font-size: 1.02rem; }
+.compactBrand time, .compactFooter, .eyebrow, .syncTime, .signalMeta, .queuePosition, .ledgerHeading span, .sourceStatus, .sourceRow time { font-family: "Bahnschrift", "Consolas", "Microsoft YaHei UI", monospace; font-variant-numeric: tabular-nums; }
+.compactBrand time, .compactFooter, .syncTime, .signalMeta, .ledgerHeading span, .sourceRow time { color: var(--muted); font-size: .64rem; }
 
-.eyebrow,
-.syncTime span,
-.eventMeta,
-.warningSummary > span,
-.cityEntry > span,
-.ledgerHeading span,
-.sourceStatus,
-.sourceRow time {
-  font-family: "Bahnschrift", "Consolas", "Microsoft YaHei UI", monospace;
-  font-size: 0.69rem;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
+.brandRail { align-items: center; padding: .18rem 0 .95rem; border-bottom: 1px solid var(--line); }
+.deskIdentity { display: flex; align-items: center; gap: .54rem; min-width: 0; }
+.deskGridMark { position: relative; flex: 0 0 2.2rem; width: 2.2rem; height: 2.2rem; border: 1px solid rgb(115 219 229 / 65%); border-radius: 50%; background: radial-gradient(circle, rgb(115 219 229 / 26%) 0 14%, transparent 15% 34%, rgb(115 219 229 / 26%) 35% 38%, transparent 39%); box-shadow: inset 0 0 0 4px rgb(115 219 229 / 5%); }
+.deskGridMark::before, .deskGridMark::after { content: ""; position: absolute; background: var(--phosphor); }
+.deskGridMark::before { top: -.22rem; left: .42rem; width: .56rem; height: 2px; box-shadow: 0 1.96rem 0 var(--phosphor); }
+.deskGridMark::after { top: .42rem; left: -.22rem; width: 2px; height: .56rem; box-shadow: 1.96rem 0 0 var(--phosphor); }
+.deskReadout { display: grid; justify-items: end; gap: .1rem; padding: .22rem 0 .22rem .7rem; border-left: 1px solid var(--line); color: var(--paper); text-align: right; }
+.readoutLabel, .channelTag { color: var(--phosphor); font: 800 .52rem/1 "Bahnschrift", "Consolas", monospace; letter-spacing: .13em; }
+.deskReadout > span:not(.readoutLabel) { font-size: .64rem; }
+.eyebrow { display: block; color: var(--phosphor); font-size: .65rem; font-weight: 700; letter-spacing: .12em; }
+.brandRail h2 { margin: .12rem 0 0; font-size: clamp(1.45rem, 6.4cqi, 2rem); line-height: 1; }
+.syncTime { display: grid; justify-items: end; gap: .14rem; text-align: right; }
+.syncTime time { color: var(--paper); font-size: .79rem; }
 
-.eyebrow {
-  display: block;
-  color: rgb(0 216 255 / 74%);
-}
-
-.brandRail h2 {
-  margin: 0.1rem 0 0;
-  font-family: "Bahnschrift SemiCondensed", "Bahnschrift", "Microsoft YaHei UI", sans-serif;
-  font-size: clamp(1.5rem, 6.4cqi, 2rem);
-  line-height: 1;
-  letter-spacing: 0.035em;
-}
-
-.syncTime {
-  display: grid;
-  justify-items: end;
-  color: rgb(236 251 255 / 62%);
-}
-
-.syncTime time {
-  color: var(--archive-ivory);
-  font-family: "Bahnschrift", "Consolas", monospace;
-  font-size: 0.8rem;
-  font-variant-numeric: tabular-nums;
-}
-
-.mainDossier {
+.signalCard {
   position: relative;
-  min-height: 16.25rem;
-  margin-top: 0.7rem;
+  display: grid;
+  grid-template-columns: 6.1rem minmax(0, 1fr) 7.2rem;
+  gap: .9rem;
+  min-height: 13.2rem;
+  margin-top: .9rem;
+  overflow: hidden;
   isolation: isolate;
-  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 8%);
+  border-radius: .7rem;
+  background: linear-gradient(125deg, var(--hazard-wash), transparent 48%), var(--panel-ink);
+  box-shadow: 0 .75rem 1.6rem rgb(0 0 0 / 18%), inset 0 1px rgb(255 255 255 / 4%);
 }
 
-.dossierSkin {
-  position: absolute;
-  z-index: -3;
-  inset: 0;
-  background: url("/assets/weather-boss/national-dossier-fragment.svg") center / 100% 100% no-repeat;
-  opacity: 0.88;
-}
+.signalCard::before { content: ""; position: absolute; z-index: -2; inset: 0; border-left: .32rem solid var(--hazard); border-radius: inherit; opacity: .94; }
+.hazardTexture { position: absolute; z-index: -3; inset: 0; opacity: .28; pointer-events: none; background: radial-gradient(circle at 100% 0, var(--hazard-wash), transparent 42%); }
+.signalCard[data-hazard="heat"] { --hazard: #d28a14; --hazard-wash: rgb(210 138 20 / 19%); }
+.signalCard[data-hazard="heat"] .hazardTexture { background: repeating-linear-gradient(0deg, transparent 0 11px, rgb(244 184 60 / 18%) 11px 12px, transparent 12px 19px); }
+.signalCard[data-hazard="rain"], .signalCard[data-hazard="flood"] { --hazard: #007dad; --hazard-wash: rgb(0 125 173 / 18%); }
+.signalCard[data-hazard="rain"] .hazardTexture, .signalCard[data-hazard="flood"] .hazardTexture { background: repeating-linear-gradient(101deg, transparent 0 9px, rgb(112 208 238 / 18%) 9px 11px, transparent 11px 20px); }
+.signalCard[data-hazard="convection"] { --hazard: #6056c7; --hazard-wash: rgb(96 86 199 / 18%); }
+.signalCard[data-hazard="convection"] .hazardTexture { background: linear-gradient(125deg, transparent 0 46%, rgb(154 143 255 / 24%) 46% 47%, transparent 47% 100%); }
+.signalCard[data-hazard="typhoon"] { --hazard: #1457a6; --hazard-wash: rgb(20 87 166 / 20%); }
+.signalCard[data-hazard="typhoon"] .hazardTexture { background: repeating-radial-gradient(circle at 15% 54%, transparent 0 12px, rgb(83 167 239 / 16%) 12px 13px, transparent 13px 25px); }
+.signalCard[data-hazard="wind"] { --hazard: #229d8f; --hazard-wash: rgb(34 157 143 / 17%); }
+.signalCard[data-hazard="dust"] { --hazard: #a87845; --hazard-wash: rgb(168 120 69 / 18%); }
 
-.riskSeal {
-  position: absolute;
-  z-index: -1;
-  inset: 2.6rem 0.35rem auto;
-  height: 4.2rem;
-  background-position: center;
-  background-repeat: no-repeat;
-  background-size: 100% 100%;
-  opacity: 0.8;
-}
+.hazardVisual { position: relative; display: grid; align-content: center; justify-items: center; gap: .55rem; padding: .9rem .45rem; overflow: hidden; isolation: isolate; border-right: 1px solid rgb(255 255 255 / 7%); background: linear-gradient(180deg, rgb(255 255 255 / 6%), transparent); }
+.signal_full .hazardVisual::before { content: ""; position: absolute; z-index: 0; inset: 0; pointer-events: none; background: url("/assets/hud-console/radar-sector-overlay.png") left bottom / 165% auto no-repeat; opacity: .08; }
+.signal_full .hazardVisual::after { content: ""; position: absolute; inset: .8rem; border: 1px solid color-mix(in srgb, var(--hazard) 42%, transparent); border-radius: 50%; pointer-events: none; }
+.hazardGlyph { position: relative; z-index: 1; width: 4.35rem; aspect-ratio: 1; background: center / contain no-repeat; filter: drop-shadow(0 .35rem .75rem rgb(0 0 0 / 38%)); }
+.hazardName { position: relative; z-index: 1; color: var(--hazard); font: 800 .74rem/1 "Microsoft YaHei UI", sans-serif; letter-spacing: .12em; }
 
-.eventBadge {
-  position: absolute;
-  z-index: -2;
-  top: 1.35rem;
-  right: 1rem;
-  width: 6.1rem;
-  aspect-ratio: 1;
-  background-position: center;
-  background-repeat: no-repeat;
-  background-size: contain;
-  opacity: 0.32;
-}
+.signalCopy { min-width: 0; padding: .95rem 0 1rem; }
+.signalMeta { justify-content: flex-start; min-height: 1.35rem; font-size: .66rem; letter-spacing: .045em; }
+.signalMeta time { margin-left: auto; white-space: nowrap; }
+.levelFlag_red, .levelFlag_orange, .levelFlag_yellow, .levelFlag_blue, .levelFlag_watch, .levelFlag_none { display: inline-flex; width: fit-content; align-items: center; padding: .22rem .42rem; color: #f8fbfa; background: var(--level); font: 800 .64rem/1 "Microsoft YaHei UI", sans-serif; letter-spacing: .075em; white-space: nowrap; }
+.level_red { --level: #d9453d; }.level_orange { --level: #df7b28; }.level_yellow { --level: #c89a1d; }.level_blue { --level: #4d82b8; }.level_watch { --level: #70808a; }.level_none { --level: #60717b; }
+.levelFlag_red { background: #d9453d; }.levelFlag_orange { background: #df7b28; }.levelFlag_yellow { background: #c89a1d; color: #17130a; }.levelFlag_blue { background: #4d82b8; }.levelFlag_watch { background: #70808a; }.levelFlag_none { background: #47545c; }
+.signalCopy h3, .emptySignal h3 { margin: .55rem 0 .38rem; color: var(--paper); font-family: "Microsoft YaHei UI", "Microsoft YaHei", sans-serif; font-size: clamp(1.15rem, 4.9cqi, 1.68rem); font-weight: 800; line-height: 1.18; letter-spacing: .005em; overflow-wrap: anywhere; }
+.location { display: block; color: var(--hazard); font-size: .78rem; line-height: 1.35; }
+.fact, .limitation, .emptySignal p { margin: .55rem 0 0; color: rgb(237 246 243 / 78%); font-size: .77rem; line-height: 1.5; }
+.limitation { color: rgb(186 201 202 / 74%); }.limitation span { margin-right: .45rem; color: #e2b860; font-weight: 700; }
 
-.level_red .eventBadge,
-.level_orange .eventBadge {
-  opacity: 0.68;
-}
+.signalControls { position: relative; display: grid; align-content: center; justify-items: stretch; gap: .55rem; padding: 1.4rem .78rem .85rem 0; border-left: 1px solid rgb(255 255 255 / 7%); }
+.signal_full .signalControls::before { content: "预警控制"; position: absolute; top: .56rem; left: .48rem; color: var(--muted); font: 700 .58rem/1 "Microsoft YaHei UI", sans-serif; letter-spacing: .08em; }
+.queuePosition { justify-self: end; color: var(--paper); font-size: .72rem; letter-spacing: .08em; }
+.controlRow { display: grid; grid-template-columns: repeat(3, 1fr); gap: .24rem; }
+.controlRow button, .locateAction { display: inline-flex; align-items: center; justify-content: center; min-height: 2rem; border: 1px solid rgb(255 255 255 / 12%); border-radius: .32rem; color: var(--paper); background: rgb(255 255 255 / 5%); cursor: pointer; transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease, transform 150ms ease; }
+.locateAction { gap: .28rem; padding: .35rem; color: var(--hazard); font: 700 .66rem/1 "Microsoft YaHei UI", sans-serif; }
+.controlRow button:hover, .locateAction:hover { border-color: var(--hazard); background: var(--hazard-wash); box-shadow: inset 0 0 0 1px rgb(255 255 255 / 8%), 0 0 .8rem var(--hazard-wash); transform: translateY(-1px); }
+.controlRow button:active, .locateAction:active { transform: translateY(0); }
+.controlRow button:focus-visible, .locateAction:focus-visible, .cityEntry:is(button):focus-visible { outline: 2px solid #f0c25b; outline-offset: 3px; box-shadow: 0 0 0 5px rgb(240 194 91 / 18%); }
+.cycleProgress { position: absolute; right: 0; bottom: 0; left: 0; height: 3px; transform-origin: left; background: var(--level); animation: cycle 2.5s linear both; }.cyclePaused { animation-play-state: paused; }
+@keyframes cycle { from { transform: scaleX(0); } to { transform: scaleX(1); } }
 
-.level_watch .eventBadge {
-  opacity: 0.26;
-  filter: saturate(0.72);
-}
+.signal_compact { grid-template-columns: 3.2rem minmax(0, 1fr) 6rem; min-height: 4.15rem; gap: .48rem; margin-top: .4rem; }
+.signal_compact .hazardVisual { padding: .42rem .2rem; }.signal_compact .hazardGlyph { width: 2.25rem; }.signal_compact .hazardName { display: none; }
+.signal_compact .signalCopy { padding: .4rem 0 .46rem; }.signal_compact .signalMeta { min-height: 0; font-size: .55rem; }.signal_compact .signalCopy h3 { margin: .22rem 0 .12rem; font-size: .91rem; line-height: 1.15; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.signal_compact .location { overflow: hidden; font-size: .62rem; text-overflow: ellipsis; white-space: nowrap; }
+.signal_compact .signalControls { gap: .32rem; padding: .4rem .36rem .4rem 0; }.signal_compact .queuePosition { font-size: .59rem; }.signal_compact .controlRow button { min-height: 1.5rem; }.signal_compact .locateAction { min-height: 1.35rem; font-size: .56rem; }.signal_compact .locateAction svg { width: 11px; height: 11px; }
+.compactFooter { padding-top: .35rem; white-space: nowrap; }.compactFooter small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.eventCopy,
-.emptyEvent {
-  position: relative;
-  z-index: 1;
-  padding: 1.05rem 1.2rem 1.1rem;
-}
+.emptySignal { display: block; min-height: 10rem; padding: 1.1rem 1.25rem; }.emptySignal p { max-width: 38rem; }
+.queueChannel { position: relative; margin-top: 1.05rem; padding: 0; border: 0; background: transparent; }
+.channelHeading { display: flex; align-items: center; justify-content: space-between; gap: .6rem; color: var(--paper); font: 700 .75rem/1 "Microsoft YaHei UI", sans-serif; }.channelHeading span:last-child { color: var(--muted); font-size: .64rem; }
+.upNext { display: grid; gap: .22rem; margin: .5rem 0 0; padding: 0; list-style: none; }.upNext li { display: grid; grid-template-columns: auto minmax(0, 1fr) .8rem; align-items: center; gap: .55rem; padding: .54rem .12rem .54rem .7rem; border-left: 2px solid var(--hazard); background: transparent; }.upNext li:hover { background: rgb(255 255 255 / 4%); }.upNext strong { overflow: hidden; color: rgb(241 245 238 / 86%); font-size: .76rem; text-overflow: ellipsis; white-space: nowrap; }.queueVector { width: .42rem; height: .42rem; border-top: 1px solid var(--muted); border-right: 1px solid var(--muted); transform: rotate(45deg); }
 
-.eventMeta {
-  justify-content: flex-start;
-  align-items: center;
-  min-height: 1.35rem;
-  padding-right: 5.5rem;
-  color: rgb(236 251 255 / 74%);
-}
+.summaryGrid { display: grid; grid-template-columns: 1fr 1fr; gap: .7rem; margin-top: 1.1rem; }.warningSummary, .cityEntry { position: relative; min-height: 6.7rem; padding: .82rem; overflow: hidden; border: 1px solid rgb(255 255 255 / 8%); border-radius: .55rem; background: rgb(255 255 255 / 3%); text-align: left; }.warningSummary > span, .cityEntry > span { display: block; color: var(--muted); font-size: .68rem; letter-spacing: .04em; }.warningSummary strong, .cityEntry strong { display: block; margin-top: .38rem; color: var(--paper); font-size: 1.04rem; }.warningSummary p, .warningSummary time, .cityEntry small { display: block; margin-top: .3rem; color: var(--muted); font-size: .69rem; line-height: 1.35; }.summary_red { box-shadow: inset 0 3px #d9453d; }.summary_orange { box-shadow: inset 0 3px #df7b28; }.summary_yellow { box-shadow: inset 0 3px #c89a1d; }.summary_blue { box-shadow: inset 0 3px #4d82b8; }.summary_none { border-top: 3px dashed #60717b; }.city_events { border-bottom: 2px solid #67b6c8; }.city_quiet { border-bottom: 2px dashed #60717b; }.cityEntry:is(button) { color: inherit; cursor: pointer; transition: border-color 150ms ease, background-color 150ms ease; }.cityEntry:is(button):hover { border-color: rgb(115 219 229 / 55%); background-color: rgb(115 219 229 / 7%); }
 
-.eventMeta time {
-  margin-left: auto;
-  font-variant-numeric: tabular-nums;
-}
+.sourceLedger { margin-top: 1.1rem; padding: .8rem 0 0; border-top: 1px solid var(--line); background: transparent; }.ledgerHeading h3 { margin: 0; font-size: .88rem; }.sourceLedger ul { display: grid; gap: .12rem; margin: .55rem 0 0; padding: 0; list-style: none; }.sourceRow { display: grid; grid-template-columns: 1rem minmax(0, 1fr) auto auto; gap: .4rem; align-items: center; padding: .52rem .12rem; border-bottom: 1px solid rgb(255 255 255 / 6%); }.sourceRow[data-primary-evidence="true"] { background: linear-gradient(90deg, rgb(115 219 229 / 8%), transparent); }.healthGlyph { width: 1rem; height: 1rem; background: url("/assets/weather-boss/source-health-glyph-symbols.svg") 0 0 / 5rem 1rem no-repeat; }.glyph_fresh { background-position: 0 0; }.glyph_delayed { background-position: -1rem 0; }.glyph_expired { background-position: -2rem 0; }.glyph_unavailable { background-position: -3rem 0; }.glyph_no_record { background-position: -4rem 0; }.sourceName { overflow: hidden; font-size: .72rem; text-overflow: ellipsis; white-space: nowrap; }.sourceStatus { font-size: .62rem; }.source_fresh .sourceStatus { color: #65becb; }.source_delayed .sourceStatus { color: #d9aa45; }.source_expired .sourceStatus { text-decoration: line-through; }.source_unavailable .sourceStatus { color: #df7b70; }.source_no-record .sourceStatus { opacity: .58; }.sourceRow time { font-size: .61rem; }.sourceRow small { grid-column: 2 / -1; color: var(--muted); font-size: .62rem; line-height: 1.35; }
 
-.levelLabel,
-.evidenceLabel {
-  padding: 0.18rem 0.38rem;
-  border: 1px solid currentcolor;
-}
-
-.level_red .levelLabel {
-  color: var(--official-red);
-  border-style: double;
-  border-width: 3px;
-}
-
-.level_orange .levelLabel {
-  color: var(--official-orange);
-  border-width: 2px;
-}
-
-.level_yellow .levelLabel,
-.level_watch .levelLabel {
-  color: var(--signal-amber);
-}
-
-.level_watch .levelLabel {
-  border-style: dashed;
-}
-
-.level_blue .levelLabel {
-  color: var(--telemetry-cyan);
-  border-style: double;
-  border-width: 3px;
-}
-
-.evidenceLabel {
-  color: var(--archive-ivory);
-  border-color: rgb(236 251 255 / 38%);
-}
-
-.eventCopy h3,
-.emptyEvent h3 {
-  max-width: 86%;
-  margin: 1.25rem 0 0.25rem;
-  font-family: "Bahnschrift SemiCondensed", "Bahnschrift", "Microsoft YaHei UI", sans-serif;
-  font-size: clamp(1.45rem, 6.2cqi, 2rem);
-  line-height: 1.12;
-  text-wrap: balance;
-}
-
-.level_red .eventCopy h3,
-.level_orange .eventCopy h3 {
-  font-size: clamp(1.6rem, 6.8cqi, 2.2rem);
-}
-
-.location {
-  display: block;
-  color: var(--telemetry-cyan);
-  font-size: 0.9rem;
-}
-
-.fact {
-  margin: 0.7rem 0 0;
-  font-size: 0.94rem;
-  font-weight: 700;
-  line-height: 1.55;
-}
-
-.limitation,
-.emptyEvent p {
-  margin: 0.5rem 0 0;
-  color: rgb(236 251 255 / 66%);
-  font-size: 0.76rem;
-  line-height: 1.5;
-}
-
-.limitation span {
-  margin-right: 0.45rem;
-  color: var(--signal-amber);
-  font-family: "Bahnschrift", "Consolas", monospace;
-  letter-spacing: 0.08em;
-}
-
-.eventAction,
-.cityEntry:is(button) {
-  border: 1px solid rgb(0 216 255 / 56%);
-  color: var(--archive-ivory);
-  background: rgb(5 8 10 / 72%);
-  cursor: pointer;
-}
-
-.eventAction {
-  margin-top: 0.75rem;
-  padding: 0.42rem 0.7rem;
-  font: 700 0.76rem/1 "Microsoft YaHei UI", sans-serif;
-}
-
-.eventAction:hover,
-.cityEntry:is(button):hover {
-  border-color: var(--telemetry-cyan);
-  background: rgb(0 216 255 / 11%);
-}
-
-.eventAction:focus-visible,
-.cityEntry:is(button):focus-visible {
-  outline: 3px solid var(--signal-amber);
-  outline-offset: 3px;
-}
-
-.emptyEvent {
-  display: grid;
-  min-height: 16rem;
-  align-content: center;
-}
-
-.evidenceRail {
-  height: 1.75rem;
-  margin: -0.5rem 0 0;
-  background: url("/assets/weather-boss/source-health-connector.svg") center / 100% 100% no-repeat;
-  opacity: 0.78;
-}
-
-.summaryGrid {
-  display: grid;
-  grid-template-columns: 0.9fr 1.1fr;
-  gap: 0.55rem;
-}
-
-.warningSummary,
-.cityEntry {
-  min-width: 0;
-  padding: 0.72rem;
-  text-align: left;
-  border: 1px solid rgb(236 251 255 / 22%);
-  background: rgb(5 8 10 / 66%);
-}
-
-.warningSummary strong,
-.cityEntry strong {
-  display: block;
-  margin-top: 0.32rem;
-  font-family: "Bahnschrift SemiCondensed", "Bahnschrift", "Microsoft YaHei UI", sans-serif;
-  font-size: 1rem;
-  line-height: 1.25;
-}
-
-.warningSummary p,
-.warningSummary time,
-.cityEntry small {
-  display: block;
-  margin: 0.28rem 0 0;
-  color: rgb(236 251 255 / 62%);
-  font-size: 0.68rem;
-  line-height: 1.35;
-}
-
-.summary_red {
-  border-left: 0.42rem double var(--official-red);
-}
-
-.summary_red strong { color: var(--official-red); }
-
-.summary_orange {
-  border-left: 0.32rem solid var(--official-orange);
-}
-
-.summary_orange strong { color: var(--official-orange); }
-
-.summary_yellow { border-left: 0.24rem solid var(--signal-amber); }
-.summary_blue { border-left: 0.3rem double var(--telemetry-cyan); }
-.summary_none { border-left: 0.2rem dashed rgb(236 251 255 / 36%); }
-.city_events { border-bottom-color: var(--telemetry-cyan); }
-.city_quiet { border-bottom-style: dashed; }
-
-.sourceLedger {
-  margin-top: 0.62rem;
-  padding: 0.68rem;
-  border: 1px solid rgb(0 216 255 / 24%);
-  background: rgb(5 8 10 / 62%);
-}
-
-.ledgerHeading {
-  align-items: center;
-  padding-bottom: 0.48rem;
-  border-bottom: 1px solid rgb(0 216 255 / 18%);
-}
-
-.ledgerHeading h3 {
-  margin: 0;
-  font-family: "Bahnschrift SemiCondensed", "Bahnschrift", "Microsoft YaHei UI", sans-serif;
-  font-size: 0.95rem;
-}
-
-.sourceLedger ul {
-  display: grid;
-  gap: 0.2rem;
-  margin: 0.45rem 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.sourceRow {
-  display: grid;
-  grid-template-columns: 1.35rem minmax(0, 1fr) auto auto;
-  gap: 0.15rem 0.42rem;
-  align-items: center;
-  min-height: 2.35rem;
-  padding: 0.28rem 0.34rem;
-  border-left: 2px solid rgb(236 251 255 / 18%);
-}
-
-.sourceRow[data-primary-evidence="true"] {
-  background: linear-gradient(90deg, rgb(0 216 255 / 11%), transparent 72%);
-  border-left-color: var(--telemetry-cyan);
-}
-
-.healthGlyph {
-  width: 1.25rem;
-  height: 1.25rem;
-  background-image: url("/assets/weather-boss/source-health-glyph-symbols.svg");
-  background-repeat: no-repeat;
-  background-size: 6.25rem 1.25rem;
-}
-
-.glyph_fresh { background-position: 0 0; }
-.glyph_delayed { background-position: -1.25rem 0; }
-.glyph_expired { background-position: -2.5rem 0; }
-.glyph_unavailable { background-position: -3.75rem 0; }
-.glyph_no_record { background-position: -5rem 0; }
-
-.sourceName {
-  overflow: hidden;
-  font-size: 0.72rem;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sourceStatus {
-  color: var(--archive-ivory);
-}
-
-.source_fresh .sourceStatus { color: var(--telemetry-cyan); }
-.source_delayed .sourceStatus { color: var(--signal-amber); }
-.source_expired .sourceStatus { text-decoration: line-through; }
-.source_unavailable .sourceStatus { border-bottom: 1px dashed currentcolor; }
-.source_no-record .sourceStatus { opacity: 0.58; }
-
-.sourceRow time {
-  color: rgb(236 251 255 / 58%);
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.02em;
-}
-
-.sourceRow small {
-  grid-column: 2 / -1;
-  color: rgb(236 251 255 / 49%);
-  font-size: 0.62rem;
-}
-
-@container (max-width: 27rem) {
-  .summaryGrid { grid-template-columns: 1fr; }
-  .mainDossier { min-height: 17rem; }
-  .eventMeta { padding-right: 3.8rem; }
-  .eventMeta time { display: none; }
-  .eventBadge { width: 4.5rem; }
-  .sourceRow { grid-template-columns: 1.35rem minmax(0, 1fr) auto; }
-  .sourceRow time { display: none; }
-}
-
-@media (max-height: 760px) {
-  .hud:not(.compact) { width: min(30rem, calc(100vw - 1rem), 100%); padding: 0.55rem; }
-  .mainDossier { min-height: 13.5rem; }
-  .emptyEvent { min-height: 13.25rem; }
-  .eventCopy { padding-block: 0.85rem; }
-  .eventCopy h3 { margin-top: 0.85rem; }
-  .sourceRow { min-height: 2rem; }
-  .sourceRow small { display: none; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .hud *,
-  .hud *::before,
-  .hud *::after {
-    scroll-behavior: auto !important;
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
-  }
-}
+@container (max-width: 29rem) { .signal_full { grid-template-columns: 4.6rem minmax(0, 1fr); }.signal_full .signalControls { grid-column: 1 / -1; grid-row: 2; grid-template-columns: auto 1fr; padding: 1.45rem .75rem .75rem; }.signal_full .queuePosition { align-self: center; }.signal_full .controlRow { max-width: 8rem; }.signal_full .locateAction { grid-column: 2; }.summaryGrid { grid-template-columns: 1fr; }.sourceRow { grid-template-columns: 1rem minmax(0, 1fr) auto; }.sourceRow time { display: none; } }
+@media (max-height: 760px) { .hud { max-height: calc(100dvh - .7rem); }.signal_full { min-height: 10.5rem; }.fact, .limitation { font-size: .7rem; } }
+@media (max-width: 620px) { .signal_compact { grid-template-columns: 2.7rem minmax(0, 1fr) 5.8rem; min-height: 5.3rem; }.signal_compact .hazardGlyph { width: 1.9rem; }.signal_compact .signalCopy h3 { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; white-space: normal; }.signal_compact .signalControls { padding-right: .22rem; }.signal_compact .controlRow { gap: .16rem; }.signal_compact .controlRow button { min-height: 1.35rem; }.compactFooter { font-size: .54rem; } }
+@media (prefers-reduced-motion: reduce) { .cycleProgress { display: none; }.signal_full .hazardVisual::after { display: none; }.signalCard, .controlRow button, .locateAction, .cityEntry:is(button) { transition: none; }.controlRow button:hover, .locateAction:hover { transform: none; } }

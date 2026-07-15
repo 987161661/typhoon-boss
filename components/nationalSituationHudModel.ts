@@ -20,6 +20,7 @@ export type HudSourceState = {
 
 export type HudMainEvent = {
   id: string;
+  hazard: WeatherHazard;
   title: string;
   locationLabel: string;
   factSummary: string;
@@ -37,6 +38,12 @@ export type HudMainEvent = {
 export type NationalSituationHudModel = {
   generatedLabel: string;
   mainEvent: HudMainEvent | null;
+  /**
+   * Display-only queue for authoritative warnings. It deliberately does not
+   * change the snapshot ordering contract used by map risk and broadcast
+   * systems.
+   */
+  warningQueue: HudMainEvent[];
   warning: {
     total: number;
     highestLevel: Exclude<WeatherEventLevel, "watch"> | null;
@@ -110,6 +117,7 @@ const BADGE_ASSET: Record<WeatherHazard, string> = {
 export function buildNationalSituationHudModel(snapshot: NationalSituationSnapshot): NationalSituationHudModel {
   const events = sortNationalWeatherEvents(snapshot.events);
   const main = events[0] ?? null;
+  const warningQueue = buildOfficialWarningQueue(events);
   const deterministicCityEvents = events.filter((event) =>
     event.geography.cityAttribution === "deterministic" && event.geography.cityCode !== null
   );
@@ -119,6 +127,7 @@ export function buildNationalSituationHudModel(snapshot: NationalSituationSnapsh
   return {
     generatedLabel: formatNationalTime(snapshot.generatedAt),
     mainEvent: main ? toMainEvent(main) : null,
+    warningQueue,
     warning: {
       total: snapshot.warnings.total,
       highestLevel: snapshot.warnings.highestLevel,
@@ -152,11 +161,40 @@ export function buildNationalSituationHudModel(snapshot: NationalSituationSnapsh
   };
 }
 
+/**
+ * A red/orange/yellow/blue round is intentionally not a severity score. It
+ * is a broadcast cadence: red receives a second slot while every available
+ * official level still reaches the viewer before the next red-only pass.
+ */
+export function buildOfficialWarningQueue(events: readonly NationalWeatherEvent[]): HudMainEvent[] {
+  const byLevel: Record<Exclude<WeatherEventLevel, "watch">, HudMainEvent[]> = {
+    red: [], orange: [], yellow: [], blue: []
+  };
+  for (const event of events) {
+    if (event.kind !== "official-warning" || event.evidenceLevel !== "official" || event.level === "watch") continue;
+    byLevel[event.level].push(toMainEvent(event));
+  }
+
+  const queue: HudMainEvent[] = [];
+  const cursor: Record<Exclude<WeatherEventLevel, "watch">, number> = { red: 0, orange: 0, yellow: 0, blue: 0 };
+  const round: Array<Exclude<WeatherEventLevel, "watch">> = ["red", "red", "orange", "yellow", "blue"];
+  while (round.some((level) => cursor[level] < byLevel[level].length)) {
+    for (const level of round) {
+      const event = byLevel[level][cursor[level]];
+      if (!event) continue;
+      queue.push(event);
+      cursor[level] += 1;
+    }
+  }
+  return queue;
+}
+
 function toMainEvent(event: NationalWeatherEvent): HudMainEvent {
   const official = event.evidenceLevel === "official" && event.level !== "watch";
   const displayLevel = official ? event.level : "watch";
   return {
     id: event.id,
+    hazard: event.hazard,
     title: event.title,
     locationLabel: event.geography.names.length > 0 ? event.geography.names.join(" / ") : "全国范围",
     factSummary: event.factSummary,

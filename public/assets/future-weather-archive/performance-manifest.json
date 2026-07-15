@@ -1,0 +1,62 @@
+{
+  "version": 1,
+  "generationMode": "built-in image_gen",
+  "output": {
+    "dimensions": "960x640",
+    "format": "WebP",
+    "totalBytes": 694036,
+    "optimizer": "scripts/optimize_weather_performance_assets.mjs"
+  },
+  "sharedPrompt": {
+    "useCase": "stylized-concept",
+    "assetType": "cinematic game-show weather event hero for a narrow live-stream UI, 3:2 landscape",
+    "style": "premium cinematic game key art, stylized scientific realism, broadcast-stage spectacle, dark meteorological archive technology",
+    "composition": "one unmistakable central weather phenomenon, strong silhouette in a narrow crop, foreground observation artifacts and topographic or radar traces",
+    "lighting": "theatrical volumetric lighting, high contrast, awe and danger, readable at thumbnail size",
+    "constraints": "live-show reveal rather than documentary disaster photography; no people, casualties, destruction, text, logos, watermark, controls, frame or border"
+  },
+  "scenes": [
+    {
+      "hazards": ["typhoon"],
+      "filePath": "/assets/future-weather-archive/performances/typhoon-show-v2.webp",
+      "source": "exec-24db7a9c-86ba-42a4-8835-970c889a87ca.png",
+      "primaryRequest": "A colossal spiral cloud vortex rises as an atmospheric crown above a dark coastline, encircled by radar arcs with a red warning pulse."
+    },
+    {
+      "hazards": ["convection"],
+      "filePath": "/assets/future-weather-archive/performances/thunderstorm-show-v2.webp",
+      "source": "exec-387225bf-a86b-42ae-a4e3-16b820e39530.png",
+      "primaryRequest": "A towering anvil cloud acts as a stage titan while a branching lightning strike detonates through its core and pressure shockwaves freeze at the climax."
+    },
+    {
+      "hazards": ["rain", "flood"],
+      "filePath": "/assets/future-weather-archive/performances/rainstorm-show-v2.webp",
+      "source": "exec-9d4abdc5-2a22-4973-bde9-c0b39e84b179.png",
+      "primaryRequest": "Monumental rain curtains descend through a topographic city diorama while an observation beacon cuts an amber searchlight through the deluge."
+    },
+    {
+      "hazards": ["heat"],
+      "filePath": "/assets/future-weather-archive/performances/heatwave-show-v2.webp",
+      "source": "exec-d2b958c3-67ec-416e-9748-9e57a651c9cc.png",
+      "primaryRequest": "A gigantic solar heat halo ignites behind a miniature observatory as thermal mirage rings fracture the air into an incandescent crown."
+    },
+    {
+      "hazards": ["wind"],
+      "filePath": "/assets/future-weather-archive/performances/gale-show-v2.webp",
+      "source": "exec-70980dee-9e4f-41fd-a8d1-a2a1c453902e.png",
+      "primaryRequest": "Visible ribbons of compressed wind spiral around a brass anemometer like an atmospheric beast, freezing leaves and markers in midair."
+    },
+    {
+      "hazards": ["dust", "visibility"],
+      "filePath": "/assets/future-weather-archive/performances/duststorm-show-v2.webp",
+      "source": "exec-4bd1bd25-fd48-40fe-ae2e-08b72ab6f1ab.png",
+      "primaryRequest": "A copper-red wall of dust advances like a theatrical curtain as a central tower projects pale radar rings into a crown-shaped vortex."
+    },
+    {
+      "hazards": ["geological"],
+      "filePath": "/assets/future-weather-archive/performances/geological-show-v2.webp",
+      "source": "exec-0048831b-2039-40d0-bfd0-904f4ba1d2b8.png",
+      "primaryRequest": "An illuminated mountain cutaway shears and slides at the climax, exposing amber strata while a geology probe projects a pale beam through suspended rock."
+    }
+  ]
+}

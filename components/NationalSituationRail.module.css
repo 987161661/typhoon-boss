@@ -6,8 +6,12 @@
   min-height: 0;
   height: 100vh;
   overflow: hidden;
-  background: #05080a;
-  border-left: 1px solid rgb(0 216 255 / 38%);
+  background:
+    linear-gradient(180deg, rgb(4 11 15 / 96%), rgb(3 8 11 / 99%)),
+    repeating-linear-gradient(0deg, transparent 0 2.3rem, rgb(99 220 231 / 4%) 2.3rem 2.36rem),
+    #05080a;
+  border-left: 1px solid rgb(99 220 231 / 46%);
+  box-shadow: inset .25rem 0 0 rgb(99 220 231 / 6%), inset 0 0 2.5rem rgb(0 0 0 / 38%);
 }
 
 .standardHud {
@@ -64,6 +68,27 @@
   overflow: hidden;
   padding: 12px 16px 16px;
   box-shadow: none;
+  transition: transform .46s cubic-bezier(.22, .9, .22, 1), box-shadow .3s ease;
+  will-change: transform;
+}
+
+/* The standby controls historically retract upward as one drawer. The
+   refactor moved this panel into the national rail, so the legacy global
+   selector no longer reached it. Keep the return handle inside the rail
+   instead of merely changing the button's aria state. */
+.environmentInRail:global(.is-collapsed) {
+  transform: translateY(calc(-100% + 48px));
+  box-shadow: none;
+}
+
+.environmentInRail:global(.is-collapsed) :global(.section-title) {
+  visibility: hidden;
+}
+
+.environmentInRail:global(.is-collapsed) :global(.environment-panel-collapse) {
+  position: absolute;
+  right: 14px;
+  bottom: 7px;
 }
 
 .environmentInRail :global(.environment-panel-heading) {
@@ -183,6 +208,30 @@
     border-left: 1px solid rgb(0 216 255 / 48%);
   }
 
+  /* A collapsed standby drawer must uncover map pixels, not leave the
+     refactor's fixed rail as an empty black column. The root already exposes
+     this state so the grid and the overlaid return handle move together. */
+  .hasNationalSideRail:global(.radar-shell[data-view="live"][data-live-standby="true"][data-national-side-rail="true"][data-live-rail-collapsed="true"]) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hasNationalSideRail:global(.radar-shell[data-view="live"][data-live-standby="true"][data-national-side-rail="true"][data-live-rail-collapsed="true"]) :global(.map-stage) {
+    grid-column: 1;
+    border-left: 0;
+  }
+
+  .hasNationalSideRail:global(.radar-shell[data-view="live"][data-live-standby="true"][data-national-side-rail="true"][data-live-rail-collapsed="true"]) .liveRail {
+    position: absolute;
+    inset: 0 auto 64px 0;
+    grid-column: 1;
+    grid-row: 1;
+    width: var(--live-info-rail-width);
+    max-width: calc(100vw - 24px);
+    height: auto;
+    background: transparent;
+    border-left: 0;
+  }
+
   .hasNationalSideRail:global(.radar-shell[data-view="live"][data-live-standby="true"][data-national-side-rail="true"]) :global(.live-topbar) {
     left: 16px;
   }
@@ -210,6 +259,32 @@
   }
 }
 
+/* A national signal desk cannot be usefully read in a 47vw phone column.
+   Keep the map full-width and turn the same, scrollable desk into a bottom
+   operating surface instead of hiding risk controls or shrinking the text. */
+@media (max-width: 767px) {
+  .hasStandardNationalRail:global(.radar-shell[data-view="standard"]) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hasStandardNationalRail:global(.radar-shell[data-view="standard"]) :global(.map-stage) {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .standardRail {
+    position: absolute;
+    z-index: 25;
+    inset: auto 0 0;
+    grid-column: 1;
+    grid-row: 1;
+    width: 100%;
+    height: min(68dvh, 34rem);
+    border-width: 1px 0 0;
+    box-shadow: 0 -1rem 2.5rem rgb(0 0 0 / 38%), inset 0 .25rem 0 rgb(99 220 231 / 8%);
+  }
+}
+
 @media (max-width: 999px) {
   .hasNationalSideRail:global(.radar-shell[data-view="live"]) {
     --live-narrow-rail-width: min(42vw, 20rem);
@@ -234,6 +309,44 @@
     justify-self: start;
     border-right: 1px solid rgb(0 216 255 / 34%);
     border-left: 0;
+  }
+}
+
+@media (max-width: 620px) {
+  /* A 42vw rail leaves no readable column for an active official warning.
+     On phones the signal desk becomes a full-width top overlay while the map
+     remains usable underneath it. */
+  .hasNationalSideRail:global(.radar-shell[data-view="live"]) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hasNationalSideRail:global(.radar-shell[data-view="live"]) :global(.map-stage) {
+    grid-column: 1;
+    border-left: 0;
+  }
+
+  .liveRail {
+    position: absolute;
+    z-index: 24;
+    inset: 0 0 auto;
+    grid-column: 1;
+    grid-row: 1;
+    width: 100%;
+    height: auto;
+    max-height: none;
+    background: rgb(5 8 10 / 94%);
+    border-width: 0 0 1px;
+  }
+
+  .liveRail > :global(.environment-panel) {
+    display: none;
+  }
+
+  .hasNationalSideRail:global(.radar-shell[data-view="live"]) :global(.live-topbar) {
+    top: 9rem;
+    right: .7rem;
+    left: .7rem;
+    width: auto;
   }
 }
 

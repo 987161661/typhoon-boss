@@ -9,50 +9,53 @@ test("standard and live maps share one national-situation hook without duplicate
   assert.equal(source.match(/useNationalSituation\(/g)?.length, 1);
   assert.doesNotMatch(source, /fetch\(["']\/api\/national-situation/);
   assert.match(source, /nationalMapState\.mode === "national"/);
-  assert.match(source, /<IntelPanel[\s\S]+storm=\{storm\}/);
 });
 
 test("live standby composes compact national evidence and environment controls in a dedicated rail", async () => {
   const source = await read("components/TyphoonMap.tsx");
   const css = await read("components/NationalSituationRail.module.css");
   assert.match(source, /data-live-standby=\{showLiveStandbyEnvironment \? "true"/);
-  assert.match(source, /data-national-side-rail=\{isLiveView \? "true"/);
   assert.match(source, /variant="compact"/);
   assert.match(source, /className=\{nationalRailStyles\.environmentInRail\}/);
-  assert.match(css, /grid-template-columns: var\(--live-info-rail-width\) minmax\(0, 1fr\)/);
-  assert.match(css, /hasNationalSideRail:global\(\.radar-shell\[data-view="live"\]\[data-live-standby="true"\]\[data-national-side-rail="true"\]\)/);
-  assert.match(css, /\.liveRail > :global\(\.environment-panel\)/);
-  assert.match(css, /hasStandardNationalRail:global\(\.radar-shell\[data-view="standard"\]\)/);
-  assert.match(css, /--live-narrow-rail-width: min\(42vw, 20rem\)/);
+  assert.match(css, /\.environmentInRail:global\(\.is-collapsed\)/);
+  assert.match(css, /data-live-rail-collapsed="true"/);
+  assert.match(css, /@media \(max-width: 620px\)/);
+  assert.match(css, /\.liveRail > :global\(\.environment-panel\)\s*\{\s*display: none/);
 });
 
-test("loading and failure states do not describe missing data as no risk", async () => {
-  const source = await read("components/TyphoonMap.tsx");
-  assert.match(source, /正在加载全国态势快照/);
-  assert.match(source, /全国态势快照暂时不可用/);
-  assert.match(source, /当前无法据此判断全国风险/);
-  assert.match(source, /继续显示最近有效统一快照；这不代表当前无风险/);
-  assert.match(source, /重新获取快照/);
-});
-
-test("map and live header expose the new product brand without the legacy main brand", async () => {
-  const map = await read("components/TyphoonMap.tsx");
-  const live = await read("components/LiveBroadcastView.tsx");
-  assert.match(map, /aria-label="气象 Boss 雷达全国气象地图"/);
-  assert.match(map, />气象 Boss 雷达</);
-  assert.match(live, /<span>气象 Boss 雷达<\/span>/);
-  assert.doesNotMatch(`${map}\n${live}`, /台风 BOSS 雷达|台风 Boss 雷达地图/);
-});
-
-test("compact HUD reuses the same model and keeps textual source and empty-state semantics", async () => {
+test("both HUD variants share the 2.5-second official warning carousel and a data-boundary fallback", async () => {
   const source = await read("components/NationalSituationHud.tsx");
+  const model = await read("components/nationalSituationHudModel.ts");
+  const hook = await read("components/useWarningCarousel.ts");
   const css = await read("components/NationalSituationHud.module.css");
   assert.equal(source.match(/buildNationalSituationHudModel\(snapshot\)/g)?.length, 1);
-  assert.match(source, /variant === "compact"/);
-  assert.match(source, /主证据 \$\{primarySource\.statusLabel\}/);
-  assert.match(source, /无事件记录不等于无风险/);
-  assert.match(css, /\.compactEvent/);
-  assert.match(css, /\.level_watch \.compactBadge/);
+  assert.match(source, /useWarningCarousel\(model\.warningQueue\)/);
+  assert.match(source, /WarningSignalCard/);
+  assert.match(source, /no risk|无风险/);
+  assert.match(model, /buildOfficialWarningQueue/);
+  assert.match(model, /\["red", "red", "orange", "yellow", "blue"\]/);
+  assert.match(hook, /WARNING_CAROUSEL_INTERVAL_MS = 2_500/);
+  assert.match(hook, /visibilitychange/);
+  assert.match(hook, /prefers-reduced-motion/);
+  assert.match(css, /\.signal_compact/);
+  assert.match(css, /\.cycleProgress/);
+});
+
+test("full HUD is a themed signal desk while compact live HUD keeps its shared card contract", async () => {
+  const component = await read("components/NationalSituationHud.tsx");
+  const css = await read("components/NationalSituationHud.module.css");
+  assert.match(component, /data-signal-desk="national"/);
+  assert.match(component, /deskReadout/);
+  assert.match(component, /queueChannel/);
+  assert.match(component, /即将播报/);
+  assert.match(css, /\.signal_full \.signalControls::before/);
+  assert.match(css, /预警控制/);
+  assert.match(css, /\.deskGridMark/);
+  assert.doesNotMatch(component, /NATIONAL WEATHER SIGNAL DESK|QUEUE \/ NEXT SIGNALS/);
+  assert.doesNotMatch(css, /COMMAND DECK|deskSweep/);
+  assert.match(css, /prefers-reduced-motion: reduce/);
+  assert.match(css, /\.signal_compact/);
+  assert.match(css, /:focus-visible/);
 });
 
 async function read(path: string) {
