@@ -30,6 +30,7 @@ const CSV_COLUMNS = [
   "national_conditional_request",
   "national_conditional_status",
   "national_conditional_304",
+  "national_conditional_refresh_200",
   "national_schema_version",
   "national_event_count",
   "national_warning_count",
@@ -48,6 +49,7 @@ const CSV_COLUMNS = [
   "radar_conditional_request",
   "radar_conditional_status",
   "radar_conditional_304",
+  "radar_conditional_refresh_200",
   "radar_active_storm_id",
   "radar_storm_count",
   "radar_boss_count",
@@ -197,6 +199,7 @@ function endpointSummary(observations, configuredIntervalSeconds) {
     status200Count: requested.filter((observation) => observation.status === 200).length,
     status304Count: requested.filter((observation) => observation.status === 304).length,
     conditional304Count: requested.filter((observation) => observation.conditional304).length,
+    conditionalRefresh200Count: requested.filter((observation) => observation.conditionalRefresh200).length,
     errorCount: requested.filter((observation) => observation.error).length,
     schemaErrorCount: requested.filter((observation) => observation.schemaError).length,
     etags: [...new Set(requested.map((observation) => observation.etag).filter(Boolean))],
@@ -309,6 +312,7 @@ function makeEmptyEndpointState(kind) {
     conditionalRequest: false,
     conditionalStatus: null,
     conditional304: false,
+    conditionalRefresh200: false,
     error: null,
     schemaError: null,
     summary: kind === "national"
@@ -359,6 +363,7 @@ async function fetchEndpoint(url, previous, timeoutMs, inFlightTracker) {
       conditionalRequest,
       conditionalStatus: conditionalRequest ? response.status : null,
       conditional304: conditionalRequest && response.status === 304,
+      conditionalRefresh200: conditionalRequest && response.status === 200 && Boolean(previous.etag) && etag !== previous.etag,
       error,
       schemaError,
       summary,
@@ -375,10 +380,23 @@ async function fetchEndpoint(url, previous, timeoutMs, inFlightTracker) {
       inFlightTracker.peak = Math.max(inFlightTracker.peak, inFlightTracker.current);
       try {
         const probe = await fetch(url, { headers: { "If-None-Match": etag }, cache: "no-store", signal: AbortSignal.timeout(timeoutMs) });
+        const probeEtag = probe.headers.get("etag");
         current.conditionalStatus = probe.status;
         current.conditional304 = probe.status === 304;
-        if (probe.status !== 304) {
-          current.error = `conditional ETag probe returned HTTP ${probe.status}`;
+        if (probe.status === 200 && probeEtag && probeEtag !== etag) {
+          try {
+            const payload = await probe.json();
+            current.summary = previous.kind === "national" ? summarizeNationalPayload(payload) : summarizeRadarPayload(payload);
+            current.etag = probeEtag;
+            current.conditionalRefresh200 = true;
+          } catch (caught) {
+            current.schemaError = caught instanceof Error ? caught.message : String(caught);
+            current.error = current.schemaError;
+          }
+        } else if (probe.status !== 304) {
+          current.error = probe.status === 200
+            ? "conditional ETag probe returned HTTP 200 without a changed ETag"
+            : `conditional ETag probe returned HTTP ${probe.status}`;
         }
         current.latencyMs += Math.round(performance.now() - probeStartedAt);
       } finally {
@@ -395,6 +413,7 @@ async function fetchEndpoint(url, previous, timeoutMs, inFlightTracker) {
       conditionalRequest,
       conditionalStatus: null,
       conditional304: false,
+      conditionalRefresh200: false,
       error: error instanceof Error ? error.message : String(error),
       schemaError: null,
       requestAttemptCount
@@ -425,6 +444,7 @@ function flattenSample({ index, sampledAt, elapsedSeconds, sampleElapsedMs, proc
     national_conditional_request: national.conditionalRequest,
     national_conditional_status: national.conditionalStatus,
     national_conditional_304: national.conditional304,
+    national_conditional_refresh_200: national.conditionalRefresh200,
     national_schema_version: national.summary.schemaVersion,
     national_event_count: national.summary.eventCount,
     national_warning_count: national.summary.warningCount,
@@ -443,6 +463,7 @@ function flattenSample({ index, sampledAt, elapsedSeconds, sampleElapsedMs, proc
     radar_conditional_request: radar.conditionalRequest,
     radar_conditional_status: radar.conditionalStatus,
     radar_conditional_304: radar.conditional304,
+    radar_conditional_refresh_200: radar.conditionalRefresh200,
     radar_active_storm_id: radar.summary.activeStormId,
     radar_storm_count: radar.summary.stormCount,
     radar_boss_count: radar.summary.bossCount,
@@ -549,7 +570,19 @@ function runSelfTest() {
   ], 10);
   assert(cadence.cadence.earlyRequestViolations === 0 && cadence.status304Count === 1, "endpoint cadence summary failed");
   assert(cadence.cadence.lateRequestViolations === 0, "on-time endpoint cadence was marked late");
-  return { passed: true, checks: ["csv", "growth-detector", "national-schema", "radar-schema", "cadence"] };
+  const refresh = endpointSummary([{
+    requested: true,
+    observedAt: "2026-01-01T00:00:20.000Z",
+    latencyMs: 14,
+    status: 200,
+    conditional304: false,
+    conditionalRefresh200: true,
+    error: null,
+    schemaError: null,
+    etag: '"y"'
+  }], 10);
+  assert(refresh.conditionalRefresh200Count === 1 && refresh.errorCount === 0, "changed ETag 200 was not classified as a valid refresh");
+  return { passed: true, checks: ["csv", "growth-detector", "national-schema", "radar-schema", "cadence", "conditional-refresh"] };
 }
 
 async function run(config) {

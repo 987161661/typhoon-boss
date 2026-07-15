@@ -17,7 +17,7 @@ test("soak runner self-test covers schema, cadence, CSV and growth detection", (
   assert.equal(result.status, 0, result.stderr);
   const payload = JSON.parse(result.stdout.trim()) as { passed: boolean; checks: string[] };
   assert.equal(payload.passed, true);
-  assert.deepEqual(payload.checks, ["csv", "growth-detector", "national-schema", "radar-schema", "cadence"]);
+  assert.deepEqual(payload.checks, ["csv", "growth-detector", "national-schema", "radar-schema", "cadence", "conditional-refresh"]);
 });
 
 test("PowerShell launcher uses a hidden child and preserves the two-hour defaults", () => {
@@ -31,4 +31,3 @@ test("PowerShell launcher uses a hidden child and preserves the two-hour default
   assert.match(source, /RedirectStandardOutput/);
   assert.match(source, /RedirectStandardError/);
 });
-
