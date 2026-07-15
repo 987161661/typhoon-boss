@@ -253,15 +253,9 @@ export function TyphoonMap({
   const [nationalMapState, dispatchNationalMap] = useReducer(
     reduceNationalMapState,
     undefined,
-    () => createNationalMapState(
-      typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("stormId")
-    )
+    () => createNationalMapState()
   );
-  const [theme, setTheme] = useState<RadarTheme>(() => {
-    if (typeof window === "undefined" || view === "live") return "night-radar";
-    const requestedTheme = new URLSearchParams(window.location.search).get("theme");
-    return requestedTheme === "dossier" || requestedTheme === "archive-command" ? "archive-command" : "night-radar";
-  });
+  const [theme, setTheme] = useState<RadarTheme>("night-radar");
   const [selectedDefense, setSelectedDefense] = useState<ProvinceDefenseStatus | null>(null);
   const [sourceLabel, setSourceLabel] = useState("浙江省水利厅台风路径公开接口");
   const [lastUpdated, setLastUpdated] = useState("等待刷新");
@@ -288,6 +282,9 @@ export function TyphoonMap({
   useEffect(() => {
     if (view === "live" || typeof window === "undefined") return;
     const requestedTheme = new URLSearchParams(window.location.search).get("theme");
+    if (requestedTheme === "dossier" || requestedTheme === "archive-command") {
+      setTheme("archive-command");
+    }
     void fetch("/api/control-console", { cache: "no-store" })
       .then((response) => response.ok ? response.json() : null)
       .then((payload) => {
