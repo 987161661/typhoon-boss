@@ -1,6 +1,8 @@
 # 台风演进分析智能体
 
-该任务由 `scripts/run_typhoon_evolution_agent.mjs` 执行：读取公开台风实况、对比上一轮快照、整理城市风场，并生成中文演进报告。它会更新根目录的 `台风实时演进分析.md` 和 `.runtime/typhoon-evolution-agent.json`。
+该任务由 `scripts/run_typhoon_evolution_agent.mjs` 执行：读取公开台风实况、对比上一轮快照、整理城市风场，并生成中文演进报告。它还读取 `.runtime/national-situation.json`，通过 `lib/agent/nationalSituationBroadcast.mjs` 建立有限事实目录，生成带 `factRefs` 的结构化全国态势播报。任务会更新根目录的 `台风实时演进分析.md` 和 `.runtime/typhoon-evolution-agent.json`。
+
+全国播报合同把内容分为 `official_fact`、`observation` 和 `model`。每段必须引用同类别的输入事实；越权归因、无引用灾情、把雷达/卫星/GFS 元数据升级为天气结论、把来源失败写成无风险，都会被确定性校验器拒绝并切换到规则化保底播报。原台风专属 Markdown 演进分析和其 MiniMax 失败保底逻辑保持独立，避免全国预警被混入台风归因。
 
 ## 运行方式
 

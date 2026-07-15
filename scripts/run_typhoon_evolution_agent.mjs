@@ -3,6 +3,12 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import {
+  buildDeterministicNationalSituationBroadcast,
+  buildNationalSituationBroadcastPrompt,
+  validateLegacyTyphoonNarrative,
+  validateNationalSituationBroadcast
+} from "../lib/agent/nationalSituationBroadcast.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const runtimeDir = path.join(root, ".runtime");
@@ -61,11 +67,12 @@ async function main() {
 
   const now = new Date();
   const previousState = await readJson(statePath, emptyState());
-  const [facts, cityWind] = await Promise.all([
+  const [facts, cityWind, nationalSnapshot] = await Promise.all([
     collectTyphoonFacts(now),
-    collectCityWind(previousState.cityWind ?? null, now)
+    collectCityWind(previousState.cityWind ?? null, now),
+    readJson(path.join(runtimeDir, "national-situation.json"), null)
   ]);
-  facts.nationalWarningContext = await collectNationalWarningContext(now);
+  const nationalPrompt = buildNationalSituationBroadcastPrompt(nationalSnapshot, { now: now.toISOString() });
   const trackSnapshot = await readJson(path.join(runtimeDir, "track-snapshot.json"), null);
   const changeSet = buildChangeSet(previousState.snapshotByStormId, facts.storms);
   const lifecycleEvents = reconcileLifecycleEvents(
@@ -83,20 +90,40 @@ async function main() {
     analysis = buildDeterministicAnalysis(facts, changeSet);
     analysisMode = `规则化保底汇总（MiniMax 本轮异常：${error instanceof Error ? error.message : "未知错误"}）`;
   }
+  let nationalBroadcast;
+  let nationalBroadcastMode = "MiniMax M3 结构化全国态势播报";
+  try {
+    nationalBroadcast = await requestNationalSituationBroadcast(apiKey, nationalPrompt);
+  } catch (error) {
+    nationalBroadcast = buildDeterministicNationalSituationBroadcast(nationalPrompt);
+    nationalBroadcastMode = `规则化保底播报（MiniMax 本轮异常：${error instanceof Error ? error.message : "未知错误"}）`;
+  }
   const history = buildHistory(previousState.history, facts, changeSet, analysis, now);
   const nextState = {
-    version: 3,
+    version: 4,
     updatedAt: now.toISOString(),
     snapshotByStormId: Object.fromEntries(facts.storms.map((storm) => [storm.id, compactSnapshot(storm)])),
     cityWind,
     history,
     lifecycleEvents,
-    lastAnalysis: analysis
+    lastAnalysis: analysis,
+    lastNationalBroadcast: nationalBroadcast
   };
 
   await mkdir(runtimeDir, { recursive: true });
   await writeAtomicJson(statePath, nextState);
-  await writeAtomicText(reportPath, renderReport(facts, changeSet, cityWind, analysis, analysisMode, history, lifecycleEvents, now));
+  await writeAtomicText(reportPath, renderReport(
+    facts,
+    changeSet,
+    cityWind,
+    analysis,
+    analysisMode,
+    nationalBroadcast,
+    nationalBroadcastMode,
+    history,
+    lifecycleEvents,
+    now
+  ));
   console.log(`Updated ${path.basename(reportPath)} with ${facts.storms.length} active storm(s) and ${cityWind.cities.length} city wind rows.`);
 }
 
@@ -124,32 +151,6 @@ async function collectTyphoonFacts(now) {
     source: "浙江省水利厅台风路径公开接口",
     sourceUrl: `${apiBase}/TyphoonList/${year}`,
     storms: storms.filter(Boolean)
-  };
-}
-
-async function collectNationalWarningContext(now) {
-  const snapshot = await readJson(path.join(runtimeDir, "china-weather-national-warnings.json"), null);
-  const fetchedAt = Date.parse(snapshot?.fetchedAt ?? "");
-  if (!Array.isArray(snapshot?.warnings) || !Number.isFinite(fetchedAt) || now.getTime() - fetchedAt > 15 * 60 * 1000) {
-    return { available: false, reason: "No fresh national warning snapshot" };
-  }
-  const weights = { red: 4, orange: 3, yellow: 2, blue: 1 };
-  const byGrade = snapshot.warnings.reduce((counts, warning) => {
-    const grade = typeof warning.grade === "string" ? warning.grade : "unknown";
-    counts[grade] = (counts[grade] ?? 0) + 1;
-    return counts;
-  }, {});
-  const prominentWarnings = [...snapshot.warnings]
-    .sort((left, right) => (weights[right.grade] ?? 0) - (weights[left.grade] ?? 0))
-    .slice(0, 12)
-    .map((warning) => ({ locationId: warning.locationId ?? null, grade: warning.grade ?? null, title: warning.title ?? null, issuedAt: warning.issuedAt ?? null }));
-  return {
-    available: true,
-    fetchedAt: snapshot.fetchedAt,
-    total: snapshot.warnings.length,
-    byGrade,
-    prominentWarnings,
-    source: "China Weather national warning feed"
   };
 }
 
@@ -389,7 +390,6 @@ async function requestAnalysis(apiKey, facts, changeSet, previousAnalysis) {
       "如果 changeSet 指出 source-unchanged，必须明确写上游没有新增实况点，不得声称台风在本轮发生了变化。",
       "区分实况、路径预报与分析推断；预报只可称为预报。",
       "禁止解释成因，禁止出现海温、风切变、降雨、卫星、登陆距离、预警等 facts 中没有的概念。",
-      "nationalWarningContext is a nationwide bulletin only. Do not attribute it to a tropical cyclone, city, or province unless the facts explicitly establish that link.",
       "每个台风只能输出以下四个项目：当前实况、与上一轮对比、路径预报、数据限制。",
       "输出 Markdown 正文，不要标题、不要表格、不要复述数据源或采集时间、不要输出思维过程。"
     ],
@@ -398,7 +398,8 @@ async function requestAnalysis(apiKey, facts, changeSet, previousAnalysis) {
     previousAnalysis
   };
   const primary = await invokeMiniMax(apiKey, prompt);
-  if (primary) return primary;
+  const primaryValidation = validateLegacyTyphoonNarrative(primary);
+  if (primaryValidation.ok) return primaryValidation.value;
 
   // M3 can occasionally spend the whole completion budget on hidden reasoning.
   // Retry once with a compact brief instead of publishing an empty report.
@@ -408,11 +409,34 @@ async function requestAnalysis(apiKey, facts, changeSet, previousAnalysis) {
     changeSet,
     requirements: "每个台风仅写当前实况、与上一轮对比、路径预报、数据限制四条。必须写明实况时次；若上游无新点，明确写无新增实况；不得输出思维过程或未提供的气象原因。"
   });
-  if (compactRetry) return compactRetry;
-  throw new Error("MiniMax returned no publishable analysis after one retry.");
+  const retryValidation = validateLegacyTyphoonNarrative(compactRetry);
+  if (retryValidation.ok) return retryValidation.value;
+  throw new Error(`MiniMax returned no publishable typhoon analysis after one retry: ${retryValidation.errors.join("; ")}`);
 }
 
-async function invokeMiniMax(apiKey, prompt) {
+async function requestNationalSituationBroadcast(apiKey, prompt) {
+  const first = await invokeMiniMax(apiKey, prompt.request, prompt.systemPrompt, 1_600);
+  const firstValidation = validateNationalSituationBroadcast(first, prompt);
+  if (firstValidation.ok) return firstValidation.value;
+
+  const compactSystem = `${prompt.systemPrompt}\n立即只输出一个符合 outputSchema 的 JSON 对象。所有段落必须带同类别 factRefs。`;
+  const retry = await invokeMiniMax(apiKey, {
+    task: prompt.request.task,
+    facts: prompt.request.facts,
+    outputSchema: prompt.request.outputSchema,
+    outputPolicy: prompt.request.outputPolicy
+  }, compactSystem, 1_200);
+  const retryValidation = validateNationalSituationBroadcast(retry, prompt);
+  if (retryValidation.ok) return retryValidation.value;
+  throw new Error(`MiniMax returned no contract-valid national broadcast: ${retryValidation.errors.join("; ")}`);
+}
+
+async function invokeMiniMax(
+  apiKey,
+  prompt,
+  systemPrompt = "你是严谨的热带气旋分析助手，优先陈述数据来源、时间与不确定性。",
+  maxCompletionTokens = 4_096
+) {
   let response;
   let lastError;
   for (let attempt = 0; attempt <= documentAgentRetryCount; attempt += 1) {
@@ -428,13 +452,13 @@ async function invokeMiniMax(apiKey, prompt) {
       temperature: 0.1,
       // M3 may emit a long thinking segment before the publishable body. The
       // report needs enough headroom to complete its constrained Markdown.
-      max_completion_tokens: 4096,
+      max_completion_tokens: maxCompletionTokens,
       // This is a publishable operational report, not a reasoning task. With
       // reasoning splitting enabled, M3 can exhaust the completion budget in
       // hidden reasoning and return no usable report body.
       reasoning_split: false,
       messages: [
-        { role: "system", content: "你是严谨的热带气旋分析助手，优先陈述数据来源、时间与不确定性。" },
+        { role: "system", content: systemPrompt },
         { role: "user", content: JSON.stringify(prompt) }
       ]
         }),
@@ -455,7 +479,18 @@ async function invokeMiniMax(apiKey, prompt) {
   return analysis || null;
 }
 
-function renderReport(facts, changeSet, cityWind, analysis, analysisMode, history, lifecycleEvents, now) {
+function renderReport(
+  facts,
+  changeSet,
+  cityWind,
+  analysis,
+  analysisMode,
+  nationalBroadcast,
+  nationalBroadcastMode,
+  history,
+  lifecycleEvents,
+  now
+) {
   const sourceRows = facts.storms.length
     ? facts.storms.map((storm) => {
         const point = storm.latest;
@@ -485,6 +520,11 @@ function renderReport(facts, changeSet, cityWind, analysis, analysisMode, histor
 - 演进分析模式：${analysisMode}
 - 城市风场来源：${cityWind.source}
 - 城市风场采集：${cityWind.freshCount}/${cityWind.cities.length} 个代表城市取得本轮新数据；${cityWind.note}
+
+## 全国态势播报
+
+- 输出模式：${nationalBroadcastMode}
+${renderNationalBroadcast(nationalBroadcast)}
 
 ## 最新演进判断
 
@@ -521,6 +561,13 @@ ${historyRows}
 - 城市风场获取失败时保留最后有效值并标注“延迟保护”，不会把旧数据伪装成最新时次。
 - 当上游未发布新实况点时，本文会保留最新状态并明确标注“无新增实况”，不会伪造连续变化。
 `;
+}
+
+function renderNationalBroadcast(broadcast) {
+  const labels = { official_fact: "官方事实", observation: "观察/元数据", model: "模式" };
+  const rows = broadcast.segments.map((segment) => `- **${labels[segment.category] ?? segment.category}**：${segment.text}（事实引用：${segment.factRefs.join("、")}）`);
+  if (broadcast.closing) rows.push(`- **口径**：${broadcast.closing}`);
+  return rows.join("\n");
 }
 
 function buildHistory(previousHistory, facts, changeSet, _analysis, now) {
