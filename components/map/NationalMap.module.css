@@ -1,7 +1,10 @@
 .modeControl {
   position: absolute;
   z-index: 21;
-  top: 84px;
+  /* The command deck ends at 102px on the standard map. Keep this mode
+     selector below it so its high stacking context never steals pointer
+     input from the current-storm controls. */
+  top: 112px;
   left: 50%;
   display: flex;
   max-width: min(72vw, 880px);
@@ -74,6 +77,7 @@
 .radarPanel time { font-size: 11px; color: #b8dfd5; }
 
 @media (max-width: 760px) {
-  .modeControl { top: 72px; max-width: 92vw; }
+  /* The compact command deck stacks brand and source controls vertically. */
+  .modeControl { top: 154px; max-width: 92vw; }
   .radarPanel { right: 10px; bottom: 76px; width: min(310px, 86vw); }
 }

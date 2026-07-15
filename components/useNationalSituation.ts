@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { NationalSituationSnapshot } from "@/lib/nationalWeatherTypes";
+import { acceptanceScenarioFromLocation, withAcceptanceScenario } from "@/lib/acceptanceScenario";
 
 export const NATIONAL_SITUATION_POLL_INTERVAL_MS = 5 * 60 * 1000;
 
@@ -30,6 +31,7 @@ export function useNationalSituation({
   const [refreshing, setRefreshing] = useState(false);
   const [refreshSequence, setRefreshSequence] = useState(0);
   const etagRef = useRef<string | null>(null);
+  const acceptanceScenario = acceptanceScenarioFromLocation();
 
   const refresh = useCallback(() => setRefreshSequence((current) => current + 1), []);
 
@@ -44,7 +46,7 @@ export function useNationalSituation({
       controller = requestController;
       if (!disposed) setRefreshing(true);
       try {
-        const response = await fetch("/api/national-situation", {
+        const response = await fetch(withAcceptanceScenario("/api/national-situation", acceptanceScenario), {
           cache: "no-store",
           headers: nationalSituationRequestHeaders(etagRef.current),
           signal: requestController.signal
@@ -84,7 +86,7 @@ export function useNationalSituation({
       controller?.abort();
       window.clearInterval(timer);
     };
-  }, [enabled, intervalMs, refreshSequence]);
+  }, [acceptanceScenario, enabled, intervalMs, refreshSequence]);
 
   return { snapshot, error, loaded, refreshing, refresh };
 }

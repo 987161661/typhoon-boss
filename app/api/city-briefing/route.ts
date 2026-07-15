@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCityBriefing, getCityLocation } from "@/lib/cityBriefingData";
+import { resolveServerAcceptanceScenario } from "@/lib/acceptanceScenarioServer";
+import { createOrdinaryCityBriefing } from "@/lib/acceptanceScenarioFixtures";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -10,6 +12,14 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "缺少 city 参数。" }, { status: 400, headers: noStoreHeaders() });
   }
   try {
+    const acceptanceScenario = resolveServerAcceptanceScenario(request.nextUrl.searchParams.get("acceptanceScenario"));
+    if (acceptanceScenario === "ordinary-city") {
+      const briefing = createOrdinaryCityBriefing();
+      return NextResponse.json(
+        request.nextUrl.searchParams.get("stage") === "location" ? briefing.city : briefing,
+        { headers: noStoreHeaders() }
+      );
+    }
     if (request.nextUrl.searchParams.get("stage") === "location") {
       return NextResponse.json(await getCityLocation(city), { headers: noStoreHeaders() });
     }

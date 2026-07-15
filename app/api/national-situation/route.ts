@@ -1,13 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { NATIONAL_NO_STORE_HEADERS, createNationalSituationResponse } from "@/lib/nationalWeatherResponse";
 import { getNationalSituationSnapshot } from "@/lib/nationalWeatherService";
+import { resolveServerAcceptanceScenario } from "@/lib/acceptanceScenarioServer";
+import { createAcceptanceNationalSituation } from "@/lib/acceptanceScenarioFixtures";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export async function GET(request: NextRequest) {
   try {
-    const snapshot = await getNationalSituationSnapshot();
+    const acceptanceScenario = resolveServerAcceptanceScenario(request.nextUrl.searchParams.get("acceptanceScenario"));
+    const snapshot = acceptanceScenario
+      ? createAcceptanceNationalSituation(acceptanceScenario)
+      : await getNationalSituationSnapshot();
     return createNationalSituationResponse(snapshot, request.headers.get("if-none-match"));
   } catch (error) {
     return NextResponse.json(

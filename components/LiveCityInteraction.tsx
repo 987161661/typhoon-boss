@@ -5,6 +5,7 @@ import { CloudRain, Droplets, LoaderCircle, Siren, Thermometer, Wind, X, type Lu
 import type { CityBriefing } from "@/lib/cityBriefingData";
 import type { CityAttention, CityAttentionAnchor, CityInteractionRequest } from "@/lib/liveCityInteraction";
 import { buildCitySignalBoard, type CitySignalIcon } from "@/lib/citySignalBoard";
+import { acceptanceScenarioFromLocation, withAcceptanceScenario } from "@/lib/acceptanceScenario";
 
 const FLASH_DURATION_MS = 1_000;
 const PANEL_DEPLOY_DURATION_MS = 1_020;
@@ -46,6 +47,8 @@ export function LiveCityInteraction({
     let closeTimer: number | null = null;
     let attentionStartedAt = 0;
     let attention: Omit<CityAttention, "phase"> | null = null;
+    const acceptanceScenario = acceptanceScenarioFromLocation();
+    const cityBriefingUrl = withAcceptanceScenario(`/api/city-briefing?city=${encodeURIComponent(interaction.cityQuery)}`, acceptanceScenario);
     setPresentation({ state: "loading", request: interaction });
     onAttentionChange(null);
 
@@ -56,7 +59,7 @@ export function LiveCityInteraction({
       onAttentionChange({ ...next, phase: "flash" });
     };
 
-    void fetch(`/api/city-briefing?city=${encodeURIComponent(interaction.cityQuery)}&stage=location`, {
+    void fetch(`${cityBriefingUrl}&stage=location`, {
       cache: "no-store",
       signal: controller.signal
     })
@@ -73,7 +76,7 @@ export function LiveCityInteraction({
       })
       .catch(() => undefined);
 
-    void fetch(`/api/city-briefing?city=${encodeURIComponent(interaction.cityQuery)}`, {
+    void fetch(cityBriefingUrl, {
       cache: "no-store",
       signal: controller.signal
     })
