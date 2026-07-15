@@ -5,6 +5,7 @@ import {
   useEffect,
   useLayoutEffect,
   useMemo,
+  useReducer,
   useRef,
   useState,
   type CSSProperties,
@@ -13,7 +14,7 @@ import {
   type MutableRefObject,
   type PointerEvent as ReactPointerEvent
 } from "react";
-import maplibregl, { type GeoJSONSource, type ImageSource, type Map as MapLibreMap } from "maplibre-gl";
+import maplibregl, { type ImageSource, type Map as MapLibreMap } from "maplibre-gl";
 import { AlertTriangle, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Database, Palette, RadioTower, Satellite, Settings2, Shield, Wind } from "lucide-react";
 import Link from "next/link";
 import { makeCircle } from "@/lib/provinceGeo";
@@ -57,6 +58,18 @@ import { DefenseDrawer } from "./DefenseDrawer";
 import { useStormCoreWindField, useViewportWindField } from "./map/useViewportWindField";
 import { useViewportGfsLayer, useViewportGridLayer } from "./map/useViewportGfsLayer";
 import { usePollingEnvironmentLayer } from "./map/usePollingEnvironmentLayer";
+import { installTyphoonStormLayer, removeTyphoonStormLayer, updateTyphoonStormLayer } from "./map/TyphoonStormLayer";
+import { NationalEventLayer } from "./map/NationalEventLayer";
+import { NationalMapModeControl } from "./map/NationalMapModeControl";
+import { NationalRadarPlayback } from "./map/NationalRadarPlayback";
+import {
+  NATIONAL_CAMERA,
+  activeStormIndexForMap,
+  createNationalMapState,
+  reduceNationalMapState,
+  selectedStormForMap
+} from "./map/nationalMapState";
+import { useNationalSituation } from "./useNationalSituation";
 import { HudPanel, StatusPill } from "./HudPrimitives";
 import { BossSkillSlotPanel, IntelPanel } from "./IntelPanel";
 import type { CityAttention, CityAttentionAnchor } from "@/lib/liveCityInteraction";
@@ -235,7 +248,13 @@ export function TyphoonMap({
   const liveDeckCycle = 0;
   const [storms, setStorms] = useState<Storm[]>([]);
   const [bossProfiles, setBossProfiles] = useState<BossProfile[]>([]);
-  const [activeIndex, setActiveIndex] = useState(0);
+  const [nationalMapState, dispatchNationalMap] = useReducer(
+    reduceNationalMapState,
+    undefined,
+    () => createNationalMapState(
+      typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("stormId")
+    )
+  );
   const [theme, setTheme] = useState<RadarTheme>(() => {
     if (typeof window === "undefined" || view === "live") return "night-radar";
     const requestedTheme = new URLSearchParams(window.location.search).get("theme");
@@ -259,6 +278,8 @@ export function TyphoonMap({
   const [ecmwfTracksVisible, setEcmwfTracksVisible] = useState(false);
   const [observationsVisible, setObservationsVisible] = useState(false);
   const [cwaRadarVisible, setCwaRadarVisible] = useState(false);
+  const [nationalWarningsVisible, setNationalWarningsVisible] = useState(true);
+  const [nationalRadarVisible, setNationalRadarVisible] = useState(false);
   const [liveEnvironmentCollapsed, setLiveEnvironmentCollapsed] = useState(false);
   const [impactArea, setImpactArea] = useState<ImpactAreaPayload | null>(null);
   const [watchRegions, setWatchRegions] = useState<ProvinceAlertPoint[]>([]);
@@ -302,19 +323,38 @@ export function TyphoonMap({
   const cycloneCoreRef = useRef<CycloneCoreAnalysis | null>(null);
   const focusedStormIdRef = useRef<string | null>(null);
   const requestedStormId = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("stormId");
-  const storm = storms[activeIndex] ?? null;
+  // Live keeps its existing first-storm behavior while the standard map is
+  // explicitly national-first. This avoids a one-frame standby flash before
+  // the live compatibility selection effect runs.
+  const activeIndex = isLiveView && nationalMapState.mode === "national"
+    ? 0
+    : activeStormIndexForMap(nationalMapState, storms);
+  const storm = isLiveView && nationalMapState.mode === "national"
+    ? storms[0] ?? null
+    : selectedStormForMap(nationalMapState, storms);
   // Live decks are storm-specific.  When the upstream feed has no active
   // storm, the broadcast becomes a map-first environmental monitoring view.
   const showLiveStandbyEnvironment = isLiveView && !storm;
   const selectStorm = useCallback((index: number) => {
-    setActiveIndex(index);
-    if (typeof window === "undefined" || view === "live") return;
     const selectedId = storms[index]?.id;
     if (!selectedId) return;
+    dispatchNationalMap({ type: "select-storm", stormId: selectedId });
+    if (typeof window === "undefined" || view === "live") return;
     const url = new URL(window.location.href);
     url.searchParams.set("stormId", selectedId);
     window.history.replaceState(window.history.state, "", url);
   }, [storms, view]);
+  const selectStormById = useCallback((stormId: string) => {
+    const index = storms.findIndex((item) => item.id === stormId);
+    if (index >= 0) selectStorm(index);
+  }, [selectStorm, storms]);
+  const returnToNational = useCallback(() => {
+    dispatchNationalMap({ type: "return-national" });
+    if (typeof window === "undefined" || view === "live") return;
+    const url = new URL(window.location.href);
+    url.searchParams.delete("stormId");
+    window.history.replaceState(window.history.state, "", url);
+  }, [view]);
   const viewportBoundsForMap = useCallback((map: MapLibreMap) => visibleWindBounds(map, 0.08), []);
   const windRequestBoundsForMap = useCallback((map: MapLibreMap) => visibleWindBounds(map, 0.65), []);
   const windRequiredBoundsForMap = useCallback((map: MapLibreMap) => visibleWindBounds(map, 0.24), []);
@@ -368,6 +408,7 @@ export function TyphoonMap({
     intervalMs: 5 * 60 * 1000,
     enabled: !isLiveView || showLiveStandbyEnvironment
   });
+  const nationalSituation = useNationalSituation({ enabled: !isLiveView });
   const matchedEcmwfTracks = useMemo(() => matchEcmwfTracks(storm, ecmwfTrackLayer), [ecmwfTrackLayer, storm]);
   const activeWindField = viewportWindField ?? windField;
   // A viewport GFS field is valid without a tracked cyclone as long as it was
@@ -492,14 +533,18 @@ export function TyphoonMap({
   useEffect(() => {
     if (!requestedStormId || storms.length === 0) return;
     const requestedIndex = storms.findIndex((item) => item.id === requestedStormId);
-    if (requestedIndex >= 0 && requestedIndex !== activeIndex) setActiveIndex(requestedIndex);
-  }, [activeIndex, requestedStormId, storms]);
+    if (requestedIndex >= 0 && nationalMapState.selectedStormId !== requestedStormId) {
+      dispatchNationalMap({ type: "select-storm", stormId: requestedStormId });
+    }
+  }, [nationalMapState.selectedStormId, requestedStormId, storms]);
 
   useEffect(() => {
-    if (activeIndex >= storms.length) {
-      setActiveIndex(0);
+    if (isLiveView && nationalMapState.mode === "national" && storms[0]) {
+      dispatchNationalMap({ type: "select-storm", stormId: storms[0].id });
+      return;
     }
-  }, [activeIndex, storms.length]);
+    dispatchNationalMap({ type: "reconcile-storms", stormIds: storms.map((item) => item.id) });
+  }, [isLiveView, nationalMapState.mode, storms]);
 
   useEffect(() => {
     stormRef.current = storm;
@@ -547,8 +592,8 @@ export function TyphoonMap({
       const map = new maplibregl.Map({
         container: mapNode.current,
         style: MAP_STYLE,
-        center: [122.5, 27.4],
-        zoom: 4.7,
+        center: NATIONAL_CAMERA.center,
+        zoom: NATIONAL_CAMERA.zoom,
         minZoom: 3,
         maxZoom: 8,
         attributionControl: false
@@ -589,16 +634,7 @@ export function TyphoonMap({
             "line-width": 1
           }
         });
-        map.addSource("track", { type: "geojson", data: emptyFeatureCollection() });
-        map.addSource("forecast", { type: "geojson", data: emptyFeatureCollection() });
-        map.addSource("trackPoints", { type: "geojson", data: emptyFeatureCollection() });
-        map.addSource("forecastPoints", { type: "geojson", data: emptyFeatureCollection() });
-        map.addSource("fleetRoutes", { type: "geojson", data: emptyFeatureCollection() });
-        map.addSource("fleetPoints", { type: "geojson", data: emptyFeatureCollection() });
-        map.addSource("windR7", { type: "geojson", data: emptyFeatureCollection() });
-        map.addSource("windR10", { type: "geojson", data: emptyFeatureCollection() });
-        map.addSource("windR12", { type: "geojson", data: emptyFeatureCollection() });
-        addStormLayers(map);
+        installTyphoonStormLayer(map);
 
         map.on("click", "province-fill", (event) => {
           const name = event.features?.[0]?.properties?.name as string | undefined;
@@ -612,7 +648,10 @@ export function TyphoonMap({
         });
 
         const currentStorm = stormRef.current;
-        updateStormSources(map, buildStormGeo(currentStorm));
+        updateTyphoonStormLayer(map, {
+          storm: buildStormGeo(currentStorm),
+          fleet: buildStormFleetGeo(stormsRef.current, currentStorm?.id ?? null)
+        });
         renderStormOnMap(map, stormRef.current, markerRef);
         focusMapOnStorm(map, currentStorm, false);
         focusedStormIdRef.current = currentStorm?.id ?? null;
@@ -646,6 +685,7 @@ export function TyphoonMap({
       disposeStormFleetMarkers(fleetMarkers);
       markerRef.current = null;
       focusedStormIdRef.current = null;
+      if (mapRef.current) removeTyphoonStormLayer(mapRef.current);
       mapRef.current?.remove();
       mapRef.current = null;
       setMapReady(false);
@@ -738,23 +778,21 @@ export function TyphoonMap({
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
-    updateStormSources(map, stormGeo);
+    updateTyphoonStormLayer(map, { storm: stormGeo, fleet: stormFleetGeo });
     renderStormOnMap(map, activeMarkerStorm, markerRef, satelliteLayer, bossProfile);
-    updateStormFleetSources(map, stormFleetGeo);
     syncStormFleetMarkers(map, markerStorms, storm?.id ?? null, fleetMarkerRefs.current, bossProfiles, satelliteLayer);
     if (cityAttentionRef.current) return;
     if (storm) {
       // The live deck changes every five seconds. It must not be treated as a
       // new target: fitBounds/easeTo during the layout swap causes canvas
       // overlays to be projected twice and leaves a visible afterimage.
-      const focusKey = storms.length > 1 ? storms.map((item) => item.id).join("|") : storm.id;
+      const focusKey = storm.id;
       if (focusedStormIdRef.current !== focusKey) {
-        if (storms.length > 1) focusMapOnStormFleet(map, storms, true);
-        else focusMapOnStorm(map, storm, true, theme, view);
+        focusMapOnStorm(map, storm, true, theme, view);
         focusedStormIdRef.current = focusKey;
       }
     } else if (focusedStormIdRef.current !== null) {
-      map.easeTo({ center: [122.5, 27.4], zoom: 4.7, duration: 900 });
+      map.easeTo({ center: NATIONAL_CAMERA.center, zoom: NATIONAL_CAMERA.zoom, duration: 900 });
       focusedStormIdRef.current = null;
     }
   }, [storm, storms, markerStorms, activeMarkerStorm, stormGeo, stormFleetGeo, mapReady, theme, satelliteLayer, bossProfile, bossProfiles, view]);
@@ -842,6 +880,7 @@ export function TyphoonMap({
       className="radar-shell"
       data-theme={theme}
       data-view={view}
+      data-map-mode={nationalMapState.mode}
       data-live-deck={isLiveView ? liveDeck : undefined}
       data-live-standby={showLiveStandbyEnvironment ? "true" : undefined}
       data-live-rail-collapsed={isLiveView && showLiveStandbyEnvironment && liveEnvironmentCollapsed ? "true" : undefined}
@@ -867,6 +906,13 @@ export function TyphoonMap({
             showPathTimes={!isLiveView}
           />
         ) : null}
+        {!isLiveView ? (
+          <NationalEventLayer
+            map={mapReady ? mapRef.current : null}
+            events={nationalSituation.snapshot?.events ?? []}
+            enabled={nationalWarningsVisible}
+          />
+        ) : null}
         {isLiveView && liveDeck === "briefing" ? <LiveRouteLegend storm={storm} /> : null}
         <PerformanceOverlay
           enabled={showPerfOverlay}
@@ -886,6 +932,23 @@ export function TyphoonMap({
         {theme === "archive-command" ? <DossierMapFurniture /> : null}
 
         {!isLiveView ? <ForecastBadge storm={storm} /> : null}
+        {!isLiveView ? (
+          <NationalMapModeControl
+            state={nationalMapState}
+            storms={storms}
+            warningsVisible={nationalWarningsVisible}
+            onReturnNational={returnToNational}
+            onSelectStorm={selectStormById}
+            onWarningsVisibleChange={setNationalWarningsVisible}
+          />
+        ) : null}
+        {!isLiveView ? (
+          <NationalRadarPlayback
+            radar={nationalSituation.snapshot?.radar ?? null}
+            enabled={nationalRadarVisible}
+            onEnabledChange={setNationalRadarVisible}
+          />
+        ) : null}
 
         {isLiveView ? (
           <>
@@ -1715,10 +1778,10 @@ function focusMapOnStorm(
       return;
     }
   }
-  const target = storm ? cameraCenterForStorm(storm, map.getCanvas().clientWidth, theme) : [122.5, 27.4];
+  const target = storm ? cameraCenterForStorm(storm, map.getCanvas().clientWidth, theme) : NATIONAL_CAMERA.center;
   const camera = {
     center: target as [number, number],
-    zoom: storm ? (theme === "archive-command" ? 4.85 : 4.65) : 4.7,
+    zoom: storm ? (theme === "archive-command" ? 4.85 : 4.65) : NATIONAL_CAMERA.zoom,
     duration: animated ? 900 : 0
   };
   if (animated) {
@@ -2401,104 +2464,6 @@ async function fetchProvinceGeoJson(): Promise<GeoJSON.FeatureCollection> {
   }
 }
 
-function addStormLayers(map: MapLibreMap) {
-  map.addLayer({
-    id: "fleet-track-lines",
-    type: "line",
-    source: "fleetRoutes",
-    filter: ["==", ["get", "routeKind"], "track"],
-    paint: {
-      "line-color": ["coalesce", ["get", "trackColor"], "#31d6f4"],
-      "line-width": 2.6,
-      "line-opacity": 0.82
-    }
-  });
-  map.addLayer({
-    id: "fleet-forecast-lines",
-    type: "line",
-    source: "fleetRoutes",
-    filter: ["all", ["==", ["get", "active"], false], ["==", ["get", "routeKind"], "forecast"]],
-    paint: {
-      "line-color": ["coalesce", ["get", "color"], "#e8f5fb"],
-      "line-width": ["case", ["boolean", ["get", "isPrimary"], false], 2.8, 1.8],
-      "line-dasharray": [2, 1.6],
-      "line-opacity": ["case", ["boolean", ["get", "isPrimary"], false], 0.88, 0.7]
-    }
-  });
-  map.addLayer({
-    id: "fleet-track-points",
-    type: "circle",
-    source: "fleetPoints",
-    filter: ["==", ["get", "routeKind"], "track"],
-    paint: {
-      "circle-radius": 3.2,
-      "circle-color": "#071015",
-      "circle-stroke-color": ["coalesce", ["get", "trackColor"], "#31d6f4"],
-      "circle-stroke-width": 1.5,
-      "circle-opacity": 0.9
-    }
-  });
-  map.addLayer({
-    id: "track-line",
-    type: "line",
-    source: "track",
-    paint: {
-      "line-color": "#ff4b3e",
-      "line-width": 4,
-      // The same route is rendered once by the screen overlay so it can sit
-      // above weather visuals while remaining below HUD controls.
-      "line-opacity": 0,
-      "line-blur": 1.2
-    }
-  });
-  map.addLayer({
-    id: "forecast-glow",
-    type: "line",
-    source: "forecast",
-    paint: {
-      "line-color": ["coalesce", ["get", "color"], "#e8f5fb"],
-      "line-width": ["case", ["boolean", ["get", "isPrimary"], false], 11, 7],
-      "line-opacity": ["case", ["boolean", ["get", "isPrimary"], false], 0.28, 0.16],
-      "line-blur": 5
-    }
-  });
-  map.addLayer({
-    id: "forecast-line",
-    type: "line",
-    source: "forecast",
-    paint: {
-      "line-color": ["coalesce", ["get", "color"], "#e8f5fb"],
-      "line-width": ["case", ["boolean", ["get", "isPrimary"], false], 4.2, 2.6],
-      "line-dasharray": [2.2, 1.35],
-      "line-opacity": ["case", ["boolean", ["get", "isPrimary"], false], 0.98, 0.82]
-    }
-  });
-  map.addLayer({
-    id: "track-points",
-    type: "circle",
-    source: "trackPoints",
-    paint: {
-      "circle-radius": 5,
-      "circle-color": "#071015",
-      "circle-stroke-color": "#ff4b3e",
-      "circle-stroke-width": 2.4,
-      "circle-opacity": 0
-    }
-  });
-  map.addLayer({
-    id: "forecast-points",
-    type: "circle",
-    source: "forecastPoints",
-    paint: {
-      "circle-radius": ["case", ["boolean", ["get", "isPrimary"], false], 5, 3.4],
-      "circle-color": ["coalesce", ["get", "color"], "#e8f5fb"],
-      "circle-stroke-color": "#071015",
-      "circle-stroke-width": 1.4,
-      "circle-opacity": ["case", ["boolean", ["get", "isPrimary"], false], 0.98, 0.82]
-    }
-  });
-}
-
 function focusMapOnStormFleet(map: MapLibreMap, storms: Storm[], animated: boolean) {
   const bounds = stormFleetBounds(storms);
   if (!bounds) {
@@ -2536,16 +2501,6 @@ function CurrentStormControl({ storms, activeIndex, onSelect }: { storms: Storm[
   );
 }
 
-function updateStormSources(map: MapLibreMap, stormGeo: ReturnType<typeof buildStormGeo>) {
-  (map.getSource("track") as GeoJSONSource | undefined)?.setData(stormGeo.track);
-  (map.getSource("forecast") as GeoJSONSource | undefined)?.setData(stormGeo.forecast);
-  (map.getSource("trackPoints") as GeoJSONSource | undefined)?.setData(stormGeo.trackPoints);
-  (map.getSource("forecastPoints") as GeoJSONSource | undefined)?.setData(stormGeo.forecastPoints);
-  (map.getSource("windR7") as GeoJSONSource | undefined)?.setData(stormGeo.r7);
-  (map.getSource("windR10") as GeoJSONSource | undefined)?.setData(stormGeo.r10);
-  (map.getSource("windR12") as GeoJSONSource | undefined)?.setData(stormGeo.r12);
-}
-
 function setLayerVisibility(map: MapLibreMap, layerIds: string[], visible: boolean) {
   layerIds.forEach((layerId) => {
     if (map.getLayer(layerId)) {
@@ -2554,16 +2509,6 @@ function setLayerVisibility(map: MapLibreMap, layerIds: string[], visible: boole
   });
 }
 
-
-function updateStormFleetSources(map: MapLibreMap, fleetGeo: ReturnType<typeof buildStormFleetGeo>) {
-  (map.getSource("fleetRoutes") as GeoJSONSource | undefined)?.setData(fleetGeo.routes);
-  (map.getSource("fleetPoints") as GeoJSONSource | undefined)?.setData(fleetGeo.points);
-  const forecastFeatures = fleetGeo.routes.features.filter((feature) => feature.properties?.routeKind === "forecast");
-  map.getCanvas().dataset.fleetForecastRoutes = String(forecastFeatures.length);
-  map.getCanvas().dataset.fleetForecastAgencies = [...new Set(forecastFeatures
-    .map((feature) => String(feature.properties?.agencyCode ?? ""))
-    .filter(Boolean))].join(",");
-}
 
 function startGfsScalarLayerRenderer(
   map: MapLibreMap,
