@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-07-15T10:25:48.5906025+08:00",
+  "workspace": "D:\\typhoon boss radar",
+  "branch": "codex/national-weather-radar",
+  "head": "a6e9478222d03aa281d0fe1a44caf0d03944c5ed",
+  "scope": "Read-only baseline audit; no product code was changed by the acceptance agent.",
+  "commands": [
+    {
+      "id": "BASE-TYPECHECK",
+      "command": "npm.cmd run typecheck",
+      "exitCode": 0,
+      "result": "pass",
+      "summary": "tsc --noEmit --incremental false completed without diagnostics"
+    },
+    {
+      "id": "BASE-LINT",
+      "command": "npm.cmd run lint",
+      "exitCode": 0,
+      "result": "pass",
+      "summary": "eslint . completed without diagnostics"
+    },
+    {
+      "id": "BASE-TEST",
+      "command": "npm.cmd run test",
+      "exitCode": 0,
+      "result": "pass",
+      "summary": "56 tests passed; 0 failed, skipped, cancelled or todo; duration 314.3382 ms"
+    },
+    {
+      "id": "BASE-DIFF-CHECK",
+      "command": "git diff --check",
+      "exitCode": 0,
+      "result": "pass",
+      "summary": "No whitespace errors; line-ending conversion warnings were emitted for pre-existing user files"
+    },
+    {
+      "id": "BASE-CACHED-DIFF",
+      "command": "git diff --cached --name-only",
+      "exitCode": 0,
+      "result": "pass",
+      "summary": "No staged paths"
+    },
+    {
+      "id": "BASE-BUILD",
+      "command": "npm.cmd run build",
+      "result": "not-run",
+      "summary": "Intentionally skipped because the active 3038 development runtime has a separate .next-live-3038 output and build isolation was not established"
+    }
+  ],
+  "testInventory": {
+    "files": 13,
+    "tests": 56,
+    "requiredNationalRefactorCoveragePresent": false,
+    "missingRequiredCoverage": [
+      "national event ordering",
+      "national evidence levels",
+      "deterministic administrative mapping including Hong Kong, Macao and Taipei",
+      "freshness degradation states",
+      "new national snapshot and legacy typhoon snapshot API contracts"
+    ]
+  },
+  "runtimeBoundary": {
+    "ignored": {
+      ".runtime": true,
+      ".secrets": true,
+      ".env.local": true,
+      "runtime": true
+    },
+    "notIgnored": {
+      ".next-live-3038": true
+    },
+    "trackedRuntimeOrSecretPaths": [],
+    "stagedPaths": [],
+    "localArtifactMeasurements": [
+      { "path": ".next-live-3038", "files": 617, "bytes": 171807390 },
+      { "path": ".runtime", "files": 2490, "bytes": 1118851130 },
+      { "path": ".secrets", "files": 5, "bytes": 896 },
+      { "path": "runtime", "files": 3, "bytes": 106006 }
+    ],
+    "finding": ".next-live-3038 is a 617-file untracked runtime output tree and is not covered by .gitignore. It was not staged or tracked at capture time, but remains a publication-hygiene risk."
+  },
+  "excludedExistingState": [
+    "next-env.d.ts",
+    "台风实时演进分析.md",
+    "scripts/experiment_city_broadcasts.mjs",
+    ".next-live-3038"
+  ],
+  "concurrentUnintegratedWorkObserved": [
+    "docs/national-situation-contract.md",
+    "lib/nationalWeatherTypes.ts"
+  ],
+  "stageAAtCapture": {
+    "newNationalApiRoutePresent": false,
+    "nationalRefactorTestFilePresent": false,
+    "legacyApiRoutesPresent": [
+      "/api/radar/snapshot",
+      "/api/storms/current"
+    ],
+    "gate": "not-passable"
+  }
+}

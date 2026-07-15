@@ -1,0 +1,152 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-07-15T10:39:00.0677947+08:00",
+  "updatedAt": "2026-07-15",
+  "workspace": "D:\\typhoon boss radar",
+  "branch": "codex/national-weather-radar",
+  "head": "a6e9478222d03aa281d0fe1a44caf0d03944c5ed",
+  "scope": "Independent Stage A review; no product code was changed and build was not run.",
+  "commands": [
+    {
+      "id": "STAGE-A-TARGETED",
+      "command": "node_modules\\.bin\\tsx.cmd --test tests/nationalWeather.test.ts tests/administrativeMapping.test.ts",
+      "exitCode": 0,
+      "result": "pass",
+      "tests": { "total": 16, "pass": 16, "fail": 0 }
+    },
+    {
+      "id": "STAGE-A-TYPECHECK",
+      "command": "npm.cmd run typecheck",
+      "exitCode": 0,
+      "result": "pass"
+    },
+    {
+      "id": "STAGE-A-LINT",
+      "command": "npm.cmd run lint",
+      "exitCode": 0,
+      "result": "pass"
+    },
+    {
+      "id": "STAGE-A-FULL-TEST",
+      "command": "npm.cmd run test",
+      "exitCode": 0,
+      "result": "pass",
+      "tests": { "total": 79, "pass": 79, "fail": 0 }
+    },
+    {
+      "id": "STAGE-A-DIFF-CHECK",
+      "command": "git diff --check",
+      "exitCode": 0,
+      "result": "pass"
+    },
+    {
+      "id": "STAGE-A-BUILD",
+      "command": "npm.cmd run build",
+      "result": "not-run",
+      "summary": "Intentionally omitted to avoid interfering with the active 3038 development runtime."
+    }
+  ],
+  "contractAudit": {
+    "sorting": {
+      "result": "pass",
+      "order": [
+        "official-warning:red",
+        "official-warning:orange",
+        "official-risk or supported official-warning:yellow",
+        "typhoon",
+        "official-warning:yellow",
+        "official-warning:blue",
+        "radar-watch",
+        "model-watch"
+      ],
+      "livePriorityViolations": 0
+    },
+    "freshnessStates": {
+      "result": "pass-at-domain-layer",
+      "states": ["fresh", "delayed", "expired", "unavailable", "no-record"],
+      "note": "UI rendering of all five states remains outside Stage A evidence."
+    },
+    "evidenceBoundary": {
+      "result": "pass",
+      "summary": "Radar and product catalog records remain metadata; satellite index creates no event or numerical fact."
+    },
+    "lastGood": {
+      "result": "partial",
+      "summary": "Retention implementation exists and warning-source failure is tested, but a failure fixture for every source and UI wording are not yet covered."
+    },
+    "stormPassthrough": {
+      "result": "pass",
+      "summary": "The national snapshot returns the original Storm array without projection; a non-empty full Storm fixture is identity/deep-equality tested."
+    },
+    "administrativeMapping": {
+      "result": "pass",
+      "verified": [
+        "QWeather official CSV exact Location_ID lookup",
+        "Adm2 grouping with exactly one verifiable AD_code root",
+        "six-digit province, city and county AD-code namespace",
+        "Wusheng 510000/511600/511622 and cityLocationId 101270801",
+        "Beijing, Shanghai, Tianjin and Chongqing direct-admin roots",
+        "Hong Kong, Macao and Taipei direct-admin roots",
+        "missing exact ids, conflicting rows and non-unique roots remain ambiguous",
+        "cache, atomic persistence, last-good fallback and retry backoff",
+        "national snapshot injection and administrative sourceHealth"
+      ],
+      "datasetRows": 3238,
+      "liveWarningAttribution": {
+        "total": 1126,
+        "deterministic": 920,
+        "ambiguous": 206,
+        "invalidDeterministicRoots": 0
+      },
+      "sourceHealth": "fresh",
+      "boundary": "There is no locationId prefix or nearest-coordinate fallback. Only an exact official-list row plus one unique Adm2 AD-code root can enter a city card; all missing or conflicting cases remain ambiguous."
+    }
+  },
+  "live3038": {
+    "nationalSituation": {
+      "url": "http://127.0.0.1:3038/api/national-situation",
+      "status": 200,
+      "cacheControl": "no-store, max-age=0",
+      "etagPresent": true,
+      "conditionalRequest": { "header": "If-None-Match", "status": 304, "bodyBytes": 0 },
+      "schemaVersion": 1,
+      "sourceHealthCount": 5,
+      "events": 1136,
+      "officialWarnings": 1135,
+      "storms": 0,
+      "radarFrames": 12,
+      "satellite": { "georeferenced": false, "allImageUrlsNull": true },
+      "eventRequiredFieldViolations": 0,
+      "sourceHealthSchemaViolations": 0,
+      "eventPriorityViolations": 0
+    },
+    "legacyRadarSnapshot": {
+      "url": "http://127.0.0.1:3038/api/radar/snapshot",
+      "status": 200,
+      "requiredFieldsPresent": ["activeStormId", "storms", "bosses"],
+      "storms": 0,
+      "bosses": 0
+    }
+  },
+  "stageGates": {
+    "A-CONTRACT": {
+      "result": "pass",
+      "blocker": null
+    },
+    "A-API": { "result": "pass" },
+    "A-REG": { "result": "pass" },
+    "overall": "pass"
+  },
+  "acceptedLedgerIds": [
+    "FUN-05",
+    "DAT-01",
+    "DAT-03",
+    "DAT-04",
+    "DAT-05",
+    "AUTO-01",
+    "AUTO-02",
+    "AUTO-03",
+    "AUTO-05"
+  ],
+  "partialLedgerIds": ["FUN-07", "DAT-02", "DAT-07", "AUTO-08"]
+}

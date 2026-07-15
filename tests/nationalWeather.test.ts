@@ -232,6 +232,50 @@ test("an unavailable source retains its last valid facts and is not rewritten as
   assert.match(health?.limitations.join(" ") ?? "", /保留.*最近有效数据/);
 });
 
+test("simultaneous upstream failures retain radar, satellite, products and storms without claiming no-record", () => {
+  const previous = buildNationalSituationSnapshot(inputs(), now);
+  const failedTrack: TrackSnapshot = {
+    ...track,
+    status: "unavailable",
+    storms: [],
+    warnings: ["403 from track provider"]
+  };
+  const failureTime = "2026-07-15T02:31:00.000Z";
+  const current = buildNationalSituationSnapshot(inputs({
+    warnings: null,
+    visuals: null,
+    products: null,
+    track: failedTrack,
+    administrativeHierarchy: null,
+    administrativeHierarchyError: "invalid hierarchy JSON"
+  }), failureTime);
+  const retained = retainLastValidSources(current, previous, failureTime);
+
+  assert.equal(retained.warnings.total, previous.warnings.total);
+  assert.deepEqual(retained.radar.frames, previous.radar.frames);
+  assert.deepEqual(retained.satellite.frames, previous.satellite.frames);
+  assert.deepEqual(retained.products, previous.products);
+  assert.deepEqual(retained.storms, previous.storms);
+  assert.equal(retained.events.filter((item) => item.kind === "official-warning").length, 2);
+  assert.equal(retained.events.filter((item) => item.kind === "typhoon").length, 1);
+
+  const failedSourceIds = new Set([
+    "china-weather-national-warnings",
+    "china-weather-national-radar-index",
+    "china-weather-satellite-index",
+    "china-weather-product-directory",
+    "zhejiang-water-typhoon-track",
+    "qweather-administrative-hierarchy"
+  ]);
+  retained.sourceHealth
+    .filter((health) => failedSourceIds.has(health.sourceId))
+    .forEach((health) => {
+      assert.notEqual(health.status, "unavailable", `${health.sourceId} should expose retained data`);
+      assert.notEqual(health.status, "no-record", `${health.sourceId} failure cannot mean no risk`);
+      assert.match(health.limitations.join(" "), /最近有效数据|沿用|精确 Location_ID/);
+    });
+});
+
 test("hierarchy failure only retains attribution for the identical previously resolved warning", () => {
   const previous = buildNationalSituationSnapshot(inputs(), now);
   const current = buildNationalSituationSnapshot(inputs({
