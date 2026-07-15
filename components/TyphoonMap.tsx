@@ -528,7 +528,7 @@ export function TyphoonMap({
       setSelectedDefense({
         province,
         status: "观察区" as ProvinceDefenseStatus["status"],
-        rating: "暴雨级" as ProvinceDefenseStatus["rating"],
+        rating: "狼级" as ProvinceDefenseStatus["rating"],
         distanceKm: 0,
         riskLine: "防御状态接口暂时没有返回数据。",
         advice: "请直接查看中央气象台和本地应急部门发布的信息。",
@@ -1096,7 +1096,7 @@ function buildDossierOperation(storm: Storm | null, dataError: string | null) {
     };
   }
 
-  const title = String(storm.rating) === "天灾级" || String(storm.stage) === "超强台风" ? "最高戒备" : "防御优先";
+  const title = String(storm.rating) === "神级" || String(storm.rating) === "龙级" ? "最高戒备" : "防御优先";
   return {
     title,
     detail: `${storm.nameZh} 为${storm.stage}，中心风速 ${storm.maxWind || "--"} m/s，沿海单位按${storm.rating}响应。`

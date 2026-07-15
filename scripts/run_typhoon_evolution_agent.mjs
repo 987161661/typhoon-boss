@@ -65,6 +65,7 @@ async function main() {
     collectTyphoonFacts(now),
     collectCityWind(previousState.cityWind ?? null, now)
   ]);
+  facts.nationalWarningContext = await collectNationalWarningContext(now);
   const trackSnapshot = await readJson(path.join(runtimeDir, "track-snapshot.json"), null);
   const changeSet = buildChangeSet(previousState.snapshotByStormId, facts.storms);
   const lifecycleEvents = reconcileLifecycleEvents(
@@ -123,6 +124,32 @@ async function collectTyphoonFacts(now) {
     source: "浙江省水利厅台风路径公开接口",
     sourceUrl: `${apiBase}/TyphoonList/${year}`,
     storms: storms.filter(Boolean)
+  };
+}
+
+async function collectNationalWarningContext(now) {
+  const snapshot = await readJson(path.join(runtimeDir, "china-weather-national-warnings.json"), null);
+  const fetchedAt = Date.parse(snapshot?.fetchedAt ?? "");
+  if (!Array.isArray(snapshot?.warnings) || !Number.isFinite(fetchedAt) || now.getTime() - fetchedAt > 15 * 60 * 1000) {
+    return { available: false, reason: "No fresh national warning snapshot" };
+  }
+  const weights = { red: 4, orange: 3, yellow: 2, blue: 1 };
+  const byGrade = snapshot.warnings.reduce((counts, warning) => {
+    const grade = typeof warning.grade === "string" ? warning.grade : "unknown";
+    counts[grade] = (counts[grade] ?? 0) + 1;
+    return counts;
+  }, {});
+  const prominentWarnings = [...snapshot.warnings]
+    .sort((left, right) => (weights[right.grade] ?? 0) - (weights[left.grade] ?? 0))
+    .slice(0, 12)
+    .map((warning) => ({ locationId: warning.locationId ?? null, grade: warning.grade ?? null, title: warning.title ?? null, issuedAt: warning.issuedAt ?? null }));
+  return {
+    available: true,
+    fetchedAt: snapshot.fetchedAt,
+    total: snapshot.warnings.length,
+    byGrade,
+    prominentWarnings,
+    source: "China Weather national warning feed"
   };
 }
 
@@ -362,6 +389,7 @@ async function requestAnalysis(apiKey, facts, changeSet, previousAnalysis) {
       "如果 changeSet 指出 source-unchanged，必须明确写上游没有新增实况点，不得声称台风在本轮发生了变化。",
       "区分实况、路径预报与分析推断；预报只可称为预报。",
       "禁止解释成因，禁止出现海温、风切变、降雨、卫星、登陆距离、预警等 facts 中没有的概念。",
+      "nationalWarningContext is a nationwide bulletin only. Do not attribute it to a tropical cyclone, city, or province unless the facts explicitly establish that link.",
       "每个台风只能输出以下四个项目：当前实况、与上一轮对比、路径预报、数据限制。",
       "输出 Markdown 正文，不要标题、不要表格、不要复述数据源或采集时间、不要输出思维过程。"
     ],

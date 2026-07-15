@@ -366,7 +366,7 @@ function TelemetryDeck({ title, metrics }: { title: string; metrics: TacticalMet
 
 function CitySignalBoard({ board, briefing }: { board: ReturnType<typeof buildCitySignalBoard>; briefing: CityBriefing }) {
   const icons: Record<CitySignalIcon, typeof CloudRain> = { rain: CloudRain, humidity: Droplets, heat: Thermometer, wind: Wind, warning: Siren };
-  const hasNationalRanking = briefing.comparison?.scope === "全国城市点位";
+  const hasNationalRanking = briefing.comparison?.scope === "全国排名";
   return <section className="city-signal-board" aria-label="战况异动">
     <header><span>CITY MUTATORS // 异动优先</span><small>{hasNationalRanking ? `${briefing.comparison!.scope} · ${formatTime(briefing.comparison!.fetchedAt)}` : "全国城市榜单同步中 · 暂不显示排名"}</small></header>
     <div className="city-signal-grid" data-count={board.signals.length}>

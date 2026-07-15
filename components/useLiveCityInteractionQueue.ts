@@ -17,6 +17,7 @@ export function useLiveCityInteractionQueue() {
   const [queueVersion, setQueueVersion] = useState(0);
   const pendingRef = useRef<CityInteractionRequest[]>([]);
   const activeStartedAtRef = useRef(0);
+  const preemptionTimerRef = useRef<number | null>(null);
   const seenEventAtRef = useRef(new Map<string, number>());
   const cityAcceptedAtRef = useRef(new Map<string, number>());
 
@@ -29,19 +30,22 @@ export function useLiveCityInteractionQueue() {
     });
   }, []);
 
+  const schedulePreemption = useCallback(() => {
+    if (preemptionTimerRef.current !== null) return;
+    const wait = Math.max(0, MIN_ACTIVE_MS - (Date.now() - activeStartedAtRef.current));
+    preemptionTimerRef.current = window.setTimeout(() => {
+      preemptionTimerRef.current = null;
+      setActive(null);
+    }, wait);
+  }, []);
+
   useEffect(() => {
     if (!active) advance();
   }, [active, advance, queueVersion]);
 
-  // A fresh request may preempt an idle report, but never before its audience
-  // has had ten seconds to read it. The report itself owns the 30s no-queue
-  // timeout; this hook only cuts it short when a request is actually waiting.
-  useEffect(() => {
-    if (!active || !pendingRef.current.length) return;
-    const remaining = Math.max(0, MIN_ACTIVE_MS - (Date.now() - activeStartedAtRef.current));
-    const timer = window.setTimeout(() => setActive(null), remaining);
-    return () => window.clearTimeout(timer);
-  }, [active, queueVersion]);
+  useEffect(() => () => {
+    if (preemptionTimerRef.current !== null) window.clearTimeout(preemptionTimerRef.current);
+  }, []);
 
   const submitComment = useCallback((comment: HostLiveComment) => {
     const request = toCityInteractionRequest(comment);
@@ -64,12 +68,25 @@ export function useLiveCityInteractionQueue() {
     // the active card's minimum on-screen time.
     if (isRadarOperator) {
       cityAcceptedAtRef.current.set(cityKey, now);
+      if (!active) {
+        activeStartedAtRef.current = now;
+        setActive(request);
+        return true;
+      }
       pendingRef.current = [request, ...pendingRef.current.filter((item) => item.cityQuery !== request.cityQuery)].slice(0, MAX_PENDING_INTERACTIONS);
+      schedulePreemption();
       setQueueVersion((version) => version + 1);
       return true;
     }
 
     if (active?.cityQuery === request.cityQuery || pendingRef.current.some((item) => item.cityQuery === request.cityQuery)) return false;
+
+    if (!active) {
+      cityAcceptedAtRef.current.set(cityKey, now);
+      activeStartedAtRef.current = now;
+      setActive(request);
+      return true;
+    }
 
     if (pendingRef.current.length >= MAX_PENDING_INTERACTIONS) return false;
     cityAcceptedAtRef.current.set(cityKey, now);
@@ -77,12 +94,20 @@ export function useLiveCityInteractionQueue() {
       if (now - recordedAt > CITY_COOLDOWN_MS) cityAcceptedAtRef.current.delete(city);
     }
     pendingRef.current.push(request);
+    if (active) schedulePreemption();
     setQueueVersion((version) => version + 1);
     return true;
-  }, [active]);
+  }, [active, schedulePreemption]);
 
   const completeActive = useCallback((id: string) => {
-    setActive((current) => current?.id === id ? null : current);
+    setActive((current) => {
+      if (current?.id !== id) return current;
+      if (preemptionTimerRef.current !== null) {
+        window.clearTimeout(preemptionTimerRef.current);
+        preemptionTimerRef.current = null;
+      }
+      return null;
+    });
   }, []);
 
   return {

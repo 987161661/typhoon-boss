@@ -8,6 +8,7 @@ import type {
   StormStage,
   TrackPoint
 } from "@/lib/types";
+import { classifyTyphoonHazard, downgradeTyphoonHazard } from "@/lib/typhoonHazardRating";
 import { findProvinceReferencePoint, getProvinceBoundaryCoordinates, normalizeProvinceName } from "@/lib/provinceGeo";
 import { readControlConsoleSettings } from "@/lib/controlConsoleSettingsStore";
 import { distanceBetweenKm, distanceToPathKm, maxWindRadius, parseBeijingTime, parseWindRadii, toBeijingIso } from "@/lib/meteorology";
@@ -274,7 +275,7 @@ export async function getProvinceDefenseStatus(provinceName: string, stormId?: s
     return {
       province,
       status: "安全区",
-      rating: "微风级",
+      rating: "无威胁",
       distanceKm: 0,
       riskLine: "当前没有活跃台风，雷达保持待机监测。",
       advice: "保持关注官方预警即可，暂不需要进入防台应急状态。",
@@ -311,7 +312,7 @@ export async function getProvinceDefenseStatus(provinceName: string, stormId?: s
     return buildDefense(
       province,
       "外围雨带区",
-      downgradeRating(storm.rating),
+      downgradeTyphoonHazard(storm.rating),
       distanceKm,
       storm,
       "关注强降雨、阵风和城市内涝风险，提前整理阳台与低洼处物品。",
@@ -323,7 +324,7 @@ export async function getProvinceDefenseStatus(provinceName: string, stormId?: s
     return buildDefense(
       province,
       "观察区",
-      "暴雨级",
+      "狼级",
       distanceKm,
       storm,
       "建议持续查看官方路径更新，留意后续路径调整和本地预警升级。",
@@ -334,7 +335,7 @@ export async function getProvinceDefenseStatus(provinceName: string, stormId?: s
   return buildDefense(
     province,
     "安全区",
-    "微风级",
+    "无威胁",
     distanceKm,
     storm,
     "当前距离较远，保持普通关注，不传播未经证实的路径截图。",
@@ -438,7 +439,6 @@ function convertStorm(info: ZjTyphoonInfo | ZjTyphoonListItem): Storm | null {
 
   const track = validPoints.map(convertTrackPoint);
   const stage = normalizeStage(latest.strong);
-  const rating = ratingFromWind(toNumber(latest.speed), stage);
   const forecastScenarios = convertForecastScenarios(latest);
   const forecast = forecastScenarios.find((scenario) => scenario.isPrimary)?.points ?? forecastScenarios[0]?.points ?? [];
   const r7 = parseWindRadii(latest.radius7);
@@ -459,6 +459,7 @@ function convertStorm(info: ZjTyphoonInfo | ZjTyphoonListItem): Storm | null {
     r10: latestWindRadiusReport(validPoints, "radius10"),
     r12: latestWindRadiusReport(validPoints, "radius12")
   };
+  const rating = classifyTyphoonHazard(toNumber(latest.speed), stage, windRadiiKm);
 
   return {
     id: info.tfid,
@@ -537,7 +538,11 @@ function convertDexEntry(info: ZjTyphoonInfo | ZjTyphoonListItem): DexEntry {
     year,
     nameZh: info.name || `编号 ${info.tfid}`,
     nameEn: info.enname,
-    rating: ratingFromWind(maxWind, stage),
+    rating: classifyTyphoonHazard(maxWind, stage, {
+      r7: parseRadius(peak?.radius7),
+      r10: parseRadius(peak?.radius10),
+      r12: parseRadius(peak?.radius12)
+    }),
     stage,
     retired,
     replacement: retiredNameMap[retiredKey],
@@ -680,21 +685,6 @@ function normalizeStage(strong?: string): StormStage {
   if (strong.includes("强热带")) return "强热带风暴";
   if (strong.includes("低压")) return "热带低压";
   return "热带风暴";
-}
-
-function ratingFromWind(wind: number, stage: StormStage): BossRating {
-  if (wind >= 58 || stage === "超强台风") return "天灾级";
-  if (wind >= 51 || stage === "强台风") return "强台风级";
-  if (wind >= 33 || stage === "台风") return "台风级";
-  if (wind >= 24 || stage === "强热带风暴") return "暴雨级";
-  return "微风级";
-}
-
-function downgradeRating(rating: BossRating): BossRating {
-  if (rating === "天灾级") return "强台风级";
-  if (rating === "强台风级") return "台风级";
-  if (rating === "台风级") return "暴雨级";
-  return "微风级";
 }
 
 function normalizeDirection(direction?: string) {

@@ -127,7 +127,9 @@ interface GeocodingResult {
   longitude?: number;
   timezone?: string;
   country?: string;
+  country_code?: string;
   admin1?: string;
+  admin2?: string;
   feature_code?: string;
   population?: number;
 }
@@ -163,6 +165,17 @@ interface QWeatherPayload {
     description?: string;
     instruction?: string;
   }>;
+  alerts?: Array<{
+    headline?: string;
+    event?: string;
+    severity?: string;
+    issuedTime?: string;
+    senderName?: string;
+    effectiveTime?: string;
+    expireTime?: string;
+    description?: string;
+    instruction?: string;
+  }>;
 }
 
 interface QWeatherGeoPayload { location?: Array<{ id?: string }> }
@@ -177,7 +190,15 @@ const PROVINCES = [
   ["福建省", "福建"], ["江西省", "江西"], ["湖北省", "湖北"], ["湖南省", "湖南"], ["广东省", "广东"], ["海南省", "海南"], ["四川省", "四川"], ["贵州省", "贵州"],
   ["云南省", "云南"], ["台湾省", "台湾"], ["北京市", "北京"], ["天津市", "天津"], ["上海市", "上海"], ["重庆市", "重庆"]
 ] as const;
-const MUNICIPALITIES = new Set(["北京", "天津", "上海", "重庆"]);
+// 港澳与直辖市一样可直接作为城市查询，不能要求再补一个下级城市名。
+const MUNICIPALITIES = new Set(["北京", "天津", "上海", "重庆", "香港", "澳门"]);
+
+const SPECIAL_CITY_GEOCODING: Record<string, { countryCode: string; names: string[] }> = {
+  "台北": { countryCode: "TW", names: ["Taipei", "台北市"] },
+  "台北市": { countryCode: "TW", names: ["Taipei", "台北市"] },
+  "香港": { countryCode: "HK", names: ["香港"] },
+  "澳门": { countryCode: "MO", names: ["澳门"] }
+};
 
 const CURRENT_FIELDS = [
   "temperature_2m", "relative_humidity_2m", "apparent_temperature", "precipitation", "rain",
@@ -198,7 +219,10 @@ const NATIONAL_CAPITAL_SAMPLE = [
 const QWEATHER_LOCATION_LIST = "https://raw.githubusercontent.com/qwd/LocationList/master/China-City-List-latest.csv";
 const NATIONAL_CITY_ROSTER_PATH = resolve(process.cwd(), ".runtime/qweather-national-city-roster.json");
 const NATIONAL_CITY_SNAPSHOT_PATH = resolve(process.cwd(), ".runtime/qweather-national-city-snapshot.json");
-const CITY_COMPARISON_TTL_MS = 75 * 60 * 1_000;
+const NATIONAL_CITY_WARNING_SNAPSHOT_PATH = resolve(process.cwd(), ".runtime/qweather-national-city-warnings.json");
+const NATIONAL_CITY_ROSTER_VERSION = 2;
+// 全国底榜由每日 03:15 的计划任务刷新；留出任务延迟余量，直播期间不应在上午失效。
+const CITY_COMPARISON_TTL_MS = 26 * 60 * 60 * 1_000;
 let cityComparisonCache: { fetchedAt: string; values: Array<NonNullable<CityBriefing["current"]>> } | null = null;
 let cityComparisonLoading: Promise<{ fetchedAt: string; values: Array<NonNullable<CityBriefing["current"]>> } | null> | null = null;
 const dailyCityFacts = new Map<string, Omit<CityBriefing, "narrative">>();
@@ -245,6 +269,7 @@ export async function getCityBriefing(cityQuery: string): Promise<CityBriefing> 
       ? "degraded"
       : "unavailable";
 
+  // 每日底榜使用和风天气中国城市点位清单，其中含港澳台城市点位。
   const comparison = current.sourceId === "qweather-now"
     ? await buildCityComparison(current)
     : null;
@@ -381,8 +406,8 @@ export async function getCityLocation(cityQuery: string): Promise<CityBriefing["
 
 async function resolveCity(cityQuery: string): Promise<CityBriefing["city"]> {
   const mention = parseCityMention(cityQuery);
-  const results = (await Promise.all(cityQueryVariants(mention.cityQuery).map(async (name) => {
-    const query = new URLSearchParams({ name, count: "10", language: "zh", format: "json", countryCode: "CN" });
+  const results = (await Promise.all(cityGeocodingQueries(mention).map(async ({ name, countryCode }) => {
+    const query = new URLSearchParams({ name, count: "10", language: "zh", format: "json", countryCode });
     const response = await fetch(`${OPEN_METEO_GEOCODING}?${query}`, requestInit(8_000));
     if (!response.ok) throw new Error(`城市定位 HTTP ${response.status}`);
     const payload = await response.json() as { results?: GeocodingResult[] };
@@ -421,13 +446,22 @@ function cityQueryVariants(cityQuery: string) {
   return [...new Set([cityQuery, plain, cityQuery.endsWith("市") ? cityQuery : `${cityQuery}市`].filter((value) => value.length >= 2))];
 }
 
+function cityGeocodingQueries(mention: CityMention) {
+  const special = SPECIAL_CITY_GEOCODING[mention.cityQuery];
+  if (special) return special.names.map((name) => ({ name, countryCode: special.countryCode }));
+  const countryCode = mention.province === "台湾" ? "TW" : "CN";
+  return cityQueryVariants(mention.cityQuery).map((name) => ({ name, countryCode }));
+}
+
 export function chooseCity(results: GeocodingResult[], mention: CityMention) {
   const seen = new Set<string>();
   const eligible = results.filter((result) => {
     const key = `${result.name}|${result.admin1}|${result.latitude}|${result.longitude}`;
-    if (seen.has(key) || !isChineseCity(result)) return false;
+    if (seen.has(key) || !isChineseCity(result, mention)) return false;
     seen.add(key);
-    return !mention.province || normalizeProvince(result.admin1) === mention.province;
+    // 直辖市及港澳本身就是城市级查询。Open-Meteo 对港澳常不返回
+    // admin1，不能再拿省级字段把正确结果筛掉。
+    return !mention.province || MUNICIPALITIES.has(mention.province) || normalizeProvince(result.admin1) === mention.province;
   });
   if (!eligible.length) {
     const scope = mention.province ? `“${mention.province}”范围内的` : "";
@@ -449,8 +483,15 @@ export function chooseCity(results: GeocodingResult[], mention: CityMention) {
   return top.result;
 }
 
-function isChineseCity(result: GeocodingResult) {
-  return /^PPLA\d?$/.test(result.feature_code ?? "") || result.feature_code === "PPLC";
+function isChineseCity(result: GeocodingResult, mention: CityMention) {
+  if (/^PPLA\d?$/.test(result.feature_code ?? "") || result.feature_code === "PPLC") return true;
+  // Open-Meteo occasionally labels an otherwise unambiguous prefecture-level
+  // Chinese city as PPL. Its admin2 still carries the city name, which keeps
+  // us from falling through to a same-name village while covering cities such
+  // as 蚌埠.
+  const requested = mention.cityQuery.replace(/市$/, "");
+  const admin2 = result.admin2?.replace(/市$/, "") ?? "";
+  return result.country_code === "CN" && Boolean(requested) && admin2 === requested;
 }
 
 function normalizeProvince(value: string | undefined) {
@@ -570,10 +611,10 @@ async function buildCityComparison(current: CityBriefing["current"]): Promise<Ci
     if (value === null) return undefined;
     const values = snapshot.values.map((item) => item[field]).filter((item): item is number => item !== null);
     if (values.length < 20) return undefined;
-    return { position: values.filter((item) => item > value).length + 1, total: values.length, scope: "全国城市点位" };
+    return { position: values.filter((item) => item > value).length + 1, total: values.length, scope: "全国排名" };
   };
   return {
-    scope: "全国城市点位",
+    scope: "全国排名",
     fetchedAt: snapshot.fetchedAt,
     relativeHumidityRank: rank(current.relativeHumidityPct, "relativeHumidityPct"),
     apparentTemperatureRank: rank(current.apparentTemperatureC, "apparentTemperatureC"),
@@ -592,7 +633,7 @@ async function readNationalCitySnapshot() {
   try {
     const snapshot = JSON.parse(await readFile(NATIONAL_CITY_SNAPSHOT_PATH, "utf8")) as { fetchedAt?: string; values?: Array<NonNullable<CityBriefing["current"]>> };
     if (!snapshot.fetchedAt || !Array.isArray(snapshot.values) || Date.now() - Date.parse(snapshot.fetchedAt) >= CITY_COMPARISON_TTL_MS) return null;
-    if (snapshot.values.length < 500) return null;
+    if (snapshot.values.length < 200) return null;
     cityComparisonCache = { fetchedAt: snapshot.fetchedAt, values: snapshot.values };
     return cityComparisonCache;
   } catch { return null; }
@@ -618,25 +659,100 @@ export async function refreshNationalCityComparison() {
     }
   };
   await Promise.all(Array.from({ length: 16 }, worker));
-  if (values.length < 500) throw new Error(`National city snapshot incomplete: ${values.length}/${roster.length}`);
-  const snapshot = { fetchedAt: new Date().toISOString(), scope: "全国城市点位", rosterCount: roster.length, values };
+  if (values.length < 200) throw new Error(`National city snapshot incomplete: ${values.length}/${roster.length}`);
+  const snapshot = { fetchedAt: new Date().toISOString(), scope: "全国排名", rosterCount: roster.length, values };
   await writeJsonAtomic(NATIONAL_CITY_SNAPSHOT_PATH, snapshot);
   cityComparisonCache = { fetchedAt: snapshot.fetchedAt, values };
   return { fetchedAt: snapshot.fetchedAt, rosterCount: roster.length, fulfilled: values.length };
 }
 
+export async function scanNationalCityWarnings() {
+  const host = process.env.QWEATHER_API_HOST?.trim().replace(/\/$/, "");
+  if (!host) throw new Error("QWEATHER_API_HOST is not configured");
+  const headers = await qWeatherAuthHeaders();
+  if (!Object.keys(headers).length) throw new Error("QWeather credentials are not configured");
+
+  const rosterIds = new Set(await loadNationalCityRoster());
+  const response = await fetch(QWEATHER_LOCATION_LIST, { cache: "no-store", signal: AbortSignal.timeout(30_000) });
+  if (!response.ok) throw new Error(`QWeather Location List HTTP ${response.status}`);
+  const locations = (await response.text()).split(/\r?\n/).slice(2)
+    .map((line) => line.split(","))
+    .flatMap((cells) => {
+      const id = cells[0]?.trim();
+      const name = cells[2]?.trim();
+      // Country and province labels can contain quoted commas. Coordinates are
+      // stable relative to the row end, unlike their absolute CSV indexes.
+      const latitude = Number(cells.at(-3));
+      const longitude = Number(cells.at(-2));
+      return id && name && rosterIds.has(id) && Number.isFinite(latitude) && Number.isFinite(longitude)
+        ? [{ id, name, latitude, longitude }]
+        : [];
+    });
+  if (locations.length < 250) throw new Error(`National city warning locations incomplete: ${locations.length}/${rosterIds.size}`);
+
+  const pending = [...locations];
+  const warnings: Array<{ cityId: string; cityName: string; severity: string | null; title: string; issuedAt: string | null; expiresAt: string | null; senderName: string | null }> = [];
+  let fulfilled = 0;
+  const worker = async () => {
+    while (pending.length) {
+      const city = pending.shift();
+      if (!city) return;
+      try {
+        const payload = await fetchQWeather(host, `/weatheralert/v1/current/${city.latitude.toFixed(4)}/${city.longitude.toFixed(4)}?lang=zh&localTime=true`, headers);
+        fulfilled += 1;
+        for (const warning of summarizeOfficialWarnings(payload)) {
+          warnings.push({ cityId: city.id, cityName: city.name, severity: warning.severity, title: warning.title, issuedAt: warning.issuedAt, expiresAt: warning.expiresAt, senderName: warning.senderName });
+        }
+      } catch { /* A failed location is retained in the scan denominator. */ }
+    }
+  };
+  await Promise.all(Array.from({ length: 12 }, worker));
+  const severityRank: Record<string, number> = { extreme: 4, severe: 3, moderate: 2, minor: 1, unknown: 0 };
+  warnings.sort((a, b) => (severityRank[b.severity ?? "unknown"] ?? 0) - (severityRank[a.severity ?? "unknown"] ?? 0) || (Date.parse(b.issuedAt ?? "") || 0) - (Date.parse(a.issuedAt ?? "") || 0));
+  const snapshot = { fetchedAt: new Date().toISOString(), scope: "national-city-level warning scan", rosterCount: locations.length, fulfilled, warnings };
+  await writeJsonAtomic(NATIONAL_CITY_WARNING_SNAPSHOT_PATH, snapshot);
+  return snapshot;
+}
+
 async function loadNationalCityRoster() {
   try {
-    const roster = JSON.parse(await readFile(NATIONAL_CITY_ROSTER_PATH, "utf8")) as { fetchedAt?: string; ids?: string[] };
-    if (roster.fetchedAt && Array.isArray(roster.ids) && roster.ids.length >= 500 && Date.now() - Date.parse(roster.fetchedAt) < 30 * 24 * 60 * 60 * 1_000) return roster.ids;
+    const roster = JSON.parse(await readFile(NATIONAL_CITY_ROSTER_PATH, "utf8")) as { version?: number; fetchedAt?: string; ids?: string[] };
+    if (roster.version === NATIONAL_CITY_ROSTER_VERSION && roster.fetchedAt && Array.isArray(roster.ids) && roster.ids.length >= 250 && Date.now() - Date.parse(roster.fetchedAt) < 30 * 24 * 60 * 60 * 1_000) return roster.ids;
   } catch { /* Refresh below. */ }
   const response = await fetch(QWEATHER_LOCATION_LIST, { cache: "no-store", signal: AbortSignal.timeout(30_000) });
   if (!response.ok) throw new Error(`QWeather Location List HTTP ${response.status}`);
   const lines = (await response.text()).split(/\r?\n/).slice(2);
-  const ids = [...new Set(lines.map((line) => line.split(",")[0]?.trim()).filter((id): id is string => /^\d{9,}$/.test(id)))];
-  if (ids.length < 500) throw new Error("QWeather Location List has too few China city locations");
-  await writeJsonAtomic(NATIONAL_CITY_ROSTER_PATH, { fetchedAt: new Date().toISOString(), source: QWEATHER_LOCATION_LIST, ids });
+  const ids = [...new Set(lines.flatMap(selectNationalCityLocationId))];
+  if (ids.length < 250) throw new Error("QWeather Location List has too few city-level locations");
+  await writeJsonAtomic(NATIONAL_CITY_ROSTER_PATH, {
+    version: NATIONAL_CITY_ROSTER_VERSION,
+    fetchedAt: new Date().toISOString(),
+    source: QWEATHER_LOCATION_LIST,
+    selection: "prefecture-level cities + municipalities + Hong Kong/Macao/Taiwan city roots; excludes mainland districts and counties",
+    ids
+  });
   return ids;
+}
+
+function selectNationalCityLocationId(line: string): string[] {
+  // The list has quoted descriptive columns, but these stable columns occur
+  // before any quoted comma and at the row end: ID, Chinese name, ISO, AD code.
+  const cells = line.split(",");
+  const id = cells[0]?.trim();
+  const nameZh = cells[2]?.trim();
+  const iso = cells[3]?.trim();
+  const adCode = cells.at(-1)?.trim();
+  if (!id || !nameZh || !iso || !adCode || !/^\d{9,}$/.test(id)) return [];
+  // Mainland prefecture-level cities have an administrative code ending in 00.
+  if (iso === "CN" && /00$/.test(adCode) && !/0000$/.test(adCode)) return [id];
+  // Four municipalities are city-level despite their provincial-level code.
+  if (iso === "CN" && ["110000", "120000", "310000", "500000"].includes(adCode)) return [id];
+  // Keep exactly the city-wide Hong Kong and Macao points, not districts/islands.
+  if ((iso === "HK" && nameZh === "香港") || (iso === "MO" && nameZh === "澳门")) return [id];
+  // The numeric Taiwan rows in this source are the city/county roots; Diaoyu
+  // Islands is not a city and is deliberately outside this city ranking.
+  if (iso === "TW" && nameZh !== "钓鱼岛") return [id];
+  return [];
 }
 
 async function writeJsonAtomic(filePath: string, value: unknown) {
@@ -763,7 +879,7 @@ function summarizeMinutelyRain(payload: QWeatherPayload | null): CityBriefing["m
 }
 
 function summarizeOfficialWarnings(payload: QWeatherPayload | null): CityBriefing["officialWarnings"] {
-  const alerts = payload?.alert ?? [];
+  const alerts = payload?.alerts ?? payload?.alert ?? [];
   if (alerts.length) return alerts
     .map((alert) => ({
       title: alert.headline?.trim() || alert.event?.trim() || "",

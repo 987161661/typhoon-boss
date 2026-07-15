@@ -10,7 +10,7 @@ function storm(id: string, lon: number, lat: number): Storm {
     nameZh: `台风${id}`,
     nameEn: id,
     stage: "台风",
-    rating: "台风级",
+    rating: "虎级",
     status: "active",
     position: { lon, lat },
     maxWind: 35,

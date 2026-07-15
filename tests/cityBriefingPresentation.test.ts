@@ -83,6 +83,11 @@ test("live-room mention accepts country and province-city forms", () => {
   assert.deepEqual(parseCityMention("@中国北京"), { raw: "北京", province: "北京", cityQuery: "北京" });
 });
 
+test("Hong Kong and Macao can be queried as city-level mentions", () => {
+  assert.deepEqual(parseCityMention("@香港"), { raw: "香港", province: "香港", cityQuery: "香港" });
+  assert.deepEqual(parseCityMention("@澳门"), { raw: "澳门", province: "澳门", cityQuery: "澳门" });
+});
+
 test("a city-level mention never falls through to a same-name village", () => {
   const result = chooseCity([
     { name: "吉林", admin1: "广西", feature_code: "PPL", population: 0, latitude: 23.5, longitude: 107.4 },
@@ -90,4 +95,11 @@ test("a city-level mention never falls through to a same-name village", () => {
   ], parseCityMention("@吉林市"));
   assert.equal(result.admin1, "吉林");
   assert.equal(result.name, "吉林市");
+});
+
+test("a prefecture-level city keeps its matching admin2 result when Open-Meteo labels it PPL", () => {
+  const result = chooseCity([
+    { name: "蚌埠", admin1: "安徽", admin2: "蚌埠市", country_code: "CN", feature_code: "PPL", population: 972784, latitude: 32.94, longitude: 117.36 }
+  ], parseCityMention("@蚌埠"));
+  assert.equal(result.name, "蚌埠");
 });

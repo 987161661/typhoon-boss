@@ -10,7 +10,9 @@ export function LiveCityTargetLock({
   attention: CityAttention | null;
   anchor: CityAttentionAnchor | null;
 }) {
-  if (!attention || !anchor) return null;
+  // The lock is the acquisition beat. Keeping it over the completed card
+  // steals attention from the readout and can cover rankings on compact maps.
+  if (!attention || attention.phase !== "flash" || !anchor) return null;
   return (
     <div
       className="city-target-lock"

@@ -5,7 +5,7 @@ import { parseJtwcStructureBulletin } from "../lib/bossEngine/structureIntellige
 import type { Storm } from "../lib/types";
 
 const storm = {
-  id: "202609", code: "202609", nameZh: "巴威", nameEn: "BAVI", stage: "台风", rating: "台风级", status: "实时监测中",
+  id: "202609", code: "202609", nameZh: "巴威", nameEn: "BAVI", stage: "台风", rating: "虎级", status: "实时监测中",
   position: { lon: 130, lat: 20 }, maxWind: 40, minPressure: 960, moveDirection: "西北", moveSpeed: 15,
   updatedAt: "2026-07-12T00:00:00.000Z",
   windRadiiKm: { r7: 300, r10: 100, r12: 50, quadrants: {

@@ -10,7 +10,7 @@ function storm(): Storm {
     nameZh: "巴威",
     nameEn: "BAVI",
     stage: "台风",
-    rating: "台风级",
+    rating: "虎级",
     status: "active",
     position: { lon: 130, lat: 30 },
     maxWind: 35,
