@@ -1,7 +1,16 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import {
+  buildWorldFragmentBriefs,
+  normalizeGeneratedWorldFragment,
+  parseWorldFragmentResponse,
+  runWorldFragmentBatches,
+  type GeneratedWorldFragment,
+  type WorldFragmentBrief
+} from "./worldFragmentGeneration";
 import { buildWorldFragmentSystemPrompt, loadWorldLoreFramework } from "./worldLoreFramework";
+import type { WorldLoreFramework } from "./worldLoreFramework";
 
 const TARGET_SIZE = 50;
 const REFILL_AT = 10;
@@ -23,11 +32,25 @@ export type WorldFragmentRuntimeStatus = {
   refill: "idle" | "running" | "sealed";
 };
 
+type PoolFragmentEntry = {
+  id: string;
+  text: string;
+  seed: string;
+  createdAt: string;
+  semanticKey?: string;
+  motifs?: string[];
+  speaker?: string;
+  thesis?: string;
+  rhetoric?: string;
+  lengthTier?: string;
+  revealLevel?: number;
+};
+
 type PoolState = {
   version: 1;
   generation: number;
-  available: Array<{ id: string; text: string; seed: string; createdAt: string }>;
-  consumed: Array<{ id: string; text: string; seed: string; consumedAt: string }>;
+  available: PoolFragmentEntry[];
+  consumed: Array<PoolFragmentEntry & { consumedAt: string }>;
 };
 
 export type WorldFragmentAccessSource = "observed" | "whitelist" | "unknown";
@@ -162,19 +185,60 @@ async function scheduleRefill(count: number) {
 async function refill(requested: number) {
   const apiKey = process.env.MINIMAX_API_KEY?.trim();
   if (!apiKey) return;
+  const framework = await loadWorldLoreFramework();
+  if (framework.status !== "canon") return;
   const snapshot = await loadState();
   const capacity = Math.max(0, TARGET_SIZE - snapshot.available.length);
   const count = Math.min(requested, capacity);
   if (!count) return;
   const seed = `${Date.now().toString(36)}-${crypto.randomUUID()}`;
-  // Small parallel batches return predictably on MiniMax. A single 50-line
-  // JSON completion can otherwise sit behind the provider's long-form
-  // generation policy and defeat the purpose of prewarming the cache.
-  const candidates: string[] = [];
-  for (let index = 0; index < Math.ceil(count / 10); index += 1) {
-    const batch = await generateFragments(apiKey, Math.min(10, count - index * 10), `${seed}:${index}`, snapshot);
-    candidates.push(...batch);
+  const accepted: GeneratedWorldFragment[] = [];
+  const preferredLongLimit = Math.ceil(count * 0.2);
+  const fallbackLongLimit = Math.ceil(count * 0.26);
+  const knownTexts = [...snapshot.available, ...snapshot.consumed].map((entry) => entry.text);
+  let briefOffset = 0;
+  let stagnantRounds = 0;
+
+  // First pass fills the requested capacity with ten-item calls. If provider
+  // formatting or local quality gates reject candidates, later narrow passes
+  // regenerate only the shortage. Two consecutive no-progress rounds stop the
+  // refill so a degraded provider cannot create an infinite paid retry loop.
+  for (let attempt = 0; attempt < 4 && accepted.length < count && stagnantRounds < 2; attempt += 1) {
+    const beforeAttempt = accepted.length;
+    const shortage = count - accepted.length;
+    const briefs = buildWorldFragmentBriefs({ count: shortage, seed: `${seed}:${attempt}`, framework, offset: briefOffset });
+    briefOffset += briefs.length;
+    const avoid = [...knownTexts, ...accepted.map((item) => item.text)].slice(-160);
+    const outcome = await runWorldFragmentBatches({
+      briefs,
+      batchSize: 10,
+      maxConcurrency: worldFragmentMaxConcurrency(),
+      generate: (batch, batchIndex) => generateFragments(
+        apiKey,
+        batch,
+        `${seed}:${attempt}:${batchIndex}`,
+        framework,
+        avoid
+      )
+    });
+    if (outcome.failures.length) {
+      console.warn("[world-fragments] partial generation failure", outcome.failures);
+    }
+    for (const candidate of outcome.items) {
+      if (accepted.length >= count) break;
+      const prior = [...knownTexts, ...accepted.map((item) => item.text)];
+      if (prior.some((text) => tooSimilar(text, candidate.text))) continue;
+      const semanticKeyUses = [...snapshot.available, ...snapshot.consumed]
+        .filter((item) => item.semanticKey === candidate.semanticKey).length
+        + accepted.filter((item) => item.semanticKey === candidate.semanticKey).length;
+      if (semanticKeyUses >= 2) continue;
+      const longLimit = attempt < 2 ? preferredLongLimit : fallbackLongLimit;
+      if (candidate.lengthTier === "long" && accepted.filter((item) => item.lengthTier === "long").length >= longLimit) continue;
+      accepted.push(candidate);
+    }
+    stagnantRounds = accepted.length === beforeAttempt ? stagnantRounds + 1 : 0;
   }
+
   await withPoolLock(async () => {
     // Re-read after the provider round-trip. Claims may have consumed entries
     // while MiniMax was generating; merging into the current state prevents a
@@ -182,37 +246,44 @@ async function refill(requested: number) {
     const state = await loadState();
     const known = [...state.available, ...state.consumed].map((entry) => entry.text);
     const currentCapacity = Math.max(0, TARGET_SIZE - state.available.length);
-    const accepted = candidates
-      .map(cleanFragment)
-      .filter((text): text is string => Boolean(text))
-      .filter((text) => !known.some((prior) => tooSimilar(prior, text)))
+    const publishable = accepted
+      .filter((candidate) => !known.some((prior) => tooSimilar(prior, candidate.text)))
       .slice(0, currentCapacity);
-    if (!accepted.length) return;
+    if (!publishable.length) return;
     const now = new Date().toISOString();
     state.generation += 1;
-    state.available.push(...accepted.map((text, index) => ({
+    state.available.push(...publishable.map((candidate, index) => ({
       id: `fragment-${state.generation}-${index}-${crypto.randomUUID()}`,
-      text,
+      text: candidate.text,
       seed: `${seed}:${index}`,
-      createdAt: now
+      createdAt: now,
+      semanticKey: candidate.semanticKey,
+      motifs: candidate.motifs,
+      speaker: candidate.speaker,
+      thesis: candidate.thesis,
+      rhetoric: candidate.rhetoric,
+      lengthTier: candidate.lengthTier,
+      revealLevel: candidate.revealLevel
     })));
     await saveState(state);
   });
 }
 
-async function generateFragments(apiKey: string, count: number, seed: string, state: PoolState) {
-  const framework = await loadWorldLoreFramework();
+async function generateFragments(
+  apiKey: string,
+  briefs: WorldFragmentBrief[],
+  seed: string,
+  framework: WorldLoreFramework,
+  avoid: string[]
+) {
   const response = await fetch(process.env.MINIMAX_API_BASE_URL?.trim() || "https://api.minimaxi.com/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: process.env.MINIMAX_MODEL?.trim() || "MiniMax-M3",
-      temperature: 1.05,
-      // This is a compact quote cache, not a reasoning task. Keeping hidden
-      // reasoning disabled prevents the pool warmer from monopolising the
-      // model while the live card has already moved on.
-      reasoning_split: false,
-      max_completion_tokens: 900,
+      model: process.env.WORLD_FRAGMENT_MODEL?.trim() || "MiniMax-M2.7-highspeed",
+      temperature: 0.9,
+      reasoning_split: true,
+      max_completion_tokens: 4096,
       response_format: { type: "json_object" },
       messages: [
         {
@@ -222,44 +293,40 @@ async function generateFragments(apiKey: string, count: number, seed: string, st
         {
           role: "user",
           content: JSON.stringify({
-            count,
+            task: "根据 briefs 逐条创作，每张任务卡只产出一条，items 顺序与 briefs 严格一致",
             randomSeed: seed,
-            avoid: state.consumed.slice(-120).map((entry) => entry.text),
-            instruction: "每条使用不同意象和语法起势；随机种子只用于保证本批表达差异。",
+            candidate_multiplier: 1,
+            avoid_texts: avoid,
             arcVersion: framework.arcVersion,
-            motifPlan: framework.allowedMotifs.slice(0, count)
+            reveal_level: framework.maxRevealLevel,
+            briefs: briefs.map((brief) => ({
+              id: brief.id,
+              speaker: brief.speaker,
+              motif: brief.motif,
+              thesis: brief.thesis,
+              rhetoric: brief.rhetoric,
+              length_tier: brief.lengthTier,
+              reveal_level: brief.revealLevel,
+              must_avoid: brief.mustAvoid
+            }))
           })
         }
-      ],
-      signal: AbortSignal.timeout(45_000)
-    })
+      ]
+    }),
+    signal: AbortSignal.timeout(worldFragmentTimeoutMs())
   });
   if (!response.ok) throw new Error(`MiniMax world fragment HTTP ${response.status}`);
   const payload = await response.json() as { choices?: Array<{ message?: { content?: unknown } }> };
   const raw = payload.choices?.[0]?.message?.content;
   if (typeof raw !== "string") return [];
-  try {
-    // MiniMax M3 may still prepend a private reasoning block in JSON mode.
-    // Only the final object is publishable pool material.
-    const withoutThinking = raw.trim().replace(/^<think>[\s\S]*?<\/think>\s*/i, "");
-    const unfenced = withoutThinking.replace(/^```json\s*/i, "").replace(/```$/i, "").trim();
-    const firstBrace = unfenced.indexOf("{");
-    const lastBrace = unfenced.lastIndexOf("}");
-    const json = JSON.parse(firstBrace >= 0 && lastBrace > firstBrace ? unfenced.slice(firstBrace, lastBrace + 1) : unfenced) as { items?: unknown };
-    return Array.isArray(json.items)
-      ? json.items.flatMap((value) => value && typeof value === "object" && typeof (value as { text?: unknown }).text === "string" ? [(value as { text: string }).text] : [])
-      : [];
-  } catch {
-    return [];
-  }
-}
-
-function cleanFragment(value: string) {
-  const text = value.replace(/[\r\n]+/g, "").replace(/^[-•\d.\s]+/, "").trim();
-  const hanCount = (text.match(/[\u3400-\u9fff]/g) ?? []).length;
-  if (hanCount < 36 || hanCount > 60 || /[{}<>]/.test(text)) return null;
-  if (/关注|点赞|订阅|现实灾害|人员伤亡|立即撤离|避险指令/.test(text)) return null;
-  return text;
+  const values = parseWorldFragmentResponse(raw);
+  const byBriefId = new Map(values.flatMap((value) => typeof value.brief_id === "string" ? [[value.brief_id, value] as const] : []));
+  return briefs.flatMap((brief, index) => {
+    const value = byBriefId.get(brief.id) ?? values[index];
+    if (!value) return [];
+    const normalized = normalizeGeneratedWorldFragment({ value, brief, framework });
+    return normalized ? [normalized] : [];
+  });
 }
 
 function tooSimilar(left: string, right: string) {
@@ -362,6 +429,16 @@ function poolStateFile() {
 
 function claimStateFile() {
   return process.env.WORLD_FRAGMENT_CLAIM_STATE_FILE?.trim() || DEFAULT_CLAIM_STATE_FILE;
+}
+
+function worldFragmentMaxConcurrency() {
+  const configured = Number(process.env.WORLD_FRAGMENT_MAX_CONCURRENCY);
+  return Number.isFinite(configured) ? Math.max(1, Math.min(5, Math.floor(configured))) : 5;
+}
+
+function worldFragmentTimeoutMs() {
+  const configured = Number(process.env.WORLD_FRAGMENT_TIMEOUT_MS);
+  return Number.isFinite(configured) ? Math.max(10_000, Math.min(180_000, Math.floor(configured))) : 120_000;
 }
 
 function withPoolLock<T>(operation: () => Promise<T>) {

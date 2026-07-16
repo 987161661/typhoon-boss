@@ -6,7 +6,11 @@ import { buildCityBattleReport } from "@/lib/cityBattleReport";
 import { buildCitySituation, type CityObservedAnomaly, type CitySituation } from "@/lib/citySituationCore";
 import { DailySnapshotCache, beijingDayKey, type SnapshotClock } from "@/lib/dailySnapshotCache";
 import { getAdministrativeHierarchy } from "@/lib/administrativeHierarchyService";
-import { resolveAdministrativeLocation } from "@/lib/administrativeMapping";
+import {
+  resolveAdministrativeCityIdentity,
+  resolveAdministrativeLocation,
+  resolveAdministrativeLocationName
+} from "@/lib/administrativeMapping";
 import { NATIONAL_SOURCE_IDS } from "@/lib/nationalWeather";
 import type { NationalSituationSnapshot, SourceHealth } from "@/lib/nationalWeatherTypes";
 
@@ -189,7 +193,18 @@ interface QWeatherPayload {
   }>;
 }
 
-interface QWeatherGeoPayload { location?: Array<{ id?: string }> }
+interface QWeatherGeoPayload {
+  location?: Array<{
+    id?: string;
+    name?: string;
+    adm1?: string;
+    adm2?: string;
+    country?: string;
+    lat?: string;
+    lon?: string;
+    tz?: string;
+  }>;
+}
 interface QWeatherHistoryPayload { weatherDaily?: { date?: string; precip?: string } }
 
 const OPEN_METEO_FORECAST = "https://api.open-meteo.com/v1/forecast";
@@ -295,12 +310,15 @@ async function loadCityBriefingFacts(cityQuery: string): Promise<Omit<CityBriefi
   if (nationalResult.status === "rejected") warnings.push(`全国预警快照不可用：${errorText(nationalResult.reason)}`);
   if (hierarchyResult.status === "rejected") warnings.push(`城市行政映射不可用：${errorText(hierarchyResult.reason)}`);
 
-  const administrative = qWeather.locationId && hierarchyResult.status === "fulfilled"
-    ? resolveAdministrativeLocation(qWeather.locationId, hierarchyResult.value.hierarchy)
+  const administrativeLocationId = city.locationId ?? qWeather.locationId;
+  const administrative = hierarchyResult.status === "fulfilled"
+    ? administrativeLocationId
+      ? resolveAdministrativeLocation(administrativeLocationId, hierarchyResult.value.hierarchy)
+      : resolveAdministrativeCityIdentity(city.name, qWeather.locationId, hierarchyResult.value.hierarchy)
     : null;
   const resolvedCity: CityBriefing["city"] = {
     ...city,
-    locationId: qWeather.locationId,
+    locationId: city.locationId ?? qWeather.locationId ?? administrative?.cityLocationId ?? null,
     cityCode: administrative?.cityCode ?? null,
     cityAttribution: administrative?.cityAttribution === "deterministic" ? "deterministic" : "ambiguous"
   };
@@ -342,7 +360,15 @@ async function loadCityBriefingFacts(cityQuery: string): Promise<Omit<CityBriefi
   // City cards are an operational readout, not a creative-writing task. Keep
   // this on the data path: it returns as soon as the weather sources do and
   // never waits for an LLM round trip.
-  return applyNationalCitySituation(briefing, nationalSnapshot, resolvedCity.cityCode ?? null);
+  const exactTargetLocationIds = administrative?.countyCode && resolvedCity.locationId
+    ? [resolvedCity.locationId]
+    : undefined;
+  return applyNationalCitySituation(
+    briefing,
+    nationalSnapshot,
+    resolvedCity.cityCode ?? null,
+    exactTargetLocationIds
+  );
 }
 
 async function presentDailyCityBriefing(briefing: Omit<CityBriefing, "narrative">, dailyKey: string): Promise<CityBriefing> {
@@ -355,13 +381,14 @@ async function presentDailyCityBriefing(briefing: Omit<CityBriefing, "narrative"
 export function applyNationalCitySituation(
   briefing: Omit<CityBriefing, "narrative">,
   snapshot: NationalSituationSnapshot | null,
-  cityCode: string | null
+  cityCode: string | null,
+  locationIds?: readonly string[]
 ): Omit<CityBriefing, "narrative"> {
   const anomalies = briefing.risks.flatMap(toObservedAnomaly);
   const ordinarySummary = compactOrdinaryWeather(briefing);
   const situation = buildCitySituation(
     snapshot,
-    { name: briefing.city.name, cityCode: cityCode ?? "" },
+    { name: briefing.city.name, cityCode: cityCode ?? "", locationIds },
     anomalies,
     ordinarySummary
   );
@@ -535,6 +562,8 @@ export async function getCityLocation(cityQuery: string): Promise<CityBriefing["
 
 async function resolveCity(cityQuery: string): Promise<CityBriefing["city"]> {
   const mention = parseCityMention(cityQuery);
+  const administrativeLocation = await resolveAdministrativeMentionLocation(mention).catch(() => null);
+  if (administrativeLocation) return administrativeLocation;
   const results = (await Promise.all(cityGeocodingQueries(mention).map(async ({ name, countryCode }) => {
     const query = new URLSearchParams({ name, count: "10", language: "zh", format: "json", countryCode });
     const response = await fetch(`${OPEN_METEO_GEOCODING}?${query}`, requestInit(8_000));
@@ -551,6 +580,42 @@ async function resolveCity(cityQuery: string): Promise<CityBriefing["city"]> {
     latitude: result.latitude!,
     longitude: result.longitude!,
     timezone: result.timezone ?? "Asia/Shanghai"
+  };
+}
+
+async function resolveAdministrativeMentionLocation(
+  mention: CityMention
+): Promise<CityBriefing["city"] | null> {
+  const hierarchyState = await getAdministrativeHierarchy();
+  const resolution = resolveAdministrativeLocationName(
+    mention.cityQuery,
+    mention.province,
+    hierarchyState.hierarchy
+  );
+  if (resolution.cityAttribution !== "deterministic") return null;
+
+  const host = process.env.QWEATHER_API_HOST?.trim().replace(/\/$/, "");
+  if (!host) return null;
+  const headers = await qWeatherAuthHeaders();
+  if (!Object.keys(headers).length) return null;
+  const payload = await fetchQWeather(
+    host,
+    `/geo/v2/city/lookup?location=${encodeURIComponent(resolution.locationId)}&lang=zh`,
+    headers
+  ) as unknown as QWeatherGeoPayload;
+  const location = payload.location?.find((item) => item.id === resolution.locationId)
+    ?? payload.location?.[0];
+  const latitude = Number(location?.lat);
+  const longitude = Number(location?.lon);
+  if (!location || !Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+  return {
+    name: location.name?.trim() || mention.cityQuery.replace(/市$/, ""),
+    province: location.adm1?.trim() || null,
+    country: location.country?.trim() || "中国",
+    latitude,
+    longitude,
+    timezone: location.tz?.trim() || "Asia/Shanghai",
+    locationId: resolution.locationId
   };
 }
 
@@ -709,6 +774,7 @@ async function loadQWeather(city: CityBriefing["city"]) {
 }
 
 async function loadQWeatherLocationId(host: string, headers: Record<string, string>, city: CityBriefing["city"]) {
+  if (city.locationId) return city.locationId;
   const location = `${city.longitude.toFixed(2)},${city.latitude.toFixed(2)}`;
   const geo = await fetchQWeather(host, `/geo/v2/city/lookup?location=${encodeURIComponent(location)}&lang=zh`, headers) as QWeatherGeoPayload;
   const locationId = geo.location?.[0]?.id;

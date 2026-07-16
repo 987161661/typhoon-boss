@@ -7,7 +7,15 @@ param(
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path $PSScriptRoot -Parent
 $vtuberRoot = 'D:\LocalToolset\vtuber\aituber-onair-main'
-$linglanLauncher = Join-Path $vtuberRoot 'Start-AITuber.ps1'
+$linglanControlRoomLauncher = Join-Path $vtuberRoot 'Start-Linglan-ControlRoom.ps1'
+$linglanLegacyLauncher = Join-Path $vtuberRoot 'Start-AITuber.ps1'
+$linglanLauncher = if (Test-Path -LiteralPath $linglanControlRoomLauncher -PathType Leaf) {
+  $linglanControlRoomLauncher
+} elseif (Test-Path -LiteralPath $linglanLegacyLauncher -PathType Leaf) {
+  $linglanLegacyLauncher
+} else {
+  $null
+}
 $runtimeDir = Join-Path $projectRoot '.runtime'
 $serviceLogDir = Join-Path $projectRoot 'runtime\logs'
 $liveUrl = "http://127.0.0.1:$Port/live"
@@ -39,14 +47,19 @@ function Test-TyphoonLiveAssets {
 }
 
 if (-not $NoLinglan) {
-  if (-not (Test-Path -LiteralPath $linglanLauncher)) {
-    throw "Linglan runtime was not found: $linglanLauncher"
+  if (-not $linglanLauncher) {
+    throw "Linglan runtime launcher was not found. Expected one of: $linglanControlRoomLauncher; $linglanLegacyLauncher"
   }
 
-  # Start the avatar runtime itself, not the Bilibili supervisor. The latter
-  # requires a room ID and must never prevent the local radar from launching.
+  # Prefer the current control-room launcher. It is self-sufficient when the
+  # retired umbrella launcher is absent, and keeps the radar independent of a
+  # Bilibili room ID. Do not open an extra operator window from this launcher.
+  $linglanArguments = @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $linglanLauncher)
+  if ($linglanLauncher -eq $linglanControlRoomLauncher) {
+    $linglanArguments += '-NoBrowser'
+  }
   Start-Process -FilePath 'powershell.exe' `
-    -ArgumentList @('-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $linglanLauncher) `
+    -ArgumentList $linglanArguments `
     -WorkingDirectory $vtuberRoot `
     -WindowStyle Hidden
 }
@@ -118,20 +131,30 @@ Write-Host "Evolution agent: enabled (every $($agentStatus.scheduler.intervalMin
 
 if (-not $NoLinglan) {
   $hostReady = $false
-  for ($attempt = 0; $attempt -lt 30; $attempt += 1) {
+  # Start-AITuber brings up the live-platform gateway and avatar services
+  # before Vite listens on 5173. On a cold start that chain can exceed the
+  # former 15-second allowance, even though it is healthy. Keep the radar
+  # launcher attached long enough to validate the proxy rather than reporting
+  # a false startup failure during that window.
+  $hostStartupTimeoutSeconds = 90
+  $hostStartedAt = Get-Date
+  for ($attempt = 0; $attempt -lt ($hostStartupTimeoutSeconds * 2); $attempt += 1) {
     try {
       $hostHealth = Invoke-WebRequest -Uri "http://127.0.0.1:$Port/api/digital-host/health" -UseBasicParsing -TimeoutSec 2
       if ($hostHealth.StatusCode -eq 200) {
         $hostReady = $true
         break
       }
-    } catch {
-      Start-Sleep -Milliseconds 500
+    } catch { }
+    if (($attempt + 1) % 20 -eq 0) {
+      $elapsedSeconds = [math]::Floor(((Get-Date) - $hostStartedAt).TotalSeconds)
+      Write-Host "Waiting for Linglan runtime ($elapsedSeconds/$hostStartupTimeoutSeconds seconds)..."
     }
+    Start-Sleep -Milliseconds 500
   }
 
   if (-not $hostReady) {
-    throw "Linglan runtime did not connect through http://127.0.0.1:$Port/api/digital-host/health"
+    throw "Linglan runtime did not connect within $hostStartupTimeoutSeconds seconds through http://127.0.0.1:$Port/api/digital-host/health. Check D:\LocalToolset\vtuber\aituber-onair-main\logs\vite.out.log and vite.err.log."
   }
   Write-Host 'Linglan runtime: http://127.0.0.1:5173/?overlay=1'
 } else {

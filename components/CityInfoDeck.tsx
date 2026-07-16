@@ -1,4 +1,16 @@
-import type { CSSProperties, RefObject } from "react";
+import {
+  CircleAlert,
+  CloudFog,
+  CloudLightning,
+  CloudRain,
+  Flame,
+  Snowflake,
+  ThermometerSun,
+  Waves,
+  Wind,
+  type LucideIcon
+} from "lucide-react";
+import { useEffect, useState, type CSSProperties, type RefObject } from "react";
 import type {
   CityPanelsModel,
   PanelEvidence,
@@ -7,6 +19,7 @@ import type {
   PanelWarning
 } from "@/lib/cityPanelsPresentation";
 import type { LayoutRect } from "@/lib/cityPanelLayout";
+import { resolveCityWarningVisual, type CityWarningKind } from "@/lib/cityWarningVisual";
 import styles from "./CityInfoDeck.module.css";
 
 export interface CityInfoDeckProps {
@@ -25,6 +38,11 @@ export function CityInfoDeck({ panelRef, rect, phase, model }: CityInfoDeckProps
   const warning = model.info.warning;
   const severity = warningSeverity(warning);
   const time = model.shared.observedAt ?? model.shared.generatedAt;
+  // The live page can finish loading an older presentation chunk while a new
+  // briefing is already in flight. Treat the additive warning queue as an
+  // optional runtime boundary: a malformed/stale value must never take down
+  // the entire city overlay (the primary official warning remains usable).
+  const relatedWarnings = Array.isArray(model.info.relatedWarnings) ? model.info.relatedWarnings : [];
 
   return (
     <aside
@@ -51,7 +69,7 @@ export function CityInfoDeck({ panelRef, rect, phase, model }: CityInfoDeckProps
         </div>
       </header>
 
-      <WarningConsole warning={warning} />
+      <WarningConsole warning={warning} relatedWarnings={relatedWarnings} />
 
       <section className={styles.observationSection} aria-labelledby="city-info-current" data-role="current-observations">
         <SectionHeading id="city-info-current" title="实况观测" meta="06 CHANNELS" />
@@ -96,7 +114,20 @@ export function CityInfoDeck({ panelRef, rect, phase, model }: CityInfoDeckProps
   );
 }
 
-function WarningConsole({ warning }: { warning: PanelWarning }) {
+function WarningConsole({ warning: primaryWarning, relatedWarnings = [] }: { warning: PanelWarning; relatedWarnings?: PanelWarning[] }) {
+  const [selectedTitle, setSelectedTitle] = useState(primaryWarning.title);
+  const [showAllWarnings, setShowAllWarnings] = useState(false);
+
+  useEffect(() => {
+    setSelectedTitle(primaryWarning.title);
+    setShowAllWarnings(false);
+  }, [primaryWarning.title]);
+  const safeRelatedWarnings = Array.isArray(relatedWarnings) ? relatedWarnings : [];
+  const warnings = [primaryWarning, ...safeRelatedWarnings];
+  const warning = warnings.find((item) => item.title === selectedTitle) ?? primaryWarning;
+  const visual = resolveCityWarningVisual(warning);
+  const visibleWarnings = showAllWarnings ? warnings : warnings.filter((_, index) => index < 3);
+  const hiddenWarningCount = Math.max(0, warnings.length - visibleWarnings.length);
   return (
     <section
       className={styles.warningConsole}
@@ -105,8 +136,42 @@ function WarningConsole({ warning }: { warning: PanelWarning }) {
       data-role="official-warning"
       data-warning-feed={warning.status}
       data-evidence={warning.evidence}
-      data-severity={warningSeverity(warning)}
+      data-severity={visual.severity}
+      data-warning-kind={visual.kind}
     >
+      <div className={styles.warningHero}>
+        <div className={styles.warningEmblem} data-role="warning-emblem" data-warning-kind={visual.kind} aria-hidden="true">
+          <WarningIcon kind={visual.kind} />
+        </div>
+        <div className={styles.warningLevelBlock}>
+          <span>OFFICIAL WARNING VISUAL</span>
+          <strong className={styles.warningLevelSeal} data-role="warning-level-seal">{visual.levelLabel} · {visual.kindLabel}</strong>
+        </div>
+      </div>
+      {safeRelatedWarnings.length > 0 && <div className={styles.warningQueue} data-role="related-warning-queue" aria-label="同城其他官方预警">
+        {visibleWarnings.map((item) => {
+          const itemVisual = resolveCityWarningVisual(item);
+          const selected = item.title === warning.title;
+          return <button
+            key={`${item.title}|${item.issuedAt ?? ""}`}
+            type="button"
+            data-role="related-warning-chip"
+            data-selected={selected ? "true" : "false"}
+            data-severity={itemVisual.severity}
+            data-warning-kind={itemVisual.kind}
+            aria-pressed={selected}
+            aria-label={`${itemVisual.levelLabel}${itemVisual.kindLabel}预警：${item.title}`}
+            onClick={() => setSelectedTitle(item.title)}
+          ><WarningIcon kind={itemVisual.kind} /><span>{itemVisual.levelLabel} · {itemVisual.kindLabel}</span></button>;
+        })}
+        {hiddenWarningCount > 0 && <button
+          className={styles.warningOverflow}
+          data-role="related-warning-overflow"
+          type="button"
+          onClick={() => setShowAllWarnings(true)}
+          aria-label={`展开其余 ${hiddenWarningCount} 条属地官方预警`}
+        >+{hiddenWarningCount}</button>}
+      </div>}
       <div className={styles.warningTitleRow}>
         <span>官方预警链路</span>
         <EvidenceTag evidence={warning.evidence} />
@@ -128,6 +193,23 @@ function WarningConsole({ warning }: { warning: PanelWarning }) {
       )}
     </section>
   );
+}
+
+function WarningIcon({ kind }: { kind: CityWarningKind }) {
+  const icons: Record<CityWarningKind, LucideIcon> = {
+    heat: ThermometerSun,
+    rain: CloudRain,
+    thunder: CloudLightning,
+    wind: Wind,
+    typhoon: Waves,
+    cold: Snowflake,
+    fog: CloudFog,
+    dust: Wind,
+    fire: Flame,
+    generic: CircleAlert
+  };
+  const Icon = icons[kind];
+  return <Icon strokeWidth={2.2} />;
 }
 
 function SectionHeading({ id, title, meta }: { id?: string; title: string; meta: string }) {

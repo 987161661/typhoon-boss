@@ -120,12 +120,142 @@ export function resolveAdministrativeLocation(
   };
 }
 
+/**
+ * A narrow recovery path for a city mention whose weather provider did not
+ * return a location id. It accepts only one exact Adm2 city-name group and
+ * then delegates to the same AD-code resolver used for provider ids.
+ *
+ * This is intentionally not a fuzzy name lookup: a same-named city in
+ * another province, a missing city root, or any conflicting group stays
+ * ambiguous and cannot receive national warning facts.
+ */
+export function resolveAdministrativeCityName(
+  rawCityName: string,
+  hierarchy: AdministrativeHierarchy | null
+): AdministrativeResolution {
+  const cityName = normalizeCityName(rawCityName);
+  if (!hierarchy) return unresolved(rawCityName.trim(), "administrative hierarchy unavailable");
+  if (!cityName) return unresolved(rawCityName.trim(), "city name is empty");
+
+  const candidates = [...hierarchy.byAdministrativeGroup.values()].filter((group) =>
+    normalizeCityName(group[0]?.cityName ?? "") === cityName
+  );
+  if (candidates.length !== 1) {
+    return unresolved(rawCityName.trim(), "city name does not identify one administrative root");
+  }
+
+  const roots = uniqueRows(candidates[0].filter((row) => row.adCode.endsWith("00")));
+  if (roots.length !== 1) {
+    return unresolved(rawCityName.trim(), "city name group does not have one administrative root");
+  }
+  return resolveAdministrativeLocation(roots[0].locationId, hierarchy);
+}
+
+/**
+ * Resolve an exact viewer-entered place name against the authoritative
+ * location list. This covers county-level cities such as Puning without
+ * maintaining a hand-written alias table. A province qualifier narrows
+ * duplicate place names; otherwise only a single exact match (or a single
+ * administrative root among duplicates) is accepted.
+ */
+export function resolveAdministrativeLocationName(
+  rawLocationName: string,
+  rawProvinceName: string | null | undefined,
+  hierarchy: AdministrativeHierarchy | null
+): AdministrativeResolution {
+  const locationName = splitAdministrativeLocationName(rawLocationName);
+  if (!hierarchy) return unresolved(rawLocationName.trim(), "administrative hierarchy unavailable");
+  if (!locationName.base) return unresolved(rawLocationName.trim(), "location name is empty");
+
+  const provinceName = normalizeProvinceName(rawProvinceName ?? "");
+  const provinceRows = hierarchy.rows.filter((row) =>
+    !provinceName || normalizeProvinceName(row.provinceName) === provinceName
+  );
+  const exactLabel = uniqueRows(provinceRows.filter((row) =>
+    splitAdministrativeLocationName(row.locationName).full === locationName.full
+  ));
+  const sameBase = provinceRows.filter((row) =>
+    splitAdministrativeLocationName(row.locationName).base === locationName.base
+  );
+  const sameSuffix = locationName.suffix
+    ? sameBase.filter((row) => splitAdministrativeLocationName(row.locationName).suffix === locationName.suffix)
+    : [];
+  // QWeather's authoritative list commonly omits “市” from county-level city
+  // labels (for example 普宁), while retaining “县/区/旗”. Prefer an exact
+  // label, then the requested administrative kind, and only then a suffixless
+  // provider label. A different explicit kind is never treated as equivalent.
+  const suffixless = locationName.suffix
+    ? sameBase.filter((row) => splitAdministrativeLocationName(row.locationName).suffix === null)
+    : [];
+  const exact = uniqueRows(
+    exactLabel.length > 0
+      ? exactLabel
+      : sameSuffix.length > 0
+        ? sameSuffix
+        : locationName.suffix
+          ? suffixless
+          : sameBase
+  );
+  const candidates = exact.length > 1
+    ? exact.filter((row) => row.adCode.endsWith("00"))
+    : exact;
+  if (candidates.length !== 1) {
+    return unresolved(rawLocationName.trim(), "location name does not identify one administrative location");
+  }
+  return resolveAdministrativeLocation(candidates[0].locationId, hierarchy);
+}
+
+/**
+ * Provider location ids are useful only when they agree with the separately
+ * resolved city identity. A stale or mis-scoped provider id must never route
+ * one city's national warnings into another city's card.
+ */
+export function resolveAdministrativeCityIdentity(
+  rawCityName: string,
+  rawLocationId: string | null | undefined,
+  hierarchy: AdministrativeHierarchy | null
+): AdministrativeResolution {
+  if (rawLocationId) {
+    const byLocation = resolveAdministrativeLocation(rawLocationId, hierarchy);
+    if (
+      byLocation.cityAttribution === "deterministic"
+      && normalizeCityName(byLocation.cityName ?? "") === normalizeCityName(rawCityName)
+    ) {
+      return byLocation;
+    }
+  }
+  return resolveAdministrativeCityName(rawCityName, hierarchy);
+}
+
 export function canEnterCitySituation(resolution: AdministrativeResolution) {
   return resolution.cityAttribution === "deterministic" && resolution.cityCode !== null;
 }
 
 function administrativeGroupKey(row: AdministrativeHierarchyRow) {
   return `${row.provinceName}\u0000${row.cityName}`;
+}
+
+function normalizeCityName(value: string) {
+  return value.trim().replace(/\s+/g, "").replace(/市$/, "");
+}
+
+function splitAdministrativeLocationName(value: string) {
+  const full = value.trim().normalize("NFKC").replace(/\s+/g, "");
+  const suffixMatch = full.match(/([市县区旗])$/);
+  const suffix = suffixMatch?.[1] ?? null;
+  return {
+    full,
+    base: suffix ? full.slice(0, -suffix.length) : full,
+    suffix
+  };
+}
+
+function normalizeProvinceName(value: string) {
+  return value
+    .trim()
+    .normalize("NFKC")
+    .replace(/\s+/g, "")
+    .replace(/(?:壮族|回族|维吾尔)?自治区$|特别行政区$|[省市]$/g, "");
 }
 
 function groupRows(

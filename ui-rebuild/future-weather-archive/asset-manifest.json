@@ -1,0 +1,8 @@
+{
+  "manifest": "public/assets/future-weather-archive/manifest.json",
+  "sourceType": "built-in image_gen plus deterministic Sharp derivatives",
+  "totalRuntimeBytes": 1104740,
+  "responsiveBehavior": "hero uses cover crop; material textures stretch or repeat inside semantic components",
+  "usage": ["bureau plaque", "hazard-adaptive performance specimen", "controls", "case tabs", "warning signal board", "collapsed evidence ribbon"],
+  "regeneration": "Run image_gen with the master prompt recorded in the public manifest, optimize the selected result to storm-specimen-v1.webp, then run scripts/build_future_weather_archive_assets.mjs."
+}

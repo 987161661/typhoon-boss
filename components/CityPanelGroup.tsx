@@ -37,6 +37,7 @@ export interface CityPanelGroupProps {
 
 const INITIAL_BATTLE_SIZE = { width: 680, height: 680 };
 const INITIAL_INFO_SIZE = { width: 550, height: 680 };
+const EMPTY_RESERVED_RECTS: LayoutRect[] = [];
 
 /**
  * One controller for one city. It owns geometry and lifecycle only; the two
@@ -49,7 +50,7 @@ export function CityPanelGroup({
   model,
   onClose,
   safeInsets,
-  reservedRects = []
+  reservedRects = EMPTY_RESERVED_RECTS
 }: CityPanelGroupProps) {
   const battleRef = useRef<HTMLElement>(null);
   const infoRef = useRef<HTMLElement>(null);
@@ -66,30 +67,41 @@ export function CityPanelGroup({
   }));
 
   useLayoutEffect(() => {
+    let frame = 0;
     const update = () => {
-      const battleBox = battleRef.current?.getBoundingClientRect();
-      const infoBox = infoRef.current?.getBoundingClientRect();
+      frame = 0;
+      const battleSize = layoutSize(battleRef.current, INITIAL_BATTLE_SIZE);
+      const infoSize = layoutSize(infoRef.current, INITIAL_INFO_SIZE);
       const next = resolveCityPanelLayout({
         viewport: { width: window.innerWidth, height: window.innerHeight },
         anchor,
-        battleSize: battleBox ? { width: battleBox.width, height: battleBox.height } : INITIAL_BATTLE_SIZE,
-        infoSize: infoBox ? { width: infoBox.width, height: infoBox.height } : INITIAL_INFO_SIZE,
+        battleSize,
+        infoSize,
         safeInsets: stableInsets,
         reservedRects: stableReservedRects
       });
       setLayout((current) => sameLayout(current, next) ? current : next);
     };
 
+    const scheduleUpdate = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(update);
+    };
+
     update();
-    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(scheduleUpdate);
     if (battleRef.current) observer?.observe(battleRef.current);
     if (infoRef.current) observer?.observe(infoRef.current);
-    window.addEventListener("resize", update);
+    window.addEventListener("resize", scheduleUpdate);
     return () => {
       observer?.disconnect();
-      window.removeEventListener("resize", update);
+      window.removeEventListener("resize", scheduleUpdate);
+      if (frame) window.cancelAnimationFrame(frame);
     };
-  }, [anchor, phase, stableInsets, stableReservedRects]);
+  }, [anchor, stableInsets, stableReservedRects]);
+
+  const prefersReducedMotion = usePrefersReducedMotion();
+  useCityPanelSoundEffects(phase, prefersReducedMotion);
 
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -142,10 +154,106 @@ export function CityPanelGroup({
         model={model}
         archive={model.battle.archive}
         onClose={onClose}
+        typingSound={!prefersReducedMotion}
+        reducedMotion={prefersReducedMotion}
       />
       <CityInfoDeck panelRef={infoRef} rect={layout.infoRect} phase={phase} model={model} />
     </section>
   );
+}
+
+/**
+ * The battle channel lands first; one second later the factual channel
+ * calibrates. The sounds are synthesized so the broadcast overlay has no
+ * network/audio-asset dependency. Autoplay policy may keep them silent until
+ * the host has interacted with the page, but never blocks the presentation.
+ */
+function useCityPanelSoundEffects(phase: CityPanelPhase, reducedMotion: boolean) {
+  const contextRef = useRef<AudioContext | null>(null);
+
+  useEffect(() => {
+    if (phase !== "deploy" || reducedMotion) return;
+
+    const timers = [
+      window.setTimeout(() => playPanelOpenSound(contextRef, "battle"), 760),
+      window.setTimeout(() => playPanelOpenSound(contextRef, "info"), 1_760)
+    ];
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
+  }, [phase, reducedMotion]);
+
+  useEffect(() => () => {
+    if (contextRef.current) void contextRef.current.close().catch(() => undefined);
+  }, []);
+}
+
+function usePrefersReducedMotion() {
+  const [reducedMotion, setReducedMotion] = useState(false);
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const update = () => setReducedMotion(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, []);
+  return reducedMotion;
+}
+
+function playPanelOpenSound(contextRef: { current: AudioContext | null }, channel: "battle" | "info") {
+  try {
+    const context = contextRef.current ?? new AudioContext();
+    contextRef.current = context;
+    if (context.state === "suspended") void context.resume();
+    const start = context.currentTime;
+    const limiter = context.createDynamicsCompressor();
+    limiter.threshold.value = -18;
+    limiter.knee.value = 12;
+    limiter.ratio.value = 8;
+    limiter.attack.value = 0.003;
+    limiter.release.value = 0.16;
+    limiter.connect(context.destination);
+
+    if (channel === "battle") {
+      // A physical low strike followed by a short metal latch: the wasteland
+      // panel should land, not merely make a generic UI beep.
+      playTone(context, limiter, start, { type: "sine", from: 118, to: 46, peak: 0.14, attack: 0.012, duration: 0.42 });
+      playTone(context, limiter, start + 0.035, { type: "triangle", from: 680, to: 190, peak: 0.065, attack: 0.006, duration: 0.22 });
+      return;
+    }
+
+    // The fact channel gets an audible calibration rise and a clean confirm
+    // chime, deliberately distinct from the battle impact.
+    playTone(context, limiter, start, { type: "sine", from: 420, to: 1_180, peak: 0.095, attack: 0.014, duration: 0.38 });
+    playTone(context, limiter, start + 0.13, { type: "triangle", from: 1_520, to: 1_240, peak: 0.07, attack: 0.008, duration: 0.27 });
+  } catch {
+    // Decorative sound must not interrupt the live city briefing.
+  }
+}
+
+function playTone(
+  context: AudioContext,
+  destination: AudioNode,
+  start: number,
+  { type, from, to, peak, attack, duration }: {
+    type: OscillatorType;
+    from: number;
+    to: number;
+    peak: number;
+    attack: number;
+    duration: number;
+  }
+) {
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  oscillator.type = type;
+  oscillator.frequency.setValueAtTime(from, start);
+  oscillator.frequency.exponentialRampToValueAtTime(to, start + duration);
+  gain.gain.setValueAtTime(0.0001, start);
+  gain.gain.exponentialRampToValueAtTime(peak, start + attack);
+  gain.gain.exponentialRampToValueAtTime(0.0001, start + duration);
+  oscillator.connect(gain);
+  gain.connect(destination);
+  oscillator.start(start);
+  oscillator.stop(start + duration + 0.01);
 }
 
 function warningSeverity(warning: PanelWarning) {
@@ -164,6 +272,16 @@ function sameLayout(left: CityPanelLayout, right: CityPanelLayout) {
     && left.connectorsVisible === right.connectorsVisible
     && sameRect(left.battleRect, right.battleRect)
     && sameRect(left.infoRect, right.infoRect);
+}
+
+/**
+ * offsetWidth/offsetHeight describe the element's layout box without CSS
+ * transforms. getBoundingClientRect includes the deploy animation's scale,
+ * which fed animated dimensions back into layout and caused React error #185.
+ */
+function layoutSize(node: HTMLElement | null, fallback: { width: number; height: number }) {
+  if (!node || node.offsetWidth <= 0 || node.offsetHeight <= 0) return fallback;
+  return { width: node.offsetWidth, height: node.offsetHeight };
 }
 
 function sameRect(left: LayoutRect, right: LayoutRect) {

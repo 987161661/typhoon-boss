@@ -37,6 +37,13 @@
   border-left: 1px solid rgb(0 216 255 / 34%);
 }
 
+/* No active typhoon is an operational monitoring state, not a layer-setting
+   state. Reuse the main page's full national signal desk so its alert reel and
+   risk overview own the rail instead of competing with environment toggles. */
+.liveRailStandby {
+  grid-template-rows: minmax(0, 1fr);
+}
+
 .compactHud {
   grid-column: 1;
   grid-row: 1;
@@ -338,6 +345,11 @@
     border-width: 0 0 1px;
   }
 
+  .liveRailStandby {
+    height: min(54dvh, 32rem);
+    max-height: calc(100dvh - 4rem);
+  }
+
   .liveRail > :global(.environment-panel) {
     display: none;
   }
@@ -347,6 +359,10 @@
     right: .7rem;
     left: .7rem;
     width: auto;
+  }
+
+  .hasNationalSideRail:global(.radar-shell[data-view="live"][data-live-standby="true"]) :global(.live-topbar) {
+    top: calc(min(54dvh, 32rem) + .7rem);
   }
 }
 

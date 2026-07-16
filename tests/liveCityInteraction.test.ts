@@ -1,12 +1,67 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildCityReportEngagementPrompt,
+  buildCityReportEngagementReply,
   extractChinaCityMention,
   isHostLiveComment,
   isHostViewerRelationEvent,
   toCityInteractionRequest,
   viewerIdentityKey
 } from "../lib/liveCityInteraction";
+
+test("successful city reports create a viewer-specific engagement intent", () => {
+  const prompt = buildCityReportEngagementPrompt({
+    cityQuery: "伊宁市",
+    viewerName: "小雨",
+    followEvidence: "unknown"
+  }, "伊宁");
+
+  assert.ok(prompt);
+  assert.match(prompt, /<city_report_engagement>/);
+  assert.match(prompt, /@小雨/);
+  assert.match(prompt, /已展开城市：伊宁/);
+  assert.match(prompt, /自然邀请对方关注主播/);
+  assert.match(prompt, /不要复述天气、风力、预警或战报数据/);
+  assert.ok(prompt.length <= 500, "avatar bridge rejects prompts longer than 500 characters");
+});
+
+test("city engagement has a deterministic follow-up line for playback", () => {
+  assert.equal(
+    buildCityReportEngagementReply({
+      cityQuery: "伊犁",
+      viewerName: "小雨",
+      followEvidence: "unknown"
+    }, "伊犁"),
+    "@小雨，伊犁的战报已经展开了。觉得有用就点个关注，之后想看哪个城市，继续 @ 我就行。"
+  );
+  assert.match(
+    buildCityReportEngagementReply({
+      cityQuery: "伊犁",
+      viewerName: null,
+      followEvidence: "observed"
+    }, "伊犁") ?? "",
+    /谢谢关注/
+  );
+});
+
+test("city engagement respects verified follow evidence and requires a real viewer name", () => {
+  const prompt = buildCityReportEngagementPrompt({
+    cityQuery: "上海",
+    viewerName: "@阿海",
+    followEvidence: "observed"
+  }, "上海");
+
+  assert.ok(prompt);
+  assert.match(prompt, /@阿海/);
+  assert.doesNotMatch(prompt, /@@阿海/);
+  assert.match(prompt, /不要再次索取关注/);
+  assert.equal(buildCityReportEngagementPrompt({
+    cityQuery: "上海",
+    viewerName: null,
+    followEvidence: "unknown"
+  }, "上海"), null);
+});
 
 test("city interaction only accepts a bounded Chinese @city mention", () => {
   assert.equal(extractChinaCityMention("请看 @杭州"), "杭州");

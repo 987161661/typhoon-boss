@@ -14,7 +14,9 @@ import { CityPanelGroup } from "./CityPanelGroup";
 import styles from "./LiveCityInteraction.module.css";
 
 const FLASH_DURATION_MS = 1_000;
-const PANEL_DEPLOY_DURATION_MS = 1_020;
+// Battle opens first; the factual deck starts one second later and gets time
+// to complete its calibration sweep before the copy begins typing.
+const PANEL_DEPLOY_DURATION_MS = 3_180;
 const CARD_DURATION_MS = 30_000;
 // City panels are the live interaction stage, not a small HUD widget. Keep a
 // narrow viewport gutter and let the layout resolver avoid the city core;
@@ -48,11 +50,13 @@ export function LiveCityInteraction({
   interaction,
   anchor,
   onAttentionChange,
+  onBriefingReady,
   onComplete
 }: {
   interaction: CityInteractionRequest | null;
   anchor: CityAttentionAnchor | null;
   onAttentionChange: (attention: CityAttention | null) => void;
+  onBriefingReady?: (request: CityInteractionRequest, briefing: CityBriefing) => void;
   onComplete: (id: string) => void;
 }) {
   const [presentation, setPresentation] = useState<Presentation>({ state: "idle" });
@@ -147,6 +151,7 @@ export function LiveCityInteraction({
         if (cancelled) return;
         startAttention({ id: request.id, city: briefing.city.name, longitude: briefing.city.longitude, latitude: briefing.city.latitude });
         const attentionBase = attention ?? { id: request.id, city: briefing.city.name, longitude: briefing.city.longitude, latitude: briefing.city.latitude };
+        onBriefingReady?.(request, briefing);
         setPresentation({ state: "flash", request, briefing });
         onAttentionChange({ ...attentionBase, phase: "flash" });
         const decodeDelay = Math.max(160, FLASH_DURATION_MS - (Date.now() - attentionStartedAt));
@@ -175,7 +180,7 @@ export function LiveCityInteraction({
       if (deployTimer !== null) window.clearTimeout(deployTimer);
       if (closeTimer !== null) window.clearTimeout(closeTimer);
     };
-  }, [cityQuery, interactionId, onAttentionChange, onComplete]);
+  }, [cityQuery, interactionId, onAttentionChange, onBriefingReady, onComplete]);
 
   const briefing = presentation.state === "flash" || presentation.state === "deploy" || presentation.state === "card"
     ? presentation.briefing

@@ -6,27 +6,27 @@
 }
 
 .motionRoot[data-phase="deploy"] [data-role="city-core"] {
-  animation: cityMotionCoreLock 340ms cubic-bezier(0.2, 0.8, 0.24, 1) backwards;
+  animation: cityMotionCoreLock 620ms cubic-bezier(0.2, 0.8, 0.24, 1) backwards;
 }
 
 .motionRoot[data-phase="deploy"] [data-role="battle-link"] {
   transform-origin: right center;
-  animation: cityMotionBattleLink 360ms 150ms cubic-bezier(0.22, 0.8, 0.3, 1) backwards;
+  animation: cityMotionBattleLink 680ms 180ms cubic-bezier(0.22, 0.8, 0.3, 1) backwards;
 }
 
 .motionRoot[data-phase="deploy"] [data-role="info-link"] {
   transform-origin: left center;
-  animation: cityMotionInfoLink 400ms 170ms cubic-bezier(0.22, 0.8, 0.3, 1) backwards;
+  animation: cityMotionInfoLink 720ms 1.18s cubic-bezier(0.22, 0.8, 0.3, 1) backwards;
 }
 
 .motionRoot[data-phase="deploy"] [data-role="battle-panel"] {
   transform-origin: right center;
-  animation: cityMotionBattleImpact 500ms 390ms cubic-bezier(0.16, 0.82, 0.24, 1) backwards;
+  animation: cityMotionBattleImpact 1.16s 760ms cubic-bezier(0.16, 0.82, 0.24, 1) backwards;
 }
 
 .motionRoot[data-phase="deploy"] [data-role="info-panel"] {
   transform-origin: left center;
-  animation: cityMotionInfoAssemble 640ms 440ms cubic-bezier(0.16, 0.82, 0.24, 1) backwards;
+  animation: cityMotionInfoAssemble 1.22s 1.76s cubic-bezier(0.16, 0.82, 0.24, 1) backwards;
 }
 
 .motionRoot [data-role="info-panel"]::after {
@@ -54,7 +54,7 @@
 }
 
 .motionRoot[data-phase="deploy"] [data-role="info-panel"]::after {
-  animation: cityMotionCalibrationSweep 720ms 510ms ease-out backwards;
+  animation: cityMotionCalibrationSweep 1.34s 2.02s ease-out backwards;
 }
 
 /* Only an active, high-grade official feed keeps a low-frequency heartbeat. */

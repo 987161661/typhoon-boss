@@ -170,6 +170,22 @@ export interface TrackSnapshot {
   warnings: string[];
 }
 
+export interface TyphoonLifecycleRecord {
+  id: string;
+  nameZh: string;
+  nameEn: string;
+  aliases: string[];
+  status: "active" | "ceased-numbering";
+  finalStage: StormStage | null;
+  lastObservedAt: string | null;
+  endedAt: string | null;
+  source: string;
+}
+
+export type TyphoonEntityLookup =
+  | { status: "found"; record: TyphoonLifecycleRecord }
+  | { status: "not-found"; query: string };
+
 export async function getTrackSnapshot(): Promise<TrackSnapshot> {
   try {
     const storms = await getCurrentStorms();
@@ -258,6 +274,51 @@ export async function getDexEntries(limit = 100): Promise<DexEntry[]> {
     .slice(0, limit);
 
   return listItems.map(convertDexEntry);
+}
+
+/**
+ * Resolve a named system from the same upstream archive used by the live
+ * radar. This is intentionally separate from the active-track snapshot:
+ * a system that has stopped being numbered must not disappear from answers.
+ */
+export async function findTyphoonLifecycle(query: string): Promise<TyphoonEntityLookup> {
+  const normalizedQuery = normalizeTyphoonName(query);
+  if (!normalizedQuery) return { status: "not-found", query };
+
+  const currentYear = new Date().getFullYear();
+  for (let year = currentYear; year >= 2010; year -= 1) {
+    const items = await getTyphoonList(year);
+    const item = items.find((candidate) => typhoonNameMatches(normalizedQuery, candidate));
+    if (!item) continue;
+
+    const detail = await getTyphoonInfo(item.tfid);
+    return {
+      status: "found",
+      record: buildTyphoonLifecycleRecord(detail ?? item)
+    };
+  }
+
+  return { status: "not-found", query };
+}
+
+export function buildTyphoonLifecycleRecord(info: ZjTyphoonInfo | ZjTyphoonListItem): TyphoonLifecycleRecord {
+  const points = "points" in info ? (info.points ?? []).filter(isUsablePoint) : [];
+  const latest = points.at(-1);
+  const nameZh = info.name || `编号 ${info.tfid}`;
+  const nameEn = info.enname || "";
+  return {
+    id: info.tfid,
+    nameZh,
+    nameEn,
+    aliases: [...new Set([nameZh, nameEn].filter(Boolean))],
+    status: info.isactive === "1" ? "active" : "ceased-numbering",
+    // The archive gives us the last observed classification, not a guessed
+    // post-analysis. Keep that boundary explicit for downstream narration.
+    finalStage: latest ? normalizeStage(latest.strong) : null,
+    lastObservedAt: latest ? (toBeijingIso(latest.time) ?? latest.time) : null,
+    endedAt: info.endtime ? (toBeijingIso(info.endtime) ?? info.endtime) : null,
+    source: DATA_SOURCE
+  };
 }
 
 export async function getDexEntry(id: string): Promise<DexEntry | null> {
@@ -707,6 +768,20 @@ function latestWindRadiusReport(points: ZjPoint[], field: "radius7" | "radius10"
     };
   }
   return null;
+}
+
+function normalizeTyphoonName(value: string): string {
+  return value
+    .trim()
+    .toLocaleLowerCase("en-US")
+    .replace(/[\s\-_.()（）,，。！？?]/g, "");
+}
+
+function typhoonNameMatches(normalizedQuery: string, item: ZjTyphoonListItem): boolean {
+  return [item.name, item.enname]
+    .map((name) => normalizeTyphoonName(name || ""))
+    .filter(Boolean)
+    .some((name) => normalizedQuery.includes(name) || name.includes(normalizedQuery));
 }
 
 function buildSkills(

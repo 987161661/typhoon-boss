@@ -97,6 +97,7 @@ export interface CityPanelsModel {
   };
   info: {
     warning: PanelWarning;
+    relatedWarnings: PanelWarning[];
     currentMetrics: PanelMetric[];
     nowcastMetrics: PanelMetric[];
     trendMetrics: PanelMetric[];
@@ -151,6 +152,7 @@ const ARCHIVE_TEASERS: Record<ReturnType<typeof getPrimaryKind>, [string, string
 
 export function buildCityPanelsModel({ briefing, audience, archive }: BuildCityPanelsModelInput): CityPanelsModel {
   const warning = buildWarning(briefing);
+  const relatedWarnings = buildRelatedWarnings(briefing, warning);
   const primaryKind = getPrimaryKind(briefing);
   return {
     shared: {
@@ -172,6 +174,7 @@ export function buildCityPanelsModel({ briefing, audience, archive }: BuildCityP
     },
     info: {
       warning,
+      relatedWarnings,
       currentMetrics: buildCurrentMetrics(briefing),
       nowcastMetrics: buildNowcastMetrics(briefing),
       trendMetrics: buildTrendMetrics(briefing),
@@ -180,6 +183,46 @@ export function buildCityPanelsModel({ briefing, audience, archive }: BuildCityP
       limitations: buildLimitations(briefing, warning)
     }
   };
+}
+
+function buildRelatedWarnings(briefing: CityBriefing, primary: PanelWarning): PanelWarning[] {
+  if (primary.status !== "active") return [];
+  const seen = new Set([primary.title.trim()]);
+  return briefing.officialWarnings
+    .map(panelWarningFromLegacy)
+    .filter((warning) => {
+      const key = warning.title.trim();
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .sort((left, right) => warningPriority(right.level) - warningPriority(left.level)
+      || (Date.parse(right.issuedAt ?? "") || 0) - (Date.parse(left.issuedAt ?? "") || 0));
+}
+
+function panelWarningFromLegacy(warning: CityBriefing["officialWarnings"][number]): PanelWarning {
+  const description = distinctCopy(warning.description, warning.title);
+  return {
+    status: "active",
+    title: warning.title,
+    level: warning.severity,
+    issuer: warning.senderName,
+    issuedAt: warning.issuedAt,
+    effectiveAt: warning.effectiveAt,
+    expiresAt: warning.expiresAt,
+    description,
+    instruction: distinctCopy(warning.instruction, warning.title, description),
+    evidence: "official"
+  };
+}
+
+function warningPriority(level: string | null) {
+  const normalized = level?.toLowerCase() ?? "";
+  if (normalized.includes("red") || normalized.includes("红")) return 4;
+  if (normalized.includes("orange") || normalized.includes("橙")) return 3;
+  if (normalized.includes("yellow") || normalized.includes("黄")) return 2;
+  if (normalized.includes("blue") || normalized.includes("蓝")) return 1;
+  return 0;
 }
 
 function buildCityLabel(briefing: CityBriefing) {
@@ -213,19 +256,7 @@ function buildWarning(briefing: CityBriefing): PanelWarning {
   }
   const legacyWarning = briefing.officialWarnings[0];
   if (legacyWarning) {
-    const description = distinctCopy(legacyWarning.description, legacyWarning.title);
-    return {
-      status: "active",
-      title: legacyWarning.title,
-      level: legacyWarning.severity,
-      issuer: legacyWarning.senderName,
-      issuedAt: legacyWarning.issuedAt,
-      effectiveAt: legacyWarning.effectiveAt,
-      expiresAt: legacyWarning.expiresAt,
-      description,
-      instruction: distinctCopy(legacyWarning.instruction, legacyWarning.title, description),
-      evidence: "official"
-    };
+    return panelWarningFromLegacy(legacyWarning);
   }
   const warningSource = briefing.sources.find((source) => source.id === "qweather-warning");
   if (warningSource?.status === "available") {

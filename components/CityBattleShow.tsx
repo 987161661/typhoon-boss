@@ -105,12 +105,13 @@ export function CityBattleShow({
           </div>
           <TypewriterText
             text={show.summary}
-            active={phase === "card"}
-            speed={42}
+            active={phase === "card" || prefersReducedMotion}
+            speed={78}
             sound={typingSound}
             reducedMotion={prefersReducedMotion}
             role="battle-summary"
           />
+          {show.rankIntel.length > 0 && <CityRankIntel intel={show.rankIntel} />}
         </div>
       </div>
 
@@ -134,7 +135,7 @@ export function CityBattleShow({
 
       <ArchiveSlot
         archive={show.archive}
-        active={phase === "card"}
+        active={phase === "card" || prefersReducedMotion}
         sound={typingSound}
         reducedMotion={prefersReducedMotion}
       />
@@ -150,6 +151,15 @@ export function CityBattleShow({
 export function ThreatDial({ score }: { score: number }) {
   return <div className={styles.threatDial} data-role="threat-dial" style={{ "--battle-threat": `${score}%` } as CSSProperties}>
     <i /><span>热压指数</span><b>{Math.round(score)}</b><small>THREAT</small>
+  </div>;
+}
+
+function CityRankIntel({ intel }: { intel: ReturnType<typeof buildCityBattleShowModel>["rankIntel"] }) {
+  return <div className={styles.rankIntel} data-role="battle-rank-intel" aria-label="城市气象全国排名">
+    {intel.map((item) => <article key={item.id} data-tier={item.tier}>
+      <div><span>{item.label}</span><strong>全国 #{item.position}</strong><small>{item.value} · {item.scope}</small></div>
+      <p>{item.adaptation}</p>
+    </article>)}
   </div>;
 }
 
@@ -262,7 +272,7 @@ function ArchiveSlot({
     {archive.status === "unlocked" && archive.fragment && <TypewriterText
       text={archive.fragment}
       active={active}
-      speed={84}
+      speed={112}
       sound={sound}
       reducedMotion={reducedMotion}
       role="archive-fragment"
@@ -293,14 +303,17 @@ function playTypewriterTick(contextRef: { current: AudioContext | null }) {
     if (context.state === "suspended") void context.resume();
     const oscillator = context.createOscillator();
     const gain = context.createGain();
-    oscillator.type = "square";
-    oscillator.frequency.value = 1_100;
-    gain.gain.setValueAtTime(0.012, context.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.022);
+    const start = context.currentTime;
+    oscillator.type = "triangle";
+    oscillator.frequency.setValueAtTime(1_340, start);
+    oscillator.frequency.exponentialRampToValueAtTime(980, start + 0.034);
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(0.042, start + 0.004);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.038);
     oscillator.connect(gain);
     gain.connect(context.destination);
-    oscillator.start();
-    oscillator.stop(context.currentTime + 0.024);
+    oscillator.start(start);
+    oscillator.stop(start + 0.04);
   } catch {
     // Audio is ornamental. Browser autoplay policy must never block the copy.
   }

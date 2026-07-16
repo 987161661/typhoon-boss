@@ -40,6 +40,7 @@ test("unknown access never consumes a fragment", async () => {
     assert.equal(framework.status, "canon");
     assert.equal(framework.title, "观测回声档案");
     assert.ok(framework.allowedMotifs.includes("倒置校验码"));
+    assert.ok(framework.generationCanon.some((fact) => fact.includes("档案的错页")));
     const result = await claimWorldFragment({
       requestId: "request-unknown",
       cityKey: "410100",

@@ -4,7 +4,10 @@ import {
   canEnterCitySituation,
   createAdministrativeHierarchy,
   parseAdministrativeHierarchyCsv,
+  resolveAdministrativeCityIdentity,
+  resolveAdministrativeCityName,
   resolveAdministrativeLocation,
+  resolveAdministrativeLocationName,
   type AdministrativeHierarchyRow
 } from "../lib/administrativeMapping";
 
@@ -45,6 +48,78 @@ test("Wusheng resolves through its exact row and unique Adm2 root in the AD-code
   assert.equal(resolution.cityAttribution, "deterministic");
   assert.equal(canEnterCitySituation(resolution), true);
   assert.notEqual(resolution.cityCode, "1012708");
+});
+
+test("a county-level city mention resolves through the authoritative location row", () => {
+  const countyHierarchy = createAdministrativeHierarchy([
+    { locationId: "101281901", locationName: "揭阳", provinceName: "广东省", cityName: "揭阳市", adCode: "445200" },
+    { locationId: "101281903", locationName: "普宁", provinceName: "广东省", cityName: "揭阳市", adCode: "445281" }
+  ], { source: "fixture", fetchedAt: "2026-07-15T00:00:00.000Z" });
+  const resolution = resolveAdministrativeLocationName("普宁市", "广东", countyHierarchy);
+  assert.equal(resolution.locationId, "101281903");
+  assert.equal(resolution.provinceCode, "440000");
+  assert.equal(resolution.cityCode, "445200");
+  assert.equal(resolution.countyCode, "445281");
+  assert.equal(resolution.cityAttribution, "deterministic");
+});
+
+test("an explicit city suffix distinguishes a county-level city from its same-base county", () => {
+  const countyHierarchy = createAdministrativeHierarchy([
+    { locationId: "101131000", locationName: "伊犁", provinceName: "新疆维吾尔自治区", cityName: "伊犁哈萨克自治州", adCode: "654000" },
+    { locationId: "101131001", locationName: "伊宁", provinceName: "新疆维吾尔自治区", cityName: "伊犁哈萨克自治州", adCode: "654002" },
+    { locationId: "101131004", locationName: "伊宁县", provinceName: "新疆维吾尔自治区", cityName: "伊犁哈萨克自治州", adCode: "654021" }
+  ], { source: "fixture", fetchedAt: "2026-07-16T00:00:00.000Z" });
+
+  const city = resolveAdministrativeLocationName("伊宁市", null, countyHierarchy);
+  const county = resolveAdministrativeLocationName("伊宁县", null, countyHierarchy);
+
+  assert.equal(city.locationId, "101131001");
+  assert.equal(city.countyCode, "654002");
+  assert.equal(city.cityAttribution, "deterministic");
+  assert.equal(county.locationId, "101131004");
+  assert.equal(county.countyCode, "654021");
+  assert.equal(county.cityAttribution, "deterministic");
+});
+
+test("a duplicate county-level place remains ambiguous without a province qualifier", () => {
+  const duplicateHierarchy = createAdministrativeHierarchy([
+    { locationId: "root-a", locationName: "甲城", provinceName: "甲省", cityName: "甲城市", adCode: "111100" },
+    { locationId: "place-a", locationName: "同名", provinceName: "甲省", cityName: "甲城市", adCode: "111122" },
+    { locationId: "root-b", locationName: "乙城", provinceName: "乙省", cityName: "乙城市", adCode: "221100" },
+    { locationId: "place-b", locationName: "同名", provinceName: "乙省", cityName: "乙城市", adCode: "221122" }
+  ], { source: "fixture", fetchedAt: "2026-07-15T00:00:00.000Z" });
+  assert.equal(
+    resolveAdministrativeLocationName("同名", null, duplicateHierarchy).cityAttribution,
+    "ambiguous"
+  );
+  assert.equal(
+    resolveAdministrativeLocationName("同名", "甲省", duplicateHierarchy).locationId,
+    "place-a"
+  );
+});
+
+test("a uniquely named city root recovers deterministic attribution when a weather provider omits its location id", () => {
+  const resolution = resolveAdministrativeCityName(rows[0].cityName, hierarchy);
+  assert.equal(resolution.cityAttribution, "deterministic");
+  assert.equal(resolution.cityCode, "511600");
+  assert.equal(resolution.cityLocationId, "101270801");
+});
+
+test("a same-named city root remains ambiguous instead of guessing across provinces", () => {
+  const duplicate = createAdministrativeHierarchy([
+    ...rows,
+    { locationId: "101990100", locationName: "duplicate", provinceName: "other", cityName: rows[0].cityName, adCode: "991600" }
+  ], { source: "fixture", fetchedAt: "2026-07-15T00:00:00.000Z" });
+  const resolution = resolveAdministrativeCityName(rows[0].cityName, duplicate);
+  assert.equal(resolution.cityAttribution, "ambiguous");
+  assert.equal(resolution.cityCode, null);
+});
+
+test("a mismatched provider location id cannot override the independently resolved city name", () => {
+  const resolution = resolveAdministrativeCityIdentity(rows[0].cityName, "101010100", hierarchy);
+  assert.equal(resolution.cityAttribution, "deterministic");
+  assert.equal(resolution.cityCode, "511600");
+  assert.equal(resolution.cityLocationId, "101270801");
 });
 
 test("four municipalities use official six-digit administrative roots", () => {

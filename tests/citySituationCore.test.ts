@@ -77,6 +77,48 @@ test("ambiguous or differently attributed warnings never enter the city card", (
   assert.deepEqual(result.officialWarnings, []);
 });
 
+test("an exact county-level target rejects a sibling county but still inherits city-wide warnings", () => {
+  const sibling = event({
+    id: "sibling",
+    geography: {
+      ...event().geography,
+      locationIds: ["101131004"],
+      cityCode: "654000",
+      countyCode: "654021",
+      names: ["伊宁县"]
+    }
+  });
+  const exact = event({
+    id: "exact",
+    geography: {
+      ...event().geography,
+      locationIds: ["101131001"],
+      cityCode: "654000",
+      countyCode: "654002",
+      names: ["伊宁市"]
+    }
+  });
+  const cityWide = event({
+    id: "city-wide",
+    geography: {
+      ...event().geography,
+      scope: "city",
+      locationIds: ["101131000"],
+      cityCode: "654000",
+      countyCode: null,
+      names: ["伊犁哈萨克自治州"]
+    }
+  });
+
+  const result = buildCitySituation(
+    snapshot([sibling, exact, cityWide]),
+    { name: "伊宁", cityCode: "654000", locationIds: ["101131001"] },
+    []
+  );
+
+  assert.deepEqual(result.officialWarnings.map((warning) => warning.id).sort(), ["city-wide", "exact"]);
+});
+
 test("ordinary weather is compressed and never claims safety", () => {
   const result = buildCitySituation(snapshot([]), { name: "杭州", cityCode: "330100" }, [], "24°C，微风");
   assert.equal(result.mode, "ordinary");

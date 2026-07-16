@@ -302,6 +302,28 @@ export interface GfsWaveLayerPayload extends EnvironmentLayerMeta {
   isStale?: boolean;
 }
 
+export interface MarinePoint {
+  lon: number;
+  lat: number;
+  currentU: number;
+  currentV: number;
+  currentSpeed: number;
+  seaSurfaceTemperature: number | null;
+  currentAvailable: boolean;
+}
+
+export interface MarineLayerPayload extends EnvironmentLayerMeta {
+  model: string;
+  unit: "m/s + °C";
+  points: MarinePoint[];
+  nativeResolutionDegrees: number;
+  displayResolutionDegrees: number;
+  updatedAt: string;
+  sampling: "viewport";
+  coverage: { west: number; south: number; east: number; north: number };
+  isStale?: boolean;
+}
+
 export interface EcmwfTrackPoint {
   stepHours: number;
   time: string;

@@ -25,6 +25,7 @@ test("battle remains a staged broadcast show instead of a static summary card", 
   assert.match(source, /narrative\.summary/, "the recovered battle show must consume the briefing narrative, not replace it with a fixed summary");
   assert.match(source, /\bTypewriter(?:Text)?\b/, "the main verdict must retain its typewriter presentation");
   assert.match(source, /\bTelemetryDeck\b/, "the original tactical telemetry deck must remain in the show");
+  assert.match(source, /\bCityRankIntel\b/, "ranked city weather needs a dedicated high-visibility battle treatment");
   assert.match(source, /\bCitySignalBoard\b/, "the anomaly-led city signal board must remain in the show");
   assert.match(source, /(?:narrative|battle)\.actions/, "the action beat must remain visible after the signal board");
   assert.match(source, /(?:ArchiveSlot|ArchiveFragment|WorldFragment)/, "the archive reward must close the show instead of replacing it");
@@ -35,6 +36,23 @@ test("typewriter keeps punctuation pacing and reduced motion can reveal immediat
   assert.equal(base, 42);
   assert.ok(revealDelayFor("，", 42) > base, "a clause boundary needs a longer pause");
   assert.ok(revealDelayFor("。", 42) >= base * 5, "a sentence boundary needs the original dramatic pause");
+});
+
+test("dual panel show uses a one-second stagger with a slower complete reveal", async () => {
+  const group = await read("components/CityPanelGroup.tsx");
+  const motion = await read("components/CityPanelMotion.module.css");
+  const controller = await read("components/LiveCityInteraction.tsx");
+
+  assert.match(group, /playPanelOpenSound\(contextRef, "battle"\), 760/);
+  assert.match(group, /playPanelOpenSound\(contextRef, "info"\), 1_760/);
+  assert.match(group, /typingSound=\{!prefersReducedMotion\}/);
+  assert.match(group, /type: "sine", from: 118, to: 46, peak: 0\.14/,
+    "battle opening needs a clearly audible impact layer");
+  assert.match(group, /type: "triangle", from: 1_520, to: 1_240, peak: 0\.07/,
+    "information opening needs a distinct audible confirmation layer");
+  assert.match(motion, /cityMotionBattleImpact 1\.16s 760ms/);
+  assert.match(motion, /cityMotionInfoAssemble 1\.22s 1\.76s/);
+  assert.match(controller, /PANEL_DEPLOY_DURATION_MS = 3_180/);
 });
 
 test("battle keeps the original wasteland frame language and decode beat", async () => {
@@ -106,6 +124,7 @@ test("battle view never reads official warning body fields", async () => {
       `information panel must render official warning ${field}`);
   }
   assert.match(battle, /data-role="battle-panel"[\s\S]*?data-component="city-battle-show"/);
+  assert.match(battle, /data-role="battle-rank-intel"/);
   assert.match(info, /data-role="official-warning"/);
   assert.match(info, /data-role="warning-description"/);
   assert.match(info, /data-role="warning-instruction"/);

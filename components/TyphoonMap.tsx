@@ -41,6 +41,8 @@ import type {
   GfsScalarLayerId,
   GfsScalarLayerPayload,
   GfsWaveLayerPayload,
+  MarinePoint,
+  MarineLayerPayload,
   EcmwfStormTrack,
   EcmwfTrackPayload,
   OfficialAlertPayload,
@@ -208,7 +210,7 @@ type RadarTheme = "night-radar" | "archive-command";
 export type RadarView = "standard" | "live";
 type WindRenderMode = "gfs" | "streamlines";
 
-type EnvironmentLayerKey = "satellite" | "impact" | "wind";
+type EnvironmentLayerKey = "satellite" | "impact" | "wind" | "marineCurrent" | "seaSurfaceTemperature";
 
 type EnvironmentLayerToggles = Record<EnvironmentLayerKey, boolean>;
 
@@ -230,7 +232,9 @@ interface DefenseResponse {
 const DEFAULT_ENVIRONMENT_LAYERS: EnvironmentLayerToggles = {
   satellite: true,
   impact: true,
-  wind: true
+  wind: true,
+  marineCurrent: false,
+  seaSurfaceTemperature: false
 };
 
 export function TyphoonMap({
@@ -277,7 +281,6 @@ export function TyphoonMap({
   const [cwaRadarVisible, setCwaRadarVisible] = useState(false);
   const [nationalWarningsVisible, setNationalWarningsVisible] = useState(true);
   const [nationalRadarVisible, setNationalRadarVisible] = useState(false);
-  const [liveEnvironmentCollapsed, setLiveEnvironmentCollapsed] = useState(false);
   const [impactArea, setImpactArea] = useState<ImpactAreaPayload | null>(null);
   const [watchRegions, setWatchRegions] = useState<ProvinceAlertPoint[]>([]);
   useEffect(() => {
@@ -296,7 +299,9 @@ export function TyphoonMap({
         if (layers && typeof layers === "object") setEnvironmentLayers({
           satellite: layers.satellite !== false,
           impact: layers.impact !== false,
-          wind: mapSettings.performanceMode === "reduced" ? false : layers.wind !== false
+          wind: mapSettings.performanceMode === "reduced" ? false : layers.wind !== false,
+          marineCurrent: false,
+          seaSurfaceTemperature: false
         });
       })
       .catch(() => undefined);
@@ -305,6 +310,11 @@ export function TyphoonMap({
   const windColorCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const gfsScalarCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const gfsWaveCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const marineCurrentCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const marineCurrentInteractionCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const seaSurfaceTemperatureCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const marineCurrentRef = useRef<WindFieldPayload | null>(null);
+  const emptyWindFieldRef = useRef<WindFieldPayload | null>(null);
   const ecmwfTrackCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const observationCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const windCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -385,6 +395,39 @@ export function TyphoonMap({
     enabled: gfsWaveVisible,
     boundsForMap: viewportBoundsForMap
   });
+  const viewportMarineLayer = useViewportGridLayer<MarineLayerPayload>({
+    map: mapReady ? mapRef.current : null,
+    endpoint: "/api/environment/marine",
+    enabled: mapReady && (environmentLayers.marineCurrent || environmentLayers.seaSurfaceTemperature),
+    boundsForMap: viewportBoundsForMap,
+    refreshIntervalMs: 30 * 60 * 1000
+  });
+  const marineCurrentField = useMemo<WindFieldPayload | null>(() => {
+    if (viewportMarineLayer?.status !== "available") return null;
+    const points = viewportMarineLayer.points.map((point) => ({
+      lon: point.lon,
+      lat: point.lat,
+      u: point.currentU,
+      v: point.currentV,
+      speed: Math.hypot(point.currentU, point.currentV),
+      direction: (Math.atan2(point.currentU, point.currentV) * 180) / Math.PI
+    }));
+    return {
+      source: viewportMarineLayer.source,
+      updatedAt: viewportMarineLayer.updatedAt,
+      status: "available",
+      attribution: viewportMarineLayer.attribution,
+      model: viewportMarineLayer.model,
+      unit: "m/s",
+      points,
+      nativeResolutionDegrees: viewportMarineLayer.nativeResolutionDegrees,
+      displayResolutionDegrees: viewportMarineLayer.displayResolutionDegrees,
+      sampling: "viewport",
+      coverage: viewportMarineLayer.coverage,
+      isStale: viewportMarineLayer.isStale
+    };
+  }, [viewportMarineLayer]);
+  marineCurrentRef.current = marineCurrentField;
   const cwaRadarLayer = usePollingEnvironmentLayer<RadarMosaicLayerPayload>({
     url: "/api/environment/cwa-radar",
     intervalMs: 5 * 60 * 1000,
@@ -856,6 +899,31 @@ export function TyphoonMap({
 
   useEffect(() => {
     const map = mapRef.current;
+    const canvas = marineCurrentCanvasRef.current;
+    if (!map || !canvas || !mapReady) return;
+    return startWindFieldRenderer(
+      map,
+      canvas,
+      marineCurrentInteractionCanvasRef.current,
+      marineCurrentRef,
+      emptyWindFieldRef,
+      cycloneCoreRef,
+      environmentLayers.marineCurrent,
+      "streamlines",
+      isLiveView,
+      "marine"
+    );
+  }, [environmentLayers.marineCurrent, isLiveView, mapReady, theme, viewportMarineLayer]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    const canvas = seaSurfaceTemperatureCanvasRef.current;
+    if (!map || !canvas || !mapReady) return;
+    return startMarineSstRenderer(map, canvas, viewportMarineLayer, environmentLayers.seaSurfaceTemperature);
+  }, [environmentLayers.seaSurfaceTemperature, mapReady, theme, viewportMarineLayer]);
+
+  useEffect(() => {
+    const map = mapRef.current;
     const canvas = ecmwfTrackCanvasRef.current;
     if (!map || !canvas || !mapReady) return;
     return startEcmwfTrackRenderer(map, canvas, matchedEcmwfTracks, ecmwfTracksVisible);
@@ -903,13 +971,15 @@ export function TyphoonMap({
       data-live-deck={isLiveView ? liveDeck : undefined}
       data-live-standby={showLiveStandbyEnvironment ? "true" : undefined}
       data-national-side-rail={isLiveView ? "true" : undefined}
-      data-live-rail-collapsed={isLiveView && showLiveStandbyEnvironment && liveEnvironmentCollapsed ? "true" : undefined}
     >
       {!isLiveView ? <div className="boot-scan" /> : null}
       <section className="map-stage" aria-label="气象 Boss 雷达全国气象地图">
         {mapFailed ? <FallbackMap storm={storm} /> : <div className="map-canvas" ref={mapNode} />}
         {!mapFailed && gfsScalarLayer ? <canvas className="gfs-scalar-canvas" ref={gfsScalarCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed && gfsWaveVisible ? <canvas className="gfs-wave-canvas" ref={gfsWaveCanvasRef} aria-hidden="true" /> : null}
+        {!mapFailed && environmentLayers.marineCurrent ? <canvas className="marine-current-canvas" ref={marineCurrentCanvasRef} aria-hidden="true" /> : null}
+        {!mapFailed && environmentLayers.marineCurrent ? <canvas className="marine-current-interaction-canvas" ref={marineCurrentInteractionCanvasRef} aria-hidden="true" /> : null}
+        {!mapFailed && environmentLayers.seaSurfaceTemperature ? <canvas className="sea-surface-temperature-canvas" ref={seaSurfaceTemperatureCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed && ecmwfTracksVisible ? <canvas className="ecmwf-track-canvas" ref={ecmwfTrackCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed && observationsVisible ? <canvas className="regional-observation-canvas" ref={observationCanvasRef} aria-hidden="true" /> : null}
         {!mapFailed && environmentLayers.wind ? <canvas className="wind-color-canvas" ref={windColorCanvasRef} aria-hidden="true" /> : null}
@@ -1017,6 +1087,7 @@ export function TyphoonMap({
                 cwaRadarVisible={cwaRadarVisible}
                 gfsWave={viewportGfsWave}
                 gfsWaveVisible={gfsWaveVisible}
+                marineLayer={viewportMarineLayer}
                 ecmwfTracks={ecmwfTrackLayer}
                 ecmwfTracksVisible={ecmwfTracksVisible}
                 ecmwfMemberCount={matchedEcmwfTracks.ensemble?.members.length ?? 0}
@@ -1051,6 +1122,7 @@ export function TyphoonMap({
                 cwaRadarVisible={cwaRadarVisible}
                 gfsWave={viewportGfsWave}
                 gfsWaveVisible={gfsWaveVisible}
+                marineLayer={viewportMarineLayer}
                 ecmwfTracks={ecmwfTrackLayer}
                 ecmwfTracksVisible={ecmwfTracksVisible}
                 ecmwfMemberCount={matchedEcmwfTracks.ensemble?.members.length ?? 0}
@@ -1077,54 +1149,26 @@ export function TyphoonMap({
       </section>
 
       {isLiveView ? (
-        <div className={nationalRailStyles.liveRail} aria-label="气象 Boss 雷达直播证据侧栏">
+        <div
+          className={`${nationalRailStyles.liveRail} ${showLiveStandbyEnvironment ? nationalRailStyles.liveRailStandby : ""}`.trim()}
+          aria-label="气象 Boss 雷达直播证据侧栏"
+        >
           <NationalSituationSurface
             state={nationalSituation}
-            variant="compact"
-            className={nationalRailStyles.compactHud}
+            variant={showLiveStandbyEnvironment ? "full" : "compact"}
+            className={showLiveStandbyEnvironment ? nationalRailStyles.standardHud : nationalRailStyles.compactHud}
+            liveStandby={showLiveStandbyEnvironment}
           />
-          {showLiveStandbyEnvironment ? (
-            <EnvironmentLayerPanel
-              className={nationalRailStyles.environmentInRail}
-              collapsible
-              collapsed={liveEnvironmentCollapsed}
-              onCollapsedChange={() => setLiveEnvironmentCollapsed((current) => !current)}
-              layers={environmentLayers}
-              satellite={satelliteLayer}
-              windField={activeWindField}
-              detailWindField={compatibleCoreWindField}
-              impactArea={impactArea}
-              officialWindRadiusFeatureCount={officialWindRadiusFeatureCount}
-              gfsScalarLayer={gfsScalarLayer}
-              gfsScalarPayload={viewportGfsLayer}
-              cwaRadar={cwaRadarLayer}
-              cwaRadarVisible={cwaRadarVisible}
-              gfsWave={viewportGfsWave}
-              gfsWaveVisible={gfsWaveVisible}
-              ecmwfTracks={ecmwfTrackLayer}
-              ecmwfTracksVisible={ecmwfTracksVisible}
-              ecmwfMemberCount={matchedEcmwfTracks.ensemble?.members.length ?? 0}
-              observations={regionalObservations}
-              observationsVisible={observationsVisible}
-              windRenderMode={windRenderMode}
-              onToggle={toggleEnvironmentLayer}
-              onGfsScalarLayerChange={setGfsScalarLayer}
-              onCwaRadarToggle={() => setCwaRadarVisible((current) => !current)}
-              onGfsWaveToggle={() => setGfsWaveVisible((current) => !current)}
-              onEcmwfTracksToggle={() => setEcmwfTracksVisible((current) => !current)}
-              onObservationsToggle={() => setObservationsVisible((current) => !current)}
-              onWindRenderModeChange={setWindRenderMode}
-            />
-          ) : liveDeck === "briefing" ? (
+          {!showLiveStandbyEnvironment && liveDeck === "briefing" ? (
             <LiveAudiencePanel
               model={liveModel}
               storm={storm}
               satelliteLayer={satelliteLayer}
               refreshSequence={refreshSequence}
             />
-          ) : (
+          ) : !showLiveStandbyEnvironment ? (
             <LiveIntelPanel model={liveModel} storm={storm} satelliteLayer={satelliteLayer} />
-          )}
+          ) : null}
         </div>
       ) : nationalMapState.mode === "national" ? (
         <div className={nationalRailStyles.standardRail} aria-label="全国气象态势侧栏">
@@ -1617,12 +1661,14 @@ function NationalSituationSurface({
   state,
   variant,
   className,
+  liveStandby = false,
   onSelectEvent,
   onOpenCitySituation
 }: {
   state: NationalSituationState;
   variant: "full" | "compact";
   className?: string;
+  liveStandby?: boolean;
   onSelectEvent?: (eventId: string) => void;
   onOpenCitySituation?: () => void;
 }) {
@@ -1631,6 +1677,7 @@ function NationalSituationSurface({
       <FutureWeatherArchivePanel
         snapshot={state.snapshot}
         className={className}
+        displayMode={liveStandby ? "live-standby" : "default"}
         onSelectEvent={onSelectEvent}
         onOpenCitySituation={onOpenCitySituation}
       />
@@ -1656,6 +1703,7 @@ function NationalSituationSurface({
           <FutureWeatherArchivePanel
             snapshot={state.snapshot}
             className={nationalRailStyles.standardHud}
+            displayMode={liveStandby ? "live-standby" : "default"}
             onSelectEvent={onSelectEvent}
             onOpenCitySituation={onOpenCitySituation}
           />
@@ -2151,6 +2199,7 @@ function EnvironmentLayerPanel({
   cwaRadarVisible,
   gfsWave,
   gfsWaveVisible,
+  marineLayer,
   ecmwfTracks,
   ecmwfTracksVisible,
   ecmwfMemberCount,
@@ -2181,6 +2230,7 @@ function EnvironmentLayerPanel({
   cwaRadarVisible: boolean;
   gfsWave: GfsWaveLayerPayload | null;
   gfsWaveVisible: boolean;
+  marineLayer: MarineLayerPayload | null;
   ecmwfTracks: EcmwfTrackPayload | null;
   ecmwfTracksVisible: boolean;
   ecmwfMemberCount: number;
@@ -2268,7 +2318,7 @@ function EnvironmentLayerPanel({
       </div>
       <div className="environment-panel-content" aria-hidden={collapsed}>
       <div className="environment-panel-content-inner">
-      <small className="section-subtitle">卫星云图 / 官方风圈 / NCEP GFS</small>
+      <small className="section-subtitle">卫星云图 / 大气模式 / 海洋环境</small>
       <div className="environment-layer-list">
         {rows.map((row) => {
           const Icon = row.icon;
@@ -2333,6 +2383,24 @@ function EnvironmentLayerPanel({
         <small>{gfsWave
           ? `${gfsWave.points.length} 格点 · ${gfsWave.cycle} · 有效波高 m`
           : "按当前视口请求；箭头表示主波向。"}</small>
+      </div>
+      <div className="marine-current-control" aria-label="全球洋流粒子图层">
+        <span>海洋动力</span>
+        <button className={layers.marineCurrent ? "active" : ""} onClick={() => onToggle("marineCurrent")} type="button" aria-pressed={layers.marineCurrent}>
+          {layers.marineCurrent ? "关闭全球洋流粒子" : "全球洋流粒子"}
+        </button>
+        <small>{marineLayer?.status === "available"
+          ? `${marineLayer.points.length} 格点 · ${marineLayer.model}${marineLayer.isStale ? " · 延迟保护" : ""}`
+          : marineLayer?.reason ?? "按当前视口请求；粒子表示表层洋流方向。"}</small>
+      </div>
+      <div className="marine-sst-control" aria-label="海表温度分布图层">
+        <span>海温分布</span>
+        <button className={layers.seaSurfaceTemperature ? "active" : ""} onClick={() => onToggle("seaSurfaceTemperature")} type="button" aria-pressed={layers.seaSurfaceTemperature}>
+          {layers.seaSurfaceTemperature ? "关闭海表温度" : "海表温度分布"}
+        </button>
+        <small>{marineLayer?.status === "available"
+          ? `${marineLayer.points.length} 格点 · °C${marineLayer.isStale ? " · 延迟保护" : ""}`
+          : marineLayer?.reason ?? "按当前视口请求；颜色表示海表温度。"}</small>
       </div>
       <div className="ecmwf-track-control" aria-label="ECMWF 集合路径图层">
         <span>补充路径资料</span>
@@ -3311,7 +3379,8 @@ function startWindFieldRenderer(
   cycloneCoreRef: MutableRefObject<CycloneCoreAnalysis | null>,
   visible: boolean,
   renderMode: WindRenderMode,
-  livePerformanceMode: boolean
+  livePerformanceMode: boolean,
+  flowKind: "wind" | "marine" = "wind"
 ) {
   const context = canvas.getContext("2d", { alpha: true, desynchronized: true });
   if (!context) return undefined;
@@ -3362,16 +3431,19 @@ function startWindFieldRenderer(
   let policy: WindFlowPolicy;
   const flowSession = ++windFlowRendererSequence;
   const fadeDurationSeconds = 0.18;
+  const isMarineFlow = flowKind === "marine";
+  const minimumVectorSpeed = isMarineFlow ? 0.015 : 0.6;
+  const calmVectorSpeed = isMarineFlow ? 0.025 : 1.1;
 
   const warmStartParticle = (particle: WindParticle, projectImmediately: boolean) => {
     if (points.length === 0) return particle;
     const sample = { u: 0, v: 0 };
     if (!sampleCompositeWindVector(vectorIndex, particle.lon, particle.lat, sample)) return particle;
     const initialSpeed = Math.hypot(sample.u, sample.v);
-    if (initialSpeed < 0.6) return particle;
+    if (initialSpeed < minimumVectorSpeed) return particle;
     const metresPerPixel = 156_543.03392 * Math.max(0.2, Math.cos(degToRad(particle.lat))) / 2 ** map.getZoom();
     const phase = 0.78 + (stableWindHash(`${particle.id}:warm`) / 0x1_0000_0000) * 0.32;
-    const strengthScale = 0.35 + smoothStep(1.1, 5, initialSpeed) * 0.65;
+    const strengthScale = 0.35 + smoothStep(isMarineFlow ? 0.04 : 1.1, isMarineFlow ? 0.45 : 5, initialSpeed) * 0.65;
     const targetTravelKm = Math.max(8, (policy.targetTrailPx * metresPerPixel * phase * strengthScale) / 1000);
     const integrationSteps = 32;
     const stepDistanceMetres = (targetTravelKm * 1000) / integrationSteps;
@@ -3380,7 +3452,7 @@ function startWindFieldRenderer(
     for (let step = 0; step < integrationSteps; step += 1) {
       if (!sampleCompositeWindVector(vectorIndex, particle.lon, particle.lat, sample)) break;
       const speed = Math.hypot(sample.u, sample.v);
-      if (speed < 0.6) break;
+      if (speed < minimumVectorSpeed) break;
       const stepSeconds = stepDistanceMetres / speed;
       const latitudeScale = 111_320;
       const longitudeScale = latitudeScale * Math.max(0.2, Math.cos(degToRad(particle.lat)));
@@ -3421,13 +3493,23 @@ function startWindFieldRenderer(
   };
 
   const updatePolicy = () => {
-    policy = computeWindFlowPolicy({
+    const basePolicy = computeWindFlowPolicy({
       zoom: map.getZoom(),
       viewportWidth: canvasWidth,
       viewportHeight: canvasHeight,
       adaptiveQuality,
       livePerformanceMode
     });
+    policy = isMarineFlow ? {
+      ...basePolicy,
+      headSpacingPx: basePolicy.headSpacingPx * 1.22,
+      targetTrailPx: basePolicy.targetTrailPx * 0.86,
+      targetParticleCount: Math.max(180, Math.round(basePolicy.targetParticleCount * 0.42)),
+      poolCapacity: Math.max(225, Math.round(basePolicy.poolCapacity * 0.42)),
+      segmentBudget: Math.max(1_400, Math.round(basePolicy.segmentBudget * 0.38)),
+      historyPointLimit: 96,
+      minimumSampleDistancePx: 1.7
+    } : basePolicy;
     canvas.dataset.targetTrailPx = policy.targetTrailPx.toFixed(1);
     canvas.dataset.headSpacingPx = policy.headSpacingPx.toFixed(1);
     canvas.dataset.segmentBudget = String(policy.segmentBudget);
@@ -3520,10 +3602,26 @@ function startWindFieldRenderer(
     let preservedParticles = 0;
     let spawnedParticles = 0;
     if (seedMode === "stable") {
-      const hierarchical = createHierarchicalWindSeeds(bounds, policy.targetParticleCount);
-      seedCandidates = hierarchical.seeds;
-      canvas.dataset.stableSeedResolution = `${hierarchical.plan.lowerResolution}:${hierarchical.plan.upperResolution}`;
-      canvas.dataset.stableSeedBlend = hierarchical.plan.blend.toFixed(3);
+      if (isMarineFlow) {
+        const seedSpread = Math.max(0.1, observedWindField?.displayResolutionDegrees ?? 1) * 0.62;
+        seedCandidates = points
+          .filter((point) => point.speed >= minimumVectorSpeed && containsWindPoint(bounds, point.lon, point.lat))
+          .flatMap((point) => Array.from({ length: 4 }, (_, slot) => {
+            const key = `marine:${point.lon.toFixed(4)}:${point.lat.toFixed(4)}:${slot}`;
+            const lon = point.lon + (stableWindHash(`${key}:lon`) / 0x1_0000_0000 - 0.5) * seedSpread;
+            const lat = point.lat + (stableWindHash(`${key}:lat`) / 0x1_0000_0000 - 0.5) * seedSpread;
+            return { key, lon, lat };
+          }))
+          .filter((seed) => containsWindPoint(bounds, seed.lon, seed.lat))
+          .sort((left, right) => stableWindHash(left.key) - stableWindHash(right.key));
+        canvas.dataset.stableSeedResolution = "marine-source-grid";
+        canvas.dataset.stableSeedBlend = "0";
+      } else {
+        const hierarchical = createHierarchicalWindSeeds(bounds, policy.targetParticleCount);
+        seedCandidates = hierarchical.seeds;
+        canvas.dataset.stableSeedResolution = `${hierarchical.plan.lowerResolution}:${hierarchical.plan.upperResolution}`;
+        canvas.dataset.stableSeedBlend = hierarchical.plan.blend.toFixed(3);
+      }
       const reconciliation = planWindParticlePoolReconciliation(
         particles,
         seedCandidates,
@@ -3599,7 +3697,7 @@ function startWindFieldRenderer(
   const coreParticleCount = 0;
   reconcileParticlePool(true);
   canvas.dataset.flowSession = String(flowSession);
-  canvas.dataset.renderer = renderMode === "gfs" ? "ncep-gfs-wind-barbs" : "ncep-gfs-streamlines";
+  canvas.dataset.renderer = isMarineFlow ? "open-meteo-marine-current-streamlines" : renderMode === "gfs" ? "ncep-gfs-wind-barbs" : "ncep-gfs-streamlines";
   canvas.dataset.vectorInterpolation = "structured-grid-bilinear-raw-uv";
   canvas.dataset.backgroundMode = "raw-ncep-gfs-grid";
   canvas.dataset.cameraContinuity = "interaction-snapshot-affine-transform-then-chunked-geographic-handoff";
@@ -3712,7 +3810,9 @@ function startWindFieldRenderer(
     // A streamline is a finite sample of the model field, rather than a
     // permanently released tracer.  That keeps a real closed or weak-wind
     // circulation from collecting every particle on its innermost orbit.
-    const simulationSecondsPerSecond = 18_000 - policy.zoomSignal * 4_000;
+    const simulationSecondsPerSecond = isMarineFlow
+      ? 96_000 - policy.zoomSignal * 16_000
+      : 18_000 - policy.zoomSignal * 4_000;
     const simulationSeconds = simulationSecondsPerSecond * deltaSeconds;
     canvas.dataset.simulationSecondsPerSecond = simulationSecondsPerSecond.toFixed(0);
     const visibleAmbientHeads = new Map<number, number>();
@@ -3763,7 +3863,7 @@ function startWindFieldRenderer(
       particle.headScreen = map.project([particle.lon, particle.lat]);
       particle.life -= deltaSeconds;
       particle.travelKm += (vectorSpeed * simulationSeconds) / 1000;
-      const trappedInCalm = vectorSpeed < 1.1 && particle.trail.length >= 7;
+      const trappedInCalm = vectorSpeed < calmVectorSpeed && particle.trail.length >= 7;
       if (
         particle.life <= 0 ||
         particle.travelKm >= particle.maxTravelKm ||
@@ -4019,6 +4119,83 @@ function startWindFieldRenderer(
     clearInteractionCanvas();
     clear();
   };
+}
+
+function startMarineSstRenderer(map: MapLibreMap, canvas: HTMLCanvasElement, payload: MarineLayerPayload | null, visible: boolean) {
+  const context = canvas.getContext("2d", { alpha: true });
+  if (!context) return undefined;
+  const texture = payload?.status === "available" ? createMarineSstTexture(payload.points) : null;
+  canvas.dataset.renderer = "geographic-sst-texture";
+  canvas.dataset.textureSize = texture ? `${texture.canvas.width}x${texture.canvas.height}` : "none";
+  canvas.dataset.scalarCount = String(payload?.points.filter((point) => Number.isFinite(point.seaSurfaceTemperature)).length ?? 0);
+  const render = () => {
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    const width = Math.max(1, Math.floor(canvas.clientWidth * dpr));
+    const height = Math.max(1, Math.floor(canvas.clientHeight * dpr));
+    if (canvas.width !== width || canvas.height !== height) { canvas.width = width; canvas.height = height; }
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
+    if (!visible || !texture) return;
+    const northwest = map.project([texture.west, texture.north]);
+    const southeast = map.project([texture.east, texture.south]);
+    context.save();
+    context.globalAlpha = 0.78;
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = "high";
+    context.filter = "blur(0.8px) saturate(1.08)";
+    context.drawImage(texture.canvas, northwest.x, northwest.y, southeast.x - northwest.x, southeast.y - northwest.y);
+    context.restore();
+  };
+  render();
+  map.on("move", render); map.on("zoom", render); map.on("resize", render);
+  return () => { map.off("move", render); map.off("zoom", render); map.off("resize", render); context.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight); };
+}
+
+function createMarineSstTexture(points: MarinePoint[]) {
+  const valid = points.filter((point) => Number.isFinite(point.seaSurfaceTemperature));
+  if (valid.length < 4) return null;
+  const lons = [...new Set(points.map((point) => point.lon))].sort((a, b) => a - b);
+  const lats = [...new Set(points.map((point) => point.lat))].sort((a, b) => b - a);
+  const byKey = new Map(points.map((point) => [`${point.lon.toFixed(5)}:${point.lat.toFixed(5)}`, point]));
+  const texture = document.createElement("canvas");
+  texture.width = lons.length;
+  texture.height = lats.length;
+  const textureContext = texture.getContext("2d");
+  if (!textureContext) return null;
+  const image = textureContext.createImageData(texture.width, texture.height);
+  for (let y = 0; y < lats.length; y += 1) {
+    for (let x = 0; x < lons.length; x += 1) {
+      const temperature = byKey.get(`${lons[x].toFixed(5)}:${lats[y].toFixed(5)}`)?.seaSurfaceTemperature;
+      if (!Number.isFinite(temperature)) continue;
+      const [r, g, b] = seaSurfaceTemperatureRgb(temperature as number);
+      const offset = (y * texture.width + x) * 4;
+      image.data[offset] = r;
+      image.data[offset + 1] = g;
+      image.data[offset + 2] = b;
+      image.data[offset + 3] = 118;
+    }
+  }
+  textureContext.putImageData(image, 0, 0);
+  return { canvas: texture, west: lons[0], east: lons[lons.length - 1], north: lats[0], south: lats[lats.length - 1] };
+}
+
+function seaSurfaceTemperatureRgb(value: number): [number, number, number] {
+  const stops: Array<[number, [number, number, number]]> = [
+    [0, [24, 65, 154]], [10, [31, 151, 198]], [18, [47, 207, 161]],
+    [24, [246, 214, 77]], [28, [247, 117, 46]], [32, [204, 41, 61]]
+  ];
+  if (value <= stops[0][0]) return stops[0][1];
+  for (let index = 1; index < stops.length; index += 1) {
+    const lower = stops[index - 1];
+    const upper = stops[index];
+    if (value > upper[0]) continue;
+    const t = Math.max(0, Math.min(1, (value - lower[0]) / (upper[0] - lower[0])));
+    const r = Math.round(lower[1][0] + (upper[1][0] - lower[1][0]) * t);
+    const g = Math.round(lower[1][1] + (upper[1][1] - lower[1][1]) * t);
+    const b = Math.round(lower[1][2] + (upper[1][2] - lower[1][2]) * t);
+    return [r, g, b];
+  }
+  return stops[stops.length - 1][1];
 }
 
 const WIND_PARTICLE_STYLES = [

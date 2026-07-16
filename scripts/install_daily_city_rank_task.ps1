@@ -4,10 +4,11 @@ param(
   [int]$EveryHours = 12
 )
 
-$root = Split-Path -Parent $PSScriptRoot
 $taskName = "TyphoonBossRadar-NationalCityRank"
-$runner = Join-Path $PSScriptRoot "run_daily_city_rank.cmd"
-$action = New-ScheduledTaskAction -Execute $runner
+$runner = Join-Path $PSScriptRoot "run_daily_city_rank_hidden.ps1"
+$hiddenLauncher = Join-Path $PSScriptRoot "run_scheduled_task_hidden.vbs"
+$wscript = Join-Path $env:SystemRoot "System32\wscript.exe"
+$action = New-ScheduledTaskAction -Execute $wscript -Argument "`"$hiddenLauncher`" `"$runner`""
 $clock = [datetime]::ParseExact($Time, "HH:mm", [Globalization.CultureInfo]::InvariantCulture)
 $firstRun = (Get-Date).Date.Add($clock.TimeOfDay)
 $triggers = foreach ($hourOffset in 0..23 | Where-Object { $_ % $EveryHours -eq 0 }) {

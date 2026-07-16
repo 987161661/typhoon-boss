@@ -1,4 +1,20 @@
+$ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
-$command = "npm.cmd run warnings:china:refresh && npm.cmd run products:china:refresh && npm.cmd run visuals:china:refresh"
-$process = Start-Process -FilePath $env:ComSpec -ArgumentList "/c", $command -WorkingDirectory $root -WindowStyle Hidden -Wait -PassThru
-exit $process.ExitCode
+
+Push-Location $root
+try {
+  foreach ($task in @(
+    "warnings:china:refresh",
+    "products:china:refresh",
+    "visuals:china:refresh"
+  )) {
+    & npm.cmd run $task
+    if ($LASTEXITCODE -ne 0) {
+      exit $LASTEXITCODE
+    }
+  }
+} finally {
+  Pop-Location
+}
+
+exit 0

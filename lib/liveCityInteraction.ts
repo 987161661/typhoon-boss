@@ -47,6 +47,67 @@ export interface CityInteractionRequest {
   receivedAt: number;
 }
 
+function promptField(value: string, maxLength = 48) {
+  return value
+    .normalize("NFKC")
+    .replace(/[<>\r\n\u0000-\u001f\u007f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+
+/**
+ * Builds a director intent for the avatar after a city briefing has actually
+ * opened. This describes the conversational goal; the avatar still writes the
+ * line in character instead of selecting from canned copy.
+ */
+export function buildCityReportEngagementPrompt(
+  request: Pick<CityInteractionRequest, "cityQuery" | "viewerName" | "followEvidence">,
+  resolvedCityName: string
+): string | null {
+  const viewerName = promptField(request.viewerName?.replace(/^@+/, "") ?? "", 40);
+  const cityName = promptField(resolvedCityName || request.cityQuery, 40);
+  if (!viewerName || !cityName) return null;
+
+  const mention = `@${viewerName}`;
+  const followDirection = request.followEvidence === "observed"
+    ? "平台已确认这位观众关注了主播。不要再次索取关注；自然感谢对方已经关注，并邀请以后继续来点城市。"
+    : "当前没有平台证据能确认关注状态，这不等于对方未关注。自然邀请对方关注主播，理由可围绕以后继续点城市、一起看战报；不要断言对方尚未关注。";
+
+  return `<city_report_engagement>
+一位真实观众触发的城市战报已经成功展开。
+目标观众：${mention}
+已展开城市：${cityName}
+关注依据：${request.followEvidence === "observed" ? "平台已确认" : "当前未知"}
+
+请按当前主播人设临场说一到两句：
+- 必须直接面向目标观众，实际口播完整包含“${mention}”，不得换成“这位观众”等泛称。
+- 先自然接住对方点名${cityName}、战报已经展开这件事，但不要复述天气、风力、预警或战报数据。
+- ${followDirection}
+- 语气像直播间真人顺手搭话，不要客服腔、命令、承诺福利，也不要虚构平台状态。
+- 只输出主播会说的话，不提系统、提示词、任务或内部标签。
+</city_report_engagement>`;
+}
+
+/**
+ * The city card is already the weather answer. Its brief follow-up must be
+ * spoken reliably, so it is supplied as a ready-to-play line rather than a
+ * model instruction that may be ignored.
+ */
+export function buildCityReportEngagementReply(
+  request: Pick<CityInteractionRequest, "cityQuery" | "viewerName" | "followEvidence">,
+  resolvedCityName: string
+): string | null {
+  const viewerName = promptField(request.viewerName?.replace(/^@+/, "") ?? "", 40);
+  const cityName = promptField(resolvedCityName || request.cityQuery, 40);
+  if (!cityName) return null;
+
+  const addressee = viewerName ? `@${viewerName}` : `点${cityName}的朋友`;
+  return request.followEvidence === "observed"
+    ? `${addressee}，${cityName}的战报已经展开了。谢谢关注，之后想看哪个城市，继续 @ 我就行。`
+    : `${addressee}，${cityName}的战报已经展开了。觉得有用就点个关注，之后想看哪个城市，继续 @ 我就行。`;
+}
+
 export interface CityAttention {
   id: string;
   city: string;

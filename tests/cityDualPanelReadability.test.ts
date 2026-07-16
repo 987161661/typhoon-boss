@@ -58,6 +58,19 @@ test("desktop panel policy is materially larger than the rejected small-card ran
     "info preferred width must retain the mobile-stream readability increase");
 });
 
+test("animated panel transforms never feed visual scale back into layout state", async () => {
+  const groupSource = await read("components/CityPanelGroup.tsx");
+
+  assert.match(groupSource, /const EMPTY_RESERVED_RECTS: LayoutRect\[\] = \[\]/,
+    "the default reserved rect collection must stay referentially stable across layout updates");
+  assert.match(groupSource, /node\.offsetWidth/);
+  assert.match(groupSource, /node\.offsetHeight/);
+  assert.doesNotMatch(groupSource, /getBoundingClientRect\(\)/,
+    "layout measurement must exclude the deploy animation's CSS transforms");
+  assert.match(groupSource, /new ResizeObserver\(scheduleUpdate\)/,
+    "observer updates must be coalesced outside the synchronous resize callback");
+});
+
 test("mobile-stream typography keeps primary information above the rejected micro-copy scale", async () => {
   const battleCss = await read("components/CityBattleShow.module.css");
   const infoCss = await read("components/CityInfoDeck.module.css");

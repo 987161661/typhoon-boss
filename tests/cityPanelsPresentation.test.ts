@@ -270,6 +270,21 @@ test("information channel removes duplicate official copy and does not repeat ba
   assert.equal(model.info.actions.length, 2);
 });
 
+test("information model keeps same-city secondary official warnings without replacing the primary", () => {
+  const briefing = sample({
+    officialWarnings: [
+      { title: "暴雨红色预警", severity: "red", issuedAt: "2026-07-15T07:00:00Z", senderName: "甲气象台", effectiveAt: null, expiresAt: null, description: "暴雨持续", instruction: "减少外出" },
+      { title: "雷电黄色预警", severity: "yellow", issuedAt: "2026-07-15T08:00:00Z", senderName: "甲气象台", effectiveAt: null, expiresAt: null, description: "伴有雷电", instruction: "远离空旷处" },
+      { title: "大风蓝色预警", severity: "blue", issuedAt: "2026-07-15T09:00:00Z", senderName: "甲气象台", effectiveAt: null, expiresAt: null, description: "阵风增强", instruction: "加固易坠物" }
+    ]
+  });
+  const model = build(briefing);
+
+  assert.equal(model.info.warning.title, "暴雨红色预警");
+  assert.deepEqual(model.info.relatedWarnings.map((warning) => warning.title), ["雷电黄色预警", "大风蓝色预警"]);
+  assert.equal(model.info.relatedWarnings.every((warning) => warning.evidence === "official"), true);
+});
+
 test("archive exposes one conversion prompt only while weather remains available", () => {
   const locked = build(sample());
   const unlocked = build(sample(), "observed");

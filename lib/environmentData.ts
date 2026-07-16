@@ -22,6 +22,8 @@ import type {
   GfsScalarPoint,
   GfsWaveLayerPayload,
   GfsWavePoint,
+  MarineLayerPayload,
+  MarinePoint,
   WindFieldPayload,
   WindFieldPoint
 } from "@/lib/types";
@@ -102,6 +104,9 @@ const gfsScalarLastSuccess = new Map<string, GfsScalarLayerPayload>();
 const gfsWaveCache = new Map<string, { expiresAt: number; payload: GfsWaveLayerPayload }>();
 const gfsWaveInFlight = new Map<string, Promise<GfsWaveLayerPayload>>();
 const gfsWaveLastSuccess = new Map<string, GfsWaveLayerPayload>();
+const marineLayerCache = new Map<string, { expiresAt: number; payload: MarineLayerPayload }>();
+const marineLayerInFlight = new Map<string, Promise<MarineLayerPayload>>();
+const marineLayerLastSuccess = new Map<string, MarineLayerPayload>();
 let cwaRadarLayerCache: { expiresAt: number; payload: RadarMosaicLayerPayload } | null = null;
 let cwaRadarLayerInFlight: Promise<RadarMosaicLayerPayload> | null = null;
 let cwaRadarLastSuccess: RadarMosaicLayerPayload | null = null;
@@ -242,6 +247,17 @@ export async function fetchGlobalSatelliteImage(frame: string): Promise<Response
       "X-Data-Fetched-At": image.fetchedAt
     }
   });
+}
+
+interface MarineLocation {
+  latitude: number;
+  longitude: number;
+  hourly?: {
+    time?: string[];
+    ocean_current_velocity?: number[];
+    ocean_current_direction?: number[];
+    sea_surface_temperature?: number[];
+  };
 }
 
 export async function getCwaRadarLayer(): Promise<RadarMosaicLayerPayload> {
@@ -782,6 +798,151 @@ export async function getGfsWaveLayer(requestedBounds: WindFieldBounds): Promise
   );
   gfsWaveInFlight.set(cacheKey, request);
   return request;
+}
+
+export async function getMarineLayer(requestedBounds: WindFieldBounds): Promise<MarineLayerPayload> {
+  const bounds = normalizeWindFieldBounds(requestedBounds);
+  const cacheKey = `marine:${windBoundsCacheKey(bounds)}`;
+  const cached = marineLayerCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.payload;
+  const inFlight = marineLayerInFlight.get(cacheKey);
+  if (inFlight) return inFlight;
+  const request = loadMarineLayer(bounds).then(
+    (payload) => {
+      marineLayerLastSuccess.set(cacheKey, payload);
+      marineLayerCache.set(cacheKey, { expiresAt: Date.now() + 30 * 60 * 1000, payload });
+      marineLayerInFlight.delete(cacheKey);
+      return payload;
+    },
+    (error) => {
+      marineLayerInFlight.delete(cacheKey);
+      const last = marineLayerLastSuccess.get(cacheKey);
+      if (last) {
+        const stale = { ...last, isStale: true, reason: `Marine refresh failed; using last valid layer: ${errorMessage(error)}` };
+        marineLayerCache.set(cacheKey, { expiresAt: Date.now() + DEGRADED_WIND_FIELD_RETRY_MS, payload: stale });
+        return stale;
+      }
+      throw error;
+    }
+  );
+  marineLayerInFlight.set(cacheKey, request);
+  return request;
+}
+
+async function loadMarineLayer(bounds: WindFieldBounds): Promise<MarineLayerPayload> {
+  try {
+    return await loadOpenMeteoMarineLayer(bounds);
+  } catch (error) {
+    return loadNoaaMarineFallback(bounds, error);
+  }
+}
+
+async function loadOpenMeteoMarineLayer(bounds: WindFieldBounds): Promise<MarineLayerPayload> {
+  const samplePoints = buildMarineSampleGrid(bounds);
+  const batches = chunk(samplePoints, 96);
+  const results: Array<{ updatedAt: string; points: MarinePoint[] }> = [];
+  for (const batch of batches) {
+    const query = new URLSearchParams({
+      latitude: batch.map((point) => point.lat.toFixed(3)).join(","),
+      longitude: batch.map((point) => point.lon.toFixed(3)).join(","),
+      hourly: "ocean_current_velocity,ocean_current_direction,sea_surface_temperature",
+      forecast_hours: "1",
+      timezone: "UTC",
+      wind_speed_unit: "ms"
+    });
+    const response = await fetch(`https://marine-api.open-meteo.com/v1/marine?${query.toString()}`, {
+      cache: "no-store",
+      headers: { Accept: "application/json", "User-Agent": process.env.WEATHER_API_USER_AGENT ?? "TyphoonBossRadar/1.0 local-deployment" },
+      signal: AbortSignal.timeout(35_000)
+    });
+    if (!response.ok) throw new Error(`Open-Meteo Marine request failed: ${response.status}`);
+    const raw = await response.json() as MarineLocation | MarineLocation[];
+    const locations = Array.isArray(raw) ? raw : [raw];
+    results.push({
+      updatedAt: locations[0]?.hourly?.time?.[0] ?? new Date().toISOString(),
+      points: locations.map((location, index) => convertMarinePoint(location, batch[index])).filter((point): point is MarinePoint => Boolean(point))
+    });
+  }
+  const points = results.flatMap((result) => result.points);
+  if (points.length < 24) throw new Error(`Open-Meteo Marine returned only ${points.length} usable samples.`);
+  return {
+    source: "Open-Meteo Marine API",
+    updatedAt: results[0]?.updatedAt ?? new Date().toISOString(),
+    status: "available",
+    attribution: "Open-Meteo Marine API; MeteoFrance ocean currents and sea-surface temperature",
+    model: "MeteoFrance global ocean currents + SST",
+    unit: "m/s + °C",
+    points,
+    nativeResolutionDegrees: 0.08,
+    displayResolutionDegrees: Math.max((bounds.east - bounds.west) / 11, (bounds.north - bounds.south) / 7),
+    sampling: "viewport",
+    coverage: bounds
+  };
+}
+
+async function loadNoaaMarineFallback(bounds: WindFieldBounds, primaryError: unknown): Promise<MarineLayerPayload> {
+  const currentLonStride = Math.max(1, Math.round((bounds.east - bounds.west) / 0.25 / 35));
+  const currentLatStride = Math.max(1, Math.round((bounds.north - bounds.south) / 0.25 / 23));
+  const sstLonStride = Math.max(1, Math.round((bounds.east - bounds.west) / 0.01 / 35));
+  const sstLatStride = Math.max(1, Math.round((bounds.north - bounds.south) / 0.01 / 23));
+  const slice = (variable: string, latStride: number, lonStride: number) => encodeURIComponent(
+    `${variable}[(last)][(${bounds.south}):${latStride}:(${bounds.north})][(${bounds.west}):${lonStride}:(${bounds.east})]`
+  );
+  const currentUrl = `https://coastwatch.pfeg.noaa.gov/erddap/griddap/nesdisSSH1day.csv?${slice("ugos", currentLatStride, currentLonStride)},${slice("vgos", currentLatStride, currentLonStride)}`;
+  const sstUrl = `https://coastwatch.pfeg.noaa.gov/erddap/griddap/jplMURSST41.csv?${slice("analysed_sst", sstLatStride, sstLonStride)}`;
+  const [currentResponse, sstResponse] = await Promise.all([
+    fetch(currentUrl, { cache: "no-store", signal: AbortSignal.timeout(35_000) }),
+    fetch(sstUrl, { cache: "no-store", signal: AbortSignal.timeout(35_000) })
+  ]);
+  if (!currentResponse.ok || !sstResponse.ok) {
+    throw new Error(`Marine sources unavailable: Open-Meteo ${errorMessage(primaryError)}; NOAA ERDDAP ${currentResponse.status}/${sstResponse.status}`);
+  }
+  const currentRows = parseErddapGridCsv(await currentResponse.text());
+  const sstRows = parseErddapGridCsv(await sstResponse.text());
+  if (currentRows.length < 12 || sstRows.length < 12) throw new Error("NOAA ERDDAP returned too few marine fallback cells.");
+  const points = sstRows.map((row) => {
+    const nearestCurrent = currentRows.reduce<{ distance: number; u: number; v: number }>((best, candidate) => {
+      const distance = Math.hypot(Number(candidate.longitude) - Number(row.longitude), Number(candidate.latitude) - Number(row.latitude));
+      return distance < best.distance ? { distance, u: Number(candidate.ugos), v: Number(candidate.vgos) } : best;
+    }, { distance: Number.POSITIVE_INFINITY, u: Number.NaN, v: Number.NaN });
+    const currentAvailable = nearestCurrent.distance <= 0.5 && Number.isFinite(nearestCurrent.u) && Number.isFinite(nearestCurrent.v);
+    const temperature = Number(row.analysed_sst);
+    return {
+      lon: Number(row.longitude),
+      lat: Number(row.latitude),
+      currentU: currentAvailable ? nearestCurrent.u : 0,
+      currentV: currentAvailable ? nearestCurrent.v : 0,
+      currentSpeed: currentAvailable ? Math.hypot(nearestCurrent.u, nearestCurrent.v) : 0,
+      seaSurfaceTemperature: Number.isFinite(temperature) ? temperature : null,
+      currentAvailable
+    } satisfies MarinePoint;
+  }).filter((point) => Number.isFinite(point.lon) && Number.isFinite(point.lat));
+  const currentUpdatedAt = currentRows[0]?.time ?? new Date().toISOString();
+  return {
+    source: "NOAA CoastWatch ERDDAP fallback",
+    updatedAt: currentUpdatedAt,
+    status: "available",
+    attribution: "NOAA CoastWatch experimental altimetry geostrophic currents; NASA JPL MUR SST via NOAA ERDDAP",
+    model: "NOAA geostrophic currents + NASA JPL MUR SST",
+    unit: "m/s + °C",
+    points,
+    nativeResolutionDegrees: 0.25,
+    displayResolutionDegrees: Math.max((bounds.east - bounds.west) / 35, (bounds.north - bounds.south) / 23),
+    sampling: "viewport",
+    coverage: bounds,
+    isStale: true,
+    reason: `Open-Meteo Marine unavailable; using delayed NOAA fallback (${errorMessage(primaryError)}).`
+  };
+}
+
+function parseErddapGridCsv(csv: string): Array<Record<string, string>> {
+  const lines = csv.trim().split(/\r?\n/);
+  if (lines.length < 3) return [];
+  const headers = lines[0].split(",");
+  return lines.slice(2).map((line) => {
+    const values = line.split(",");
+    return Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ""]));
+  });
 }
 
 async function loadNcepGfsWaveLayer(bounds: WindFieldBounds): Promise<GfsWaveLayerPayload> {
@@ -1585,6 +1746,23 @@ function buildWindSampleGrid(bounds: WindFieldBounds) {
   return points;
 }
 
+function buildMarineSampleGrid(bounds: WindFieldBounds) {
+  // Keep a viewport refresh to one multi-location upstream request. The public
+  // endpoint counts dense coordinate lists toward its free-use rate limit;
+  // client-side interpolation supplies the display density.
+  const columns = 12;
+  const rows = 8;
+  const points: Array<{ lon: number; lat: number }> = [];
+  for (let row = 0; row < rows; row += 1) {
+    const lat = bounds.north - ((bounds.north - bounds.south) * row) / (rows - 1);
+    for (let column = 0; column < columns; column += 1) {
+      const lon = bounds.west + ((bounds.east - bounds.west) * column) / (columns - 1);
+      points.push({ lon, lat });
+    }
+  }
+  return points;
+}
+
 function normalizeWindFieldBounds(bounds: WindFieldBounds): WindFieldBounds {
   const west = clamp(Math.min(bounds.west, bounds.east), -180, 180);
   const east = clamp(Math.max(bounds.west, bounds.east), -180, 180);
@@ -1621,6 +1799,27 @@ function convertWindPoint(location: OpenMeteoLocation): WindFieldPoint | null {
     v: -windSpeed * Math.cos(radians),
     speed: windSpeed,
     direction: direction as number
+  };
+}
+
+function convertMarinePoint(location: MarineLocation, requestedPoint?: { lon: number; lat: number }): MarinePoint | null {
+  const velocity = location.hourly?.ocean_current_velocity?.[0];
+  const direction = location.hourly?.ocean_current_direction?.[0];
+  const temperature = location.hourly?.sea_surface_temperature?.[0];
+  const lon = requestedPoint?.lon ?? location.longitude;
+  const lat = requestedPoint?.lat ?? location.latitude;
+  if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
+  const currentAvailable = Number.isFinite(velocity) && Number.isFinite(direction);
+  const speed = currentAvailable ? Math.max(0, velocity as number) : 0;
+  const radians = currentAvailable ? ((direction as number) * Math.PI) / 180 : 0;
+  return {
+    lon,
+    lat,
+    currentU: currentAvailable ? speed * Math.sin(radians) : 0,
+    currentV: currentAvailable ? speed * Math.cos(radians) : 0,
+    currentSpeed: speed,
+    seaSurfaceTemperature: Number.isFinite(temperature) ? temperature as number : null,
+    currentAvailable
   };
 }
 

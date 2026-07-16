@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { CityBriefing } from "../lib/cityBriefingData";
 import type { CityPanelsModel } from "../lib/cityPanelsPresentation";
-import { buildCityBattleShowModel, resolveBattleNarrative, revealDelayFor, splitRevealText } from "../lib/cityBattleShowModel";
+import { buildCityBattleShowModel, buildRankIntel, resolveBattleNarrative, revealDelayFor, splitRevealText } from "../lib/cityBattleShowModel";
 
 test("battle show keeps the safe narrative summary and stages at most two actions", () => {
   const briefing = sampleBriefing();
@@ -48,6 +48,35 @@ test("typewriter timing pauses on punctuation and preserves unicode code points"
   assert.equal(revealDelayFor("。", 42), 210);
 });
 
+test("rank intelligence highlights meaningful nationwide positions and makes them adaptive", () => {
+  const briefing = sampleBriefing({
+    current: { ...sampleBriefing().current, apparentTemperatureC: 39, relativeHumidityPct: 91, windSpeedMps: 0, precipitationMm: 0 },
+    comparison: {
+      scope: "全国城市排名",
+      fetchedAt: "2026-07-15T08:00:00Z",
+      apparentTemperatureRank: { position: 1, total: 318, scope: "全国城市排名" },
+      relativeHumidityRank: { position: 3, total: 318, scope: "全国城市排名" },
+      windSpeedRank: { position: 1, total: 318, scope: "全国城市排名" },
+      precipitationRank: { position: 1, total: 318, scope: "全国城市排名" }
+    }
+  });
+  const ranks = buildRankIntel(briefing);
+  assert.deepEqual(ranks.map((rank) => rank.id), ["apparent-temperature", "humidity"]);
+  assert.equal(ranks[0]?.tier, "crown");
+  assert.equal(ranks[1]?.tier, "elite");
+  assert.match(ranks[0]?.adaptation ?? "", /登顶/);
+  assert.match(ranks[1]?.adaptation ?? "", /前三/);
+});
+
+test("battle broadcast uses deliberate, readable reveal pacing", async () => {
+  const source = await import("node:fs/promises").then(({ readFile }) => readFile("components/CityBattleShow.tsx", "utf8"));
+  assert.match(source, /speed=\{78\}/, "the main battle narration should not rush out at the former 42ms cadence");
+  assert.match(source, /speed=\{112\}/, "archive fragments should reveal more slowly than the broadcast verdict");
+  assert.match(source, /sound=\{typingSound\}/, "typing sound must remain wired to both reveal channels");
+  assert.match(source, /exponentialRampToValueAtTime\(0\.042, start \+ 0\.004\)/,
+    "typing feedback needs an audible peak instead of the former near-silent tick");
+});
+
 function sampleModel(): CityPanelsModel {
   return {
     shared: {
@@ -80,6 +109,7 @@ function sampleModel(): CityPanelsModel {
       }
     },
     info: {
+      relatedWarnings: [],
       actions: ["避开午后高温时段。", "持续补水。"],
       warning: {
         status: "active",

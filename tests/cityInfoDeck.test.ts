@@ -30,6 +30,10 @@ test("information deck exposes stable semantic and evidence hooks", async () => 
   for (const role of [
     "info-panel",
     "official-warning",
+    "warning-emblem",
+    "warning-level-seal",
+    "related-warning-queue",
+    "related-warning-chip",
     "current-observations",
     "nowcast-metrics",
     "trend-metrics",

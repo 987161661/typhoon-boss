@@ -28,13 +28,15 @@ export function useViewportGridLayer<T extends { status: string; points: unknown
   endpoint,
   enabled,
   queryKey = "",
-  boundsForMap
+  boundsForMap,
+  refreshIntervalMs = 0
 }: {
   map: MapLibreMap | null;
   endpoint: string;
   enabled: boolean;
   queryKey?: string;
   boundsForMap: (map: MapLibreMap) => WindFieldBounds;
+  refreshIntervalMs?: number;
 }) {
   const [payload, setPayload] = useState<T | null>(null);
 
@@ -60,9 +62,10 @@ export function useViewportGridLayer<T extends { status: string; points: unknown
     };
     const schedule = () => { window.clearTimeout(timer); timer = window.setTimeout(() => void load(), 220); };
     schedule();
+    const refreshTimer = refreshIntervalMs > 0 ? window.setInterval(schedule, refreshIntervalMs) : 0;
     map.on("moveend", schedule);
-    return () => { disposed = true; window.clearTimeout(timer); controller?.abort(); map.off("moveend", schedule); };
-  }, [boundsForMap, enabled, endpoint, map, queryKey]);
+    return () => { disposed = true; window.clearTimeout(timer); if (refreshTimer) window.clearInterval(refreshTimer); controller?.abort(); map.off("moveend", schedule); };
+  }, [boundsForMap, enabled, endpoint, map, queryKey, refreshIntervalMs]);
 
   return payload;
 }

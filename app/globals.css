@@ -147,6 +147,9 @@ a:focus-visible {
 .wind-color-canvas,
 .wind-particle-canvas,
 .wind-particle-interaction-canvas,
+.marine-current-canvas,
+.marine-current-interaction-canvas,
+.sea-surface-temperature-canvas,
 .forecast-route-canvas {
   position: absolute;
   inset: 0;
@@ -239,11 +242,36 @@ a:focus-visible {
   will-change: contents;
 }
 
-.wind-particle-canvas {
+.sea-surface-temperature-canvas {
+  z-index: 5;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  mix-blend-mode: normal;
+  opacity: 0.84;
+  filter: saturate(1.24);
+}
+
+.marine-current-canvas,
+.marine-current-interaction-canvas {
+  z-index: 6;
+  inset: -20%;
+  width: 140%;
+  height: 140%;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  opacity: 0.9;
+  filter: saturate(1.18) contrast(1.08) drop-shadow(0 0 1px rgba(102, 239, 255, 0.45));
+  will-change: contents;
+}
+
+.wind-particle-canvas,
+.marine-current-canvas {
   transition: opacity 120ms linear;
 }
 
-.wind-particle-interaction-canvas {
+.wind-particle-interaction-canvas,
+.marine-current-interaction-canvas {
   z-index: 6;
   opacity: 0;
   visibility: hidden;
@@ -3346,6 +3374,8 @@ a:focus-visible {
 .gfs-scalar-control,
 .cwa-radar-control,
 .gfs-wave-control,
+.marine-current-control,
+.marine-sst-control,
 .ecmwf-track-control,
 .observation-control,
 .wind-render-mode {
@@ -3360,6 +3390,8 @@ a:focus-visible {
 .gfs-scalar-control > span,
 .cwa-radar-control > span,
 .gfs-wave-control > span,
+.marine-current-control > span,
+.marine-sst-control > span,
 .ecmwf-track-control > span,
 .observation-control > span,
 .wind-render-mode > span {
@@ -3383,6 +3415,8 @@ a:focus-visible {
 .gfs-scalar-control button,
 .cwa-radar-control button,
 .gfs-wave-control button,
+.marine-current-control button,
+.marine-sst-control button,
 .ecmwf-track-control button,
 .observation-control button,
 .wind-render-mode button {
@@ -3398,6 +3432,8 @@ a:focus-visible {
 .gfs-scalar-control button.active,
 .cwa-radar-control button.active,
 .gfs-wave-control button.active,
+.marine-current-control button.active,
+.marine-sst-control button.active,
 .ecmwf-track-control button.active,
 .observation-control button.active,
 .wind-render-mode button.active {
@@ -3409,6 +3445,8 @@ a:focus-visible {
 .gfs-scalar-control small,
 .cwa-radar-control small,
 .gfs-wave-control small,
+.marine-current-control small,
+.marine-sst-control small,
 .ecmwf-track-control small,
 .observation-control small,
 .wind-render-mode small {
@@ -3418,7 +3456,9 @@ a:focus-visible {
 }
 
 .cwa-radar-control button,
-.gfs-wave-control button {
+.gfs-wave-control button,
+.marine-current-control button,
+.marine-sst-control button {
   width: 100%;
 }
 
@@ -3668,7 +3708,9 @@ a:focus-visible {
 
 .map-stage[data-camera-moving="true"] .storm-map-marker,
 .map-stage[data-camera-moving="true"] .wind-particle-canvas,
-.map-stage[data-camera-moving="true"] .wind-particle-interaction-canvas {
+.map-stage[data-camera-moving="true"] .wind-particle-interaction-canvas,
+.map-stage[data-camera-moving="true"] .marine-current-canvas,
+.map-stage[data-camera-moving="true"] .marine-current-interaction-canvas {
   filter: none;
 }
 

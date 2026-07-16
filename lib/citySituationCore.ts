@@ -9,7 +9,7 @@ export interface CitySituationTarget {
   name: string;
   /** The deterministic prefecture/municipality root from the administrative hierarchy. */
   cityCode: string;
-  /** Optional official location ids belonging to the resolved city root. */
+  /** Optional exact location ids when the requested target is below the city root. */
   locationIds?: readonly string[];
 }
 
@@ -122,7 +122,10 @@ function belongsToCity(event: NationalWeatherEvent, target: CitySituationTarget)
   // A deterministic event already carries its authoritative city root. Raw
   // provider location ids may collide with stale caller context and must not
   // override a different resolved cityCode.
-  return event.geography.cityCode === target.cityCode;
+  if (event.geography.cityCode !== target.cityCode) return false;
+  if (!target.locationIds?.length || event.geography.countyCode === null) return true;
+  const targetIds = new Set(target.locationIds);
+  return event.geography.locationIds.some((locationId) => targetIds.has(locationId));
 }
 
 function compareWarnings(left: NationalWeatherEvent, right: NationalWeatherEvent) {

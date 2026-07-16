@@ -19,6 +19,7 @@ type DirectorScene = "briefing" | "analysis";
 export type HostChatRequest = {
   id: string;
   text: string;
+  directReply?: string;
   viewerId?: string;
   viewerName?: string;
 };
@@ -99,6 +100,7 @@ export function DigitalHostWindow({
   const pendingChatRef = useRef<{
     id: string;
     text: string;
+    directReply?: string;
     viewerId: string;
     viewerName: string;
     attempts: number;
@@ -231,6 +233,7 @@ export function DigitalHostWindow({
     pendingChatRef.current = {
       id: chatRequest.id,
       text: chatRequest.text.trim(),
+      directReply: chatRequest.directReply?.trim(),
       viewerId: chatRequest.viewerId?.trim() || DEFAULT_RADAR_VIEWER,
       viewerName:
         chatRequest.viewerName?.trim() ||
@@ -260,6 +263,7 @@ export function DigitalHostWindow({
           type: "linglan:chat",
           requestId: pending.id,
           text: pending.text,
+          directReply: pending.directReply,
           viewerId: pending.viewerId,
           viewerName: pending.viewerName,
           requestedAt: Date.now()
@@ -284,6 +288,7 @@ export function DigitalHostWindow({
         body: JSON.stringify({
           requestId: pending.id,
           text: pending.text,
+          directReply: pending.directReply,
           viewerId: pending.viewerId,
           viewerName: pending.viewerName
         })

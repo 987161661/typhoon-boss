@@ -23,6 +23,7 @@ import styles from "./FutureWeatherArchivePanel.module.css";
 export interface FutureWeatherArchivePanelProps {
   snapshot: NationalSituationSnapshot;
   className?: string;
+  displayMode?: "default" | "live-standby";
   onSelectEvent?: (eventId: string) => void;
   onOpenCitySituation?: () => void;
 }
@@ -30,6 +31,7 @@ export interface FutureWeatherArchivePanelProps {
 export function FutureWeatherArchivePanel({
   snapshot,
   className = "",
+  displayMode = "default",
   onSelectEvent
 }: FutureWeatherArchivePanelProps) {
   const model = buildNationalSituationHudModel(snapshot);
@@ -44,6 +46,7 @@ export function FutureWeatherArchivePanel({
       aria-labelledby="future-weather-archive-title"
       data-highest-event-level={active?.level ?? "none"}
       data-archive-cabinet="vault-07"
+      data-display-mode={displayMode}
     >
       <span className={styles.cabinetGrain} aria-hidden="true" />
       <span className={styles.indexSpine} aria-hidden="true">
@@ -79,6 +82,16 @@ export function FutureWeatherArchivePanel({
         generatedAt={snapshot.generatedAt}
       />
 
+      {displayMode === "live-standby" ? (
+        <WarningSignalBoard
+          counts={snapshot.warnings.byLevel}
+          total={model.warning.total}
+          highestLevel={model.warning.highestLevel}
+          highestLevelLabel={model.warning.highestLevelLabel}
+          updatedLabel={model.warning.updatedLabel}
+        />
+      ) : null}
+
       <section className={styles.caseRack} aria-labelledby="archive-case-rack-title">
         <div className={styles.sectionLabel}>
           <div>
@@ -106,13 +119,15 @@ export function FutureWeatherArchivePanel({
         )}
       </section>
 
-      <WarningSignalBoard
-        counts={snapshot.warnings.byLevel}
-        total={model.warning.total}
-        highestLevel={model.warning.highestLevel}
-        highestLevelLabel={model.warning.highestLevelLabel}
-        updatedLabel={model.warning.updatedLabel}
-      />
+      {displayMode !== "live-standby" ? (
+        <WarningSignalBoard
+          counts={snapshot.warnings.byLevel}
+          total={model.warning.total}
+          highestLevel={model.warning.highestLevel}
+          highestLevelLabel={model.warning.highestLevelLabel}
+          updatedLabel={model.warning.updatedLabel}
+        />
+      ) : null}
 
       <details className={styles.evidenceRibbon}>
         <summary className={styles.sectionLabel}>

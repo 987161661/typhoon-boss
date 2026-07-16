@@ -9,7 +9,16 @@ import { LiveCityInteraction } from "./LiveCityInteraction";
 import { LiveCityTargetLock } from "./LiveCityTargetLock";
 import { useLiveCityInteractionQueue } from "./useLiveCityInteractionQueue";
 import { useNationalSituation } from "./useNationalSituation";
-import { createLiveCityEventId, type CityAttention, type CityAttentionAnchor, type HostLiveEvent } from "@/lib/liveCityInteraction";
+import type { CityBriefing } from "@/lib/cityBriefingData";
+import {
+  buildCityReportEngagementReply,
+  createLiveCityEventId,
+  isHostLiveComment,
+  type CityAttention,
+  type CityAttentionAnchor,
+  type CityInteractionRequest,
+  type HostLiveEvent
+} from "@/lib/liveCityInteraction";
 import {
   DEFAULT_LIVE_CONTROL_SETTINGS,
   normalizeLiveControlSettings,
@@ -35,20 +44,65 @@ export function LiveDirector() {
   );
   const [cityOverlayHost, setCityOverlayHost] = useState<HTMLElement | null>(null);
   const transitionTimerRef = useRef<number | null>(null);
+  const cityEngagementIdsRef = useRef(new Set<string>());
   const ready = loaded.briefing || loaded.analysis;
   const nationalSituation = useNationalSituation();
   const cityInteractions = useLiveCityInteractionQueue({
     highestOfficialWarningLevel: nationalSituation.snapshot?.warnings.highestLevel ?? null,
     focusedStormId: nationalSituation.snapshot?.storms[0]?.id ?? null
   });
+  const submitCityInteractionEvent = cityInteractions.submitEvent;
 
   useEffect(() => {
     setCityOverlayHost(document.body);
   }, []);
 
   const handleLiveEvent = useCallback((event: HostLiveEvent) => {
-    cityInteractions.submitEvent(event);
-  }, [cityInteractions]);
+    submitCityInteractionEvent(event);
+  }, [submitCityInteractionEvent]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let after: number | null = null;
+    const consumeGatewayEvents = async () => {
+      try {
+        const response = await fetch(
+          `/api/live-city-events?after=${after === null ? "latest" : after}`,
+          { cache: "no-store" }
+        );
+        if (!response.ok) return;
+        const payload = (await response.json()) as {
+          events?: Array<{ sequence?: unknown; event?: unknown }>;
+          latestSequence?: unknown;
+        };
+        if (after === null) {
+          after = typeof payload.latestSequence === "number" ? payload.latestSequence : 0;
+          return;
+        }
+        if (typeof payload.latestSequence === "number" && payload.latestSequence < after) {
+          // The relay process restarted and began a new sequence. Align to the
+          // new head without replaying anything that accumulated during boot.
+          after = payload.latestSequence;
+          return;
+        }
+        for (const item of payload.events || []) {
+          if (typeof item.sequence !== "number") continue;
+          after = Math.max(after, item.sequence);
+          if (isHostLiveComment(item.event)) submitCityInteractionEvent(item.event);
+        }
+      } catch {
+        // The local gateway may restart independently of the radar page.
+      }
+    };
+    void consumeGatewayEvents();
+    const timer = window.setInterval(() => {
+      if (!cancelled) void consumeGatewayEvents();
+    }, 500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [submitCityInteractionEvent]);
 
   const handleRadarChat = useCallback((text: string) => {
     const id = createLiveCityEventId("radar-chat");
@@ -62,8 +116,8 @@ export function LiveDirector() {
       platform: "radar-chat",
       receivedAt: Date.now()
     });
-    // An @city command is a visual interaction only. Keep it out of the
-    // avatar dialogue queue so the map/card is the complete response.
+    // The city card is visual first. Its short engagement line is emitted
+    // only after the matching card is actually ready.
     if (handledAsCity) return "city";
     setChatRequest({ id, text });
     return "host";
@@ -71,6 +125,28 @@ export function LiveDirector() {
 
   const handleCityAttentionChange = useCallback((attention: CityAttention | null) => {
     setCityAttention(attention);
+  }, []);
+
+  const handleCityBriefingReady = useCallback((request: CityInteractionRequest, briefing: CityBriefing) => {
+    if (cityEngagementIdsRef.current.has(request.id)) return;
+    const directReply = buildCityReportEngagementReply(request, briefing.city.name);
+    if (!directReply) return;
+
+    cityEngagementIdsRef.current.add(request.id);
+    // Keep the runtime dedupe set bounded during long broadcasts.
+    if (cityEngagementIdsRef.current.size > 256) {
+      const oldestId = cityEngagementIdsRef.current.values().next().value;
+      if (oldestId) cityEngagementIdsRef.current.delete(oldestId);
+    }
+    setChatRequest({
+      id: `city-engagement:${request.id}`,
+      // Keep the fallback payload safe too: it must be a final host line, not
+      // a long instruction that a model could reinterpret as a new topic.
+      text: directReply,
+      directReply,
+      viewerId: request.viewerId ?? undefined,
+      viewerName: request.viewerName ?? undefined
+    });
   }, []);
 
   useEffect(() => {
@@ -188,6 +264,7 @@ export function LiveDirector() {
             interaction={cityInteractions.active}
             anchor={cityAttentionAnchor}
             onAttentionChange={handleCityAttentionChange}
+            onBriefingReady={handleCityBriefingReady}
             onComplete={cityInteractions.completeActive}
           />
           <LiveCityTargetLock attention={cityAttention} anchor={cityAttentionAnchor} />

@@ -1,0 +1,23 @@
+{
+  "color": {
+    "cabinetInk": "#090A0F",
+    "cabinetDeep": "#05060A",
+    "lacquerViolet": "#1B1928",
+    "specimenResin": "#4D4864",
+    "archivePaper": "#E8E0CA",
+    "paperDim": "#B9B19F",
+    "oxidizedBrass": "#A88D60",
+    "echoLilac": "#9D97C8",
+    "sealVermilion": "#C84D40"
+  },
+  "type": {
+    "institution": "SimSun, Songti SC, serif",
+    "warning": "Microsoft YaHei UI, PingFang SC, sans-serif",
+    "body": "DengXian, Microsoft YaHei UI, sans-serif",
+    "utility": "Bahnschrift SemiCondensed, Arial Narrow, monospace"
+  },
+  "spacing": { "cabinet": "14px 26px 28px 16px", "moduleGap": "16px", "tightGap": "4px" },
+  "panel": { "desktopRail": "360px–430px", "specimenArt": "188px–216px", "minimumControl": "34px" },
+  "motion": { "caseCycle": "2500ms linear", "resinDrift": "11000ms ease-in-out", "interaction": "140ms" },
+  "elevation": { "specimen": "0 18px 30px rgba(0,0,0,.46)", "voucher": "0 4px 9px rgba(0,0,0,.22)" }
+}
