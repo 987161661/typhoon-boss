@@ -11,6 +11,7 @@ import { useLiveCityInteractionQueue } from "./useLiveCityInteractionQueue";
 import { useNationalSituation } from "./useNationalSituation";
 import type { CityBriefing } from "@/lib/cityBriefingData";
 import {
+  buildCityReportEngagementPrompt,
   buildCityReportEngagementReply,
   createLiveCityEventId,
   isHostLiveComment,
@@ -144,8 +145,9 @@ export function LiveDirector() {
 
   const handleCityBriefingReady = useCallback((request: CityInteractionRequest, briefing: CityBriefing) => {
     if (cityEngagementIdsRef.current.has(request.id)) return;
+    const eventPrompt = buildCityReportEngagementPrompt(request, briefing.city.name);
     const directReply = buildCityReportEngagementReply(request, briefing.city.name);
-    if (!directReply) return;
+    if (!eventPrompt || !directReply) return;
 
     cityEngagementIdsRef.current.add(request.id);
     // Keep the runtime dedupe set bounded during long broadcasts.
@@ -157,7 +159,7 @@ export function LiveDirector() {
       id: `city-engagement:${request.id}`,
       // Keep the fallback payload safe too: it must be a final host line, not
       // a long instruction that a model could reinterpret as a new topic.
-      text: directReply,
+      text: eventPrompt,
       directReply,
       viewerId: request.viewerId ?? undefined,
       viewerName: request.viewerName ?? undefined

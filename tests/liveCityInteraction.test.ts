@@ -10,7 +10,7 @@ import {
   viewerIdentityKey
 } from "../lib/liveCityInteraction";
 
-test("successful city reports create a viewer-specific engagement intent", () => {
+test("successful city reports create a viewer-specific result event without a CTA trigger", () => {
   const prompt = buildCityReportEngagementPrompt({
     cityQuery: "伊宁市",
     viewerName: "小雨",
@@ -21,31 +21,33 @@ test("successful city reports create a viewer-specific engagement intent", () =>
   assert.match(prompt, /<city_report_engagement>/);
   assert.match(prompt, /@小雨/);
   assert.match(prompt, /已展开城市：伊宁/);
-  assert.match(prompt, /自然邀请对方关注主播/);
+  assert.match(prompt, /不授权索取关注、点赞、礼物或其他支持/);
+  assert.match(prompt, /不能由本事件触发/);
+  assert.doesNotMatch(prompt, /自然邀请对方关注主播/);
+  assert.doesNotMatch(prompt, /关注依据/);
   assert.match(prompt, /不要复述天气、风力、预警或战报数据/);
   assert.ok(prompt.length <= 500, "avatar bridge rejects prompts longer than 500 characters");
 });
 
-test("city engagement has a deterministic follow-up line for playback", () => {
+test("city engagement has a neutral deterministic acknowledgement for legacy playback", () => {
   assert.equal(
     buildCityReportEngagementReply({
       cityQuery: "伊犁",
       viewerName: "小雨",
       followEvidence: "unknown"
     }, "伊犁"),
-    "@小雨，伊犁的战报已经展开了。觉得有用就点个关注，之后想看哪个城市，继续 @ 我就行。"
+    "@小雨，伊犁的战报已经展开了。之后想看哪个城市，继续 @ 我就行。"
   );
-  assert.match(
-    buildCityReportEngagementReply({
+  const observedReply = buildCityReportEngagementReply({
       cityQuery: "伊犁",
       viewerName: null,
       followEvidence: "observed"
-    }, "伊犁") ?? "",
-    /谢谢关注/
-  );
+    }, "伊犁") ?? "";
+  assert.doesNotMatch(observedReply, /关注|点赞|礼物|支持/);
+  assert.match(observedReply, /伊犁的战报已经展开/);
 });
 
-test("city engagement respects verified follow evidence and requires a real viewer name", () => {
+test("city engagement ignores follow evidence and requires a real viewer name", () => {
   const prompt = buildCityReportEngagementPrompt({
     cityQuery: "上海",
     viewerName: "@阿海",
@@ -55,7 +57,7 @@ test("city engagement respects verified follow evidence and requires a real view
   assert.ok(prompt);
   assert.match(prompt, /@阿海/);
   assert.doesNotMatch(prompt, /@@阿海/);
-  assert.match(prompt, /不要再次索取关注/);
+  assert.doesNotMatch(prompt, /平台已确认|当前未知|关注依据/);
   assert.equal(buildCityReportEngagementPrompt({
     cityQuery: "上海",
     viewerName: null,
