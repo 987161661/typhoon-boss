@@ -13,12 +13,10 @@ export type ControlConsoleSettings = {
   };
   dataSources: {
     typhoonTrackBaseUrl: string;
-    satelliteBaseUrl: string;
-    weatherProvider: "open-meteo" | "met-norway";
   };
   automation: { evolutionEnabled: boolean; intervalMinutes: number; retryCount: number };
   map: { defaultTheme: "night-radar" | "archive-command"; defaultLayers: { satellite: boolean; impact: boolean; wind: boolean }; performanceMode: "full" | "reduced" };
-  reliability: { requestTimeoutSeconds: number; retainLastGoodDataHours: number; auditLogEnabled: boolean };
+  reliability: { requestTimeoutSeconds: number; retainLastGoodDataHours: number };
   digitalHostUrl: string;
   updatedAt?: string;
 };
@@ -32,13 +30,11 @@ export function defaultControlConsoleSettings(): ControlConsoleSettings {
       documentAgent: { endpoint: environment("MINIMAX_API_BASE_URL", "https://api.minimaxi.com/v1/chat/completions"), model: environment("MINIMAX_MODEL", "MiniMax-M3"), protocol: "openai-compatible", timeoutSeconds: 60 }
     },
     dataSources: {
-      typhoonTrackBaseUrl: environment("TYPHOON_TRACK_API_BASE_URL", "https://typhoon.slt.zj.gov.cn/Api"),
-      satelliteBaseUrl: environment("SATELLITE_BASE_URL", "https://www.ospo.noaa.gov"),
-      weatherProvider: environment("WEATHER_PROVIDER") === "met-norway" ? "met-norway" : "open-meteo"
+      typhoonTrackBaseUrl: environment("TYPHOON_TRACK_API_BASE_URL", "https://typhoon.slt.zj.gov.cn/Api")
     },
     automation: { evolutionEnabled: true, intervalMinutes: 30, retryCount: 1 },
     map: { defaultTheme: "night-radar", defaultLayers: { satellite: true, impact: true, wind: true }, performanceMode: "full" },
-    reliability: { requestTimeoutSeconds: 12, retainLastGoodDataHours: 24, auditLogEnabled: true },
+    reliability: { requestTimeoutSeconds: 12, retainLastGoodDataHours: 24 },
     digitalHostUrl: environment("LINGLAN_HOST_URL", "http://127.0.0.1:5173")
   };
 }

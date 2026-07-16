@@ -8,7 +8,7 @@ export const revalidate = 0;
 const DEFAULT_HOST_URL = "http://127.0.0.1:5173";
 
 export async function POST(request: Request) {
-  let payload: { requestId?: unknown; text?: unknown };
+  let payload: { requestId?: unknown; text?: unknown; directReply?: unknown; viewerId?: unknown; viewerName?: unknown };
   try {
     payload = await request.json();
   } catch {
@@ -16,7 +16,10 @@ export async function POST(request: Request) {
   }
   const requestId = typeof payload.requestId === "string" ? payload.requestId.trim() : "";
   const text = typeof payload.text === "string" ? payload.text.trim() : "";
-  if (!requestId || !text || text.length > 500) {
+  const directReply = typeof payload.directReply === "string" ? payload.directReply.trim() : "";
+  const viewerId = typeof payload.viewerId === "string" && payload.viewerId.trim() ? payload.viewerId.trim() : "001号人类";
+  const viewerName = typeof payload.viewerName === "string" && payload.viewerName.trim() ? payload.viewerName.trim() : viewerId;
+  if (!requestId || !text || text.length > 500 || directReply.length > 500) {
     await appendDigitalHostServiceLog({ event: "bridge_fallback_failed", channel: "http-fallback", error: "invalid_chat_request" });
     return NextResponse.json({ error: "invalid_chat_request" }, { status: 400 });
   }
@@ -33,7 +36,7 @@ export async function POST(request: Request) {
     const response = await fetch(`${hostUrl.replace(/\/$/, "")}/api/external-chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ requestId, text, requestedAt: Date.now() }),
+      body: JSON.stringify({ requestId, text, directReply, viewerId, viewerName, requestedAt: Date.now() }),
       cache: "no-store",
       signal: AbortSignal.timeout(2_000)
     });

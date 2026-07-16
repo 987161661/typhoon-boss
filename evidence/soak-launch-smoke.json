@@ -1,0 +1,181 @@
+{
+  "schemaVersion": 1,
+  "kind": "typhoon-boss-radar-soak-stability",
+  "config": {
+    "selfTest": false,
+    "baseUrl": "http://127.0.0.1:3038",
+    "port": 3038,
+    "durationSeconds": 1,
+    "sampleIntervalSeconds": 1,
+    "nationalIntervalSeconds": 1,
+    "radarIntervalSeconds": 1,
+    "requestTimeoutMs": 8000,
+    "outputPrefix": "D:\\typhoon boss radar\\evidence\\soak-launch-smoke"
+  },
+  "summary": {
+    "startedAt": "2026-07-15T07:40:28.026Z",
+    "finishedAt": "2026-07-15T07:40:29.149Z",
+    "interrupted": false,
+    "plannedDurationSeconds": 1,
+    "actualDurationSeconds": 1,
+    "sampleCount": 1,
+    "sampleSchedule": {
+      "intervalSeconds": 1,
+      "overrunCount": 1,
+      "peakOverrunMs": 123
+    },
+    "process": {
+      "distinctListenerPids": [
+        38804
+      ],
+      "pidChangeCount": 0,
+      "missingSampleCount": 0,
+      "maximumConsecutiveMissingSamples": 0,
+      "workingSetBytes": {
+        "first": 186433536,
+        "last": 186433536,
+        "peak": 186433536,
+        "delta": 0,
+        "slopePerMinute": 0,
+        "nonDecreasingRatio": 0,
+        "continuousAbnormalGrowth": false
+      },
+      "privateBytes": {
+        "first": 203866112,
+        "last": 203866112,
+        "peak": 203866112,
+        "delta": 0,
+        "slopePerMinute": 0,
+        "nonDecreasingRatio": 0,
+        "continuousAbnormalGrowth": false
+      },
+      "handles": {
+        "first": 353,
+        "last": 353,
+        "peak": 353,
+        "delta": 0,
+        "slopePerMinute": 0,
+        "nonDecreasingRatio": 0,
+        "continuousAbnormalGrowth": false
+      },
+      "threads": {
+        "first": 47,
+        "last": 47,
+        "peak": 47,
+        "delta": 0,
+        "slopePerMinute": 0,
+        "nonDecreasingRatio": 0,
+        "continuousAbnormalGrowth": false
+      }
+    },
+    "endpoints": {
+      "national": {
+        "requestCount": 1,
+        "httpRequestCount": 2,
+        "status200Count": 1,
+        "status304Count": 0,
+        "conditional304Count": 1,
+        "conditionalRefresh200Count": 0,
+        "errorCount": 0,
+        "schemaErrorCount": 0,
+        "etags": [
+          "\"0cb49e0cb73e817e4f604b965dc829884fbe4c25af6bdc043dc9faa3b23bb185\""
+        ],
+        "latencyMs": {
+          "average": 52,
+          "peak": 52,
+          "p95": 52
+        },
+        "cadence": {
+          "configuredIntervalSeconds": 1,
+          "minimumObservedGapSeconds": null,
+          "maximumObservedGapSeconds": null,
+          "earlyRequestViolations": 0,
+          "lateRequestViolations": 0
+        },
+        "maximumConsecutiveErrors": 0
+      },
+      "radar": {
+        "requestCount": 1,
+        "httpRequestCount": 2,
+        "status200Count": 1,
+        "status304Count": 0,
+        "conditional304Count": 1,
+        "conditionalRefresh200Count": 0,
+        "errorCount": 0,
+        "schemaErrorCount": 0,
+        "etags": [
+          "\"67ca5d439274d179fed5f5bb80164d2a50ebffdd\""
+        ],
+        "latencyMs": {
+          "average": 3,
+          "peak": 3,
+          "p95": 3
+        },
+        "cadence": {
+          "configuredIntervalSeconds": 1,
+          "minimumObservedGapSeconds": null,
+          "maximumObservedGapSeconds": null,
+          "earlyRequestViolations": 0,
+          "lateRequestViolations": 0
+        },
+        "maximumConsecutiveErrors": 0
+      }
+    },
+    "hardFailures": [],
+    "passed": true
+  },
+  "samples": [
+    {
+      "sample_index": 0,
+      "sampled_at": "2026-07-15T07:40:28.027Z",
+      "elapsed_seconds": 0,
+      "sample_elapsed_ms": 1123,
+      "listener_pid": 38804,
+      "process_name": "node",
+      "process_started_at": "2026-07-15T07:35:23.1982211Z",
+      "process_command_line": "\"node\"   \"D:\\typhoon boss radar\\node_modules\\.bin\\\\..\\next\\dist\\bin\\next\" start -H 127.0.0.1 -p 3038",
+      "working_set_bytes": 186433536,
+      "private_bytes": 203866112,
+      "handle_count": 353,
+      "thread_count": 47,
+      "process_error": null,
+      "national_requested": true,
+      "national_observed_at": "2026-07-15T07:40:29.086Z",
+      "national_status": 200,
+      "national_latency_ms": 52,
+      "national_etag": "\"0cb49e0cb73e817e4f604b965dc829884fbe4c25af6bdc043dc9faa3b23bb185\"",
+      "national_conditional_request": false,
+      "national_conditional_status": 304,
+      "national_conditional_304": true,
+      "national_conditional_refresh_200": false,
+      "national_schema_version": 1,
+      "national_event_count": 1304,
+      "national_warning_count": 1303,
+      "national_storm_count": 0,
+      "national_source_health_count": 6,
+      "national_radar_frame_count": 12,
+      "national_satellite_frame_count": 12,
+      "national_product_count": 26,
+      "national_city_rank_count": null,
+      "national_error": null,
+      "radar_requested": true,
+      "radar_observed_at": "2026-07-15T07:40:29.146Z",
+      "radar_status": 200,
+      "radar_latency_ms": 3,
+      "radar_etag": "\"67ca5d439274d179fed5f5bb80164d2a50ebffdd\"",
+      "radar_conditional_request": false,
+      "radar_conditional_status": 304,
+      "radar_conditional_304": true,
+      "radar_conditional_refresh_200": false,
+      "radar_active_storm_id": null,
+      "radar_storm_count": 0,
+      "radar_boss_count": 0,
+      "radar_warning_count": 0,
+      "radar_wind_vector_count": null,
+      "radar_error": null,
+      "request_in_flight_peak": 1,
+      "schedule_overrun_ms": 123
+    }
+  ]
+}

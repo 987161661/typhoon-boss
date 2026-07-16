@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="80" viewBox="0 0 400 80" fill="none" shape-rendering="geometricPrecision" aria-hidden="true">
+  <g id="source-health-latest"><circle cx="40" cy="40" r="19" fill="none" stroke="#00D8FF" stroke-width="3"/><path d="M 30 40 L 37 47 L 51 30" fill="none" stroke="#00D8FF" stroke-width="4" stroke-linecap="square"/></g>
+  <g id="source-health-delayed"><polygon points="120,19 141,40 120,61 99,40" fill="none" stroke="#FFB000" stroke-width="3"/><line x1="120" y1="30" x2="120" y2="42" stroke="#FFB000" stroke-width="4"/><line x1="120" y1="42" x2="130" y2="48" stroke="#FFB000" stroke-width="4"/></g>
+  <g id="source-health-expired"><polygon points="200,18 219,29 219,51 200,62 181,51 181,29" fill="none" stroke="#ECFBFF" stroke-width="3"/><line x1="190" y1="30" x2="210" y2="50" stroke="#ECFBFF" stroke-width="3"/><line x1="210" y1="30" x2="190" y2="50" stroke="#ECFBFF" stroke-width="3"/></g>
+  <g id="source-health-unavailable"><polygon points="280,17 303,60 257,60" fill="none" stroke="#ECFBFF" stroke-opacity="0.64" stroke-width="3"/><line x1="264" y1="54" x2="296" y2="26" stroke="#ECFBFF" stroke-opacity="0.64" stroke-width="4"/></g>
+  <g id="source-health-no-record"><rect x="340" y="20" width="40" height="40" fill="none" stroke="#ECFBFF" stroke-opacity="0.4" stroke-width="3"/><line x1="350" y1="40" x2="370" y2="40" stroke="#ECFBFF" stroke-opacity="0.4" stroke-width="3" stroke-dasharray="3 5"/></g>
+</svg>

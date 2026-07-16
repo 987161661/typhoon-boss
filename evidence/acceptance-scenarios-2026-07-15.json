@@ -1,0 +1,50 @@
+{
+  "capturedAt": "2026-07-15T11:47:00+08:00",
+  "surface": "real Next.js client components on guarded development fixtures",
+  "viewport": "1280x720",
+  "fixtureGuard": {
+    "requiredQuery": "acceptanceScenario",
+    "requiredServerSwitch": "WEATHER_ACCEPTANCE_FIXTURES=1",
+    "productionRejected": true,
+    "defaultUrlsUnchanged": true,
+    "actual3038QueryIgnored": true
+  },
+  "scenarios": [
+    {
+      "id": "no-storm",
+      "result": "pass",
+      "evidence": ["0 same-screen targets", "standby copy", "no-event is not no-risk boundary"],
+      "screenshot": "screenshots/acceptance-no-storm-1280x720.png"
+    },
+    {
+      "id": "single-storm",
+      "result": "pass",
+      "evidence": ["one stable target", "selection persists acceptance-typhoon-01", "Boss intelligence opens"],
+      "screenshot": "screenshots/acceptance-single-storm-1280x720.png"
+    },
+    {
+      "id": "multi-storm",
+      "result": "pass",
+      "evidence": ["two centers and paths", "next selects acceptance-typhoon-02", "previous returns acceptance-typhoon-01", "URL and detail identity remain aligned"],
+      "screenshot": "screenshots/acceptance-multi-storm-1280x720.png"
+    },
+    {
+      "id": "official-red",
+      "result": "pass",
+      "evidence": ["red official risk", "official fact boundary", "deterministic Anhui/Hefei attribution", "red count equals one"],
+      "screenshot": "screenshots/acceptance-official-red-1280x720.png"
+    },
+    {
+      "id": "ordinary-city",
+      "result": "pass",
+      "evidence": ["sent @Hefei through the live chat form", "ordinary-weather card", "no fabricated official warning", "daily actions retained"],
+      "screenshot": "screenshots/acceptance-ordinary-city-live-1280x720.png"
+    },
+    {
+      "id": "source-failure",
+      "result": "pass",
+      "evidence": ["last-good red warning retained", "source marked delayed", "failure not rewritten as no risk"],
+      "screenshot": "screenshots/acceptance-source-failure-1280x720.png"
+    }
+  ]
+}

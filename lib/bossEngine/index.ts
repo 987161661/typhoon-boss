@@ -1,9 +1,10 @@
 import type { Storm, TrackPoint } from "@/lib/types";
-import { findProvinceAtCoordinate, getProvinceReferencePoints } from "@/lib/provinceGeo";
+import { findProvinceAtCoordinate, getProvinceBoundaryCoordinates, getProvinceReferencePoints } from "@/lib/provinceGeo";
+import { distanceBetweenKm, distanceToPathKm, parseBeijingTime, windForceFromSpeed } from "@/lib/meteorology";
 import { getAhiEvidenceForStorm, type AhiEvidenceSummary } from "./ahiEvidence";
 import { sampleBossEnvironment, type EnvironmentFeatures } from "./environmentSampler";
 import { getHimawariProductsForStorm, type SatelliteProductsSummary } from "./satelliteProducts";
-import { getStormStructureIntelligence } from "./structureIntelligence";
+import { getPersistedStormStructure, getStormStructureIntelligence } from "./structureIntelligence";
 import type {
   BossArchetype,
   BossEvent,
@@ -20,7 +21,7 @@ const SOURCE_POLICY = {
   canonicalAuthority: "权威口径以中央气象台 / 国家气象中心和属地气象应急部门为准",
   machineReadableTrackSource: "浙江省水利厅公开台风路径接口",
   regionalWarningAuthority: "国家海洋预报台 / 属地气象台与应急部门",
-  structureAnalysisSource: "JTWC结构分析；JAXA / NOAA微波交叉验证待接入"
+  structureAnalysisSource: "JTWC 推理/警报（NRL ATCF 镜像回退）；JAXA / NOAA 微波交叉验证待接入"
 };
 
 export async function buildBossProfiles(storms: Storm[]): Promise<BossProfile[]> {
@@ -30,11 +31,15 @@ export async function buildBossProfiles(storms: Storm[]): Promise<BossProfile[]>
 export async function buildBossProfile(storm: Storm): Promise<BossProfile> {
   const intensity = buildIntensityFeatures(storm);
   const landfall = buildLandfallFeatures(storm);
+  const retainedStructure = await getPersistedStormStructure(storm.id);
   const [environment, satellite, ahi, structure] = await Promise.all([
-    sampleBossEnvironment(storm),
-    getHimawariProductsForStorm(storm),
-    getAhiEvidenceForStorm(storm),
-    getStormStructureIntelligence(storm)
+    boundedEvidence((signal) => sampleBossEnvironment(storm, signal), unavailableEnvironment("环境证据超过快速生成预算。")),
+    boundedEvidence((signal) => getHimawariProductsForStorm(storm, signal), unavailableSatellite("卫星产品超过快速生成预算。")),
+    boundedEvidence((signal) => getAhiEvidenceForStorm(storm, signal), unavailableAhi("AHI 元数据超过快速生成预算。")),
+    boundedEvidence(
+      () => getStormStructureIntelligence(storm),
+      retainedStructure ?? unavailableStructure(storm, "JTWC structure request exceeded the fast response budget.")
+    )
   ]);
   const archetype = chooseArchetype(storm, intensity, landfall, environment, structure);
   const phase = choosePhase(storm, intensity, landfall, structure);
@@ -116,22 +121,25 @@ function buildIntensityFeatures(storm: Storm) {
 }
 
 function buildLandfallFeatures(storm: Storm) {
+  const futureForecast = futureForecastPoints(storm.forecast);
   const path = [
     { ...storm.position, time: storm.updatedAt, isForecast: false },
-    ...storm.forecast.map((point) => ({ lon: point.lon, lat: point.lat, time: point.time, isForecast: true }))
+    ...futureForecast.map((point) => ({ lon: point.lon, lat: point.lat, time: point.time, isForecast: true }))
   ];
   const watchPoints = getProvinceReferencePoints({ coastalOnly: true });
-  const distances = watchPoints.map((watch) => ({
-    name: watch.shortName,
-    distanceKm: Math.min(...path.map((point) => distanceBetweenKm(point, { lon: watch.center[0], lat: watch.center[1] })))
-  })).sort((a, b) => a.distanceKm - b.distanceKm);
+  const distances = watchPoints.map((watch) => {
+    const boundary = getProvinceBoundaryCoordinates(watch.shortName);
+    const targets = boundary.length ? boundary : [{ lon: watch.center[0], lat: watch.center[1] }];
+    const distanceKm = Math.min(...targets.map((target) => distanceToPathKm(target, path) ?? Number.POSITIVE_INFINITY));
+    return { name: watch.shortName, distanceKm };
+  }).sort((a, b) => a.distanceKm - b.distanceKm);
   const nearest = distances[0] ?? null;
   const influenceRadius = Math.max(storm.windRadiiKm.r7 || 0, 260);
   const currentProvince = findProvinceAtCoordinate(storm.position, { coastalOnly: true });
   let previousProvince = currentProvince;
   let forecastLandfall: { province: string; time: string } | null = null;
 
-  for (const point of storm.forecast) {
+  for (const point of futureForecast) {
     const province = findProvinceAtCoordinate(point, { coastalOnly: true });
     if (!previousProvince && province) {
       forecastLandfall = { province: province.shortName, time: point.time };
@@ -201,8 +209,10 @@ function buildLandfallScenarios(storm: Storm, landfall: ReturnType<typeof buildL
       : [];
   const coastalProvinces = getProvinceReferencePoints({ coastalOnly: true });
   const agencyTotal = Math.max(1, sourceScenarios.length);
+  const nowMs = Date.now();
   const aggregates = new Map<string, {
     province: string;
+    pathRelation: "current-position" | "future-entry" | "nearby-corridor";
     score: number;
     timeWeightedMs: number;
     timeWeight: number;
@@ -217,17 +227,20 @@ function buildLandfallScenarios(storm: Storm, landfall: ReturnType<typeof buildL
     score,
     point,
     agencyCode,
-    direct
+    direct,
+    pathRelation
   }: {
     province: string;
     score: number;
     point?: TrackPoint | null;
     agencyCode?: string | null;
     direct?: boolean;
+    pathRelation: "current-position" | "future-entry" | "nearby-corridor";
   }) => {
     if (!Number.isFinite(score) || score <= 0) return;
     const current = aggregates.get(province) ?? {
       province,
+      pathRelation,
       score: 0,
       timeWeightedMs: 0,
       timeWeight: 0,
@@ -237,6 +250,9 @@ function buildLandfallScenarios(storm: Storm, landfall: ReturnType<typeof buildL
       agencies: new Set<string>()
     };
     current.score += score;
+    if (pathRelation === "current-position" || pathRelation === "future-entry") {
+      current.pathRelation = pathRelation;
+    }
     if (agencyCode) current.agencies.add(agencyCode);
     if (direct) current.directHits += 1;
     if (point) {
@@ -259,12 +275,13 @@ function buildLandfallScenarios(storm: Storm, landfall: ReturnType<typeof buildL
       score: 4,
       point: { ...storm.position, time: storm.updatedAt, wind: storm.maxWind, pressure: storm.minPressure },
       agencyCode: "OBS",
-      direct: true
+      direct: true,
+      pathRelation: "current-position"
     });
   }
 
   sourceScenarios.forEach((scenario) => {
-    const points = scenario.points.filter((point) => Number.isFinite(point.lon) && Number.isFinite(point.lat));
+    const points = futureForecastPoints(scenario.points, nowMs).filter((point) => Number.isFinite(point.lon) && Number.isFinite(point.lat));
     if (points.length === 0) return;
     const directPoint = points.find((point) => findProvinceAtCoordinate(point, { coastalOnly: true }));
     const scenarioWeight = scenario.isPrimary ? 1.35 : 1;
@@ -272,13 +289,13 @@ function buildLandfallScenarios(storm: Storm, landfall: ReturnType<typeof buildL
     if (directPoint) {
       const province = findProvinceAtCoordinate(directPoint, { coastalOnly: true });
       if (!province) return;
-      const pointConfidence = clamp((directPoint.probability || 65) / 100, 0.4, 1);
       addCandidate({
         province: province.shortName,
-        score: scenarioWeight * pointConfidence,
+        score: scenarioWeight,
         point: directPoint,
         agencyCode: scenario.agencyCode,
-        direct: true
+        direct: true,
+        pathRelation: "future-entry"
       });
       return;
     }
@@ -299,24 +316,27 @@ function buildLandfallScenarios(storm: Storm, landfall: ReturnType<typeof buildL
       score: scenarioWeight * Math.exp(-nearest.distanceKm / 300) * 0.62,
       point: nearest.point,
       agencyCode: scenario.agencyCode,
-      direct: false
+      direct: false,
+      pathRelation: "nearby-corridor"
     });
   });
 
   landfall.provinceDistances.slice(0, 5).forEach((candidate, index) => {
     if (aggregates.size >= 3 && aggregates.has(candidate.name)) return;
     const province = coastalProvinces.find((item) => item.shortName === candidate.name);
-    const closestPoint = province && storm.forecast.length > 0
-      ? storm.forecast.reduce((best, point) => {
+    const forecast = futureForecastPoints(storm.forecast, nowMs);
+    const closestPoint = province && forecast.length > 0
+      ? forecast.reduce((best, point) => {
           const distanceKm = distanceBetweenKm(point, { lon: province.center[0], lat: province.center[1] });
           return distanceKm < best.distanceKm ? { point, distanceKm } : best;
         }, { point: storm.forecast[0], distanceKm: Number.POSITIVE_INFINITY }).point
-      : storm.forecast[0] ?? null;
+      : forecast[0] ?? null;
     addCandidate({
       province: candidate.name,
       score: Math.exp(-candidate.distanceKm / 340) * (0.24 - index * 0.025),
       point: closestPoint,
-      direct: false
+      direct: false,
+      pathRelation: "nearby-corridor"
     });
   });
 
@@ -326,21 +346,25 @@ function buildLandfallScenarios(storm: Storm, landfall: ReturnType<typeof buildL
     .slice(0, 3);
   const totalScore = ranked.reduce((sum, item) => sum + item.calibratedScore, 0);
   if (ranked.length === 0 || totalScore <= 0) return [];
-  const probabilities = ranked.map((item) => Math.max(1, Math.round((item.calibratedScore / totalScore) * 100)));
-  probabilities[0] += 100 - probabilities.reduce((sum, value) => sum + value, 0);
+  const relativeWeights = ranked.map((item) => Math.max(1, Math.round((item.calibratedScore / totalScore) * 100)));
+  relativeWeights[0] += 100 - relativeWeights.reduce((sum, value) => sum + value, 0);
+  const generatedAt = new Date().toISOString();
 
   return ranked.map((item, index) => {
     const windSpeedMs = item.windWeight > 0 ? Math.round(item.windWeighted / item.windWeight) : null;
     const estimatedTimeMs = item.timeWeight > 0 ? item.timeWeightedMs / item.timeWeight : null;
     return {
       province: item.province,
-      probability: probabilities[index],
+      pathRelation: item.pathRelation,
+      relativeWeight: relativeWeights[index],
       estimatedAt: estimatedTimeMs === null ? null : new Date(estimatedTimeMs).toISOString(),
       windSpeedMs,
       windForceLevel: windSpeedMs === null ? "--" : windForceFromSpeed(windSpeedMs),
       agencySupport: item.agencies.size,
       agencyTotal,
       evidenceLevel: "inferred" as const,
+      generatedAt,
+      limitations: "相对权重仅用于排列路径候选，不是登陆概率，也不替代官方预报。",
       basis: item.directHits > 0
         ? `${item.agencies.size}/${agencyTotal} 家机构路径直接进入该省行政范围。`
         : "根据多机构路径走廊与沿海省份邻近度推算。"
@@ -357,7 +381,7 @@ function chooseArchetype(
 ): BossArchetype {
   const scores: Record<BossArchetype, number> = {
     "wind-core": scoreWindCore(storm),
-    "eyewall-shifter": structure.state === "unknown" || structure.state === "stable-eye" ? 0 : 10.5,
+    "eyewall-shifter": structure.state === "unknown" || structure.state === "stable-eye" || structure.state === "overland-dissipation" ? 0 : 10.5,
     "rain-bulk": scoreRainBulk(environment),
     "giant-radius": clamp((storm.windRadiiKm.r7 || 0) / 70, 0, 9),
     "track-trickster": storm.forecast.length >= 7 ? 3.2 : 1.4,
@@ -377,6 +401,7 @@ function choosePhase(
   structure: BossStructureSummary
 ): BossPhase {
   if (isArchived(storm)) return "archived";
+  if (structure.state === "overland-dissipation") return "weakening";
   if (structure.state !== "unknown" && structure.state !== "stable-eye") return "restructuring-hint";
   if (landfall.isLandfallPressure) return "landfall-pressure";
   if (intensity.isRapidIntensifying) return "intensifying";
@@ -438,7 +463,7 @@ function chooseSkills(candidates: Array<BossSkill | null>) {
 }
 
 function eyewallTransformationSkill(structure: BossStructureSummary): BossSkill | null {
-  if (structure.state === "unknown" || structure.state === "stable-eye") return null;
+  if (structure.state === "unknown" || structure.state === "stable-eye" || structure.state === "overland-dissipation") return null;
   const severityByState: Partial<Record<BossStructureSummary["state"], number>> = {
     "secondary-ring-forming": 7,
     "replacement-active": 9,
@@ -733,7 +758,8 @@ function buildEvents(
       "replacement-active": "眼壁置换进行中",
       "replacement-stalled": "眼壁蜕变受阻",
       "replacement-completed": "外环继位完成",
-      "replacement-collapsed": "置换结构崩解"
+      "replacement-collapsed": "置换结构崩解",
+      "overland-dissipation": "登陆后内核衰减"
     };
     events.push({
       id: `event-structure-${structure.bulletinId ?? structure.observedAt}-${structure.state}`,
@@ -946,15 +972,15 @@ function scoreRainBulk(environment: EnvironmentFeatures) {
 
 function findPreviousPoint(points: TrackPoint[], latest: TrackPoint | undefined, hours: number) {
   if (!latest) return null;
-  const latestTime = new Date(latest.time.replace(" ", "T")).getTime();
-  if (!Number.isFinite(latestTime)) return null;
+  const latestTime = parseBeijingTime(latest.time);
+  if (latestTime === null) return null;
   return (
     points
       .slice()
       .reverse()
       .find((point) => {
-        const pointTime = new Date(point.time.replace(" ", "T")).getTime();
-        return Number.isFinite(pointTime) && (latestTime - pointTime) / 36e5 >= hours;
+        const pointTime = parseBeijingTime(point.time);
+        return pointTime !== null && (latestTime - pointTime) / 36e5 >= hours;
       }) ?? null
   );
 }
@@ -1031,29 +1057,41 @@ function formatNumber(value: number | null, digits: number) {
   return value.toFixed(digits);
 }
 
-function distanceBetweenKm(a: { lon: number; lat: number }, b: { lon: number; lat: number }) {
-  const earthRadiusKm = 6371;
-  const dLat = degToRad(b.lat - a.lat);
-  const dLon = degToRad(b.lon - a.lon);
-  const lat1 = degToRad(a.lat);
-  const lat2 = degToRad(b.lat);
-  const h = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
-  return 2 * earthRadiusKm * Math.asin(Math.sqrt(h));
-}
-
 function parseStormTime(value: string) {
-  const time = new Date(value.includes("T") ? value : value.replace(" ", "T")).getTime();
-  return Number.isFinite(time) ? time : null;
+  return parseBeijingTime(value);
 }
 
-function windForceFromSpeed(speed: number) {
-  const thresholds = [0.3, 1.6, 3.4, 5.5, 8, 10.8, 13.9, 17.2, 20.8, 24.5, 28.5, 32.7, 37, 41.5, 46.2, 51, 56.1, 61.3];
-  const level = thresholds.findIndex((threshold) => speed < threshold);
-  return level === -1 ? "17+" : String(level);
+/** Only future forecast positions may support a future-impact broadcast. */
+export function futureForecastPoints(points: TrackPoint[], nowMs = Date.now()) {
+  return points.filter((point) => {
+    const pointTime = parseStormTime(point.time);
+    return pointTime !== null && pointTime >= nowMs;
+  });
 }
 
-function degToRad(deg: number) {
-  return (deg * Math.PI) / 180;
+function boundedEvidence<T>(start: (signal: AbortSignal) => Promise<T>, fallback: T, timeoutMs = 1_600): Promise<T> {
+  return new Promise((resolve) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => { controller.abort(); resolve(fallback); }, timeoutMs);
+    const request = start(controller.signal);
+    request.then((value) => { clearTimeout(timer); resolve(value); }, () => { clearTimeout(timer); resolve(fallback); });
+  });
+}
+
+function unavailableEnvironment(reason: string): EnvironmentFeatures {
+  return { status: "unavailable", source: "Open-Meteo Forecast API", attribution: "Open-Meteo weather forecast model blend", updatedAt: new Date().toISOString(), sampleCount: 0, maxTcwvKgM2: null, meanTcwvKgM2: null, maxPrecipMm: null, meanHumidityPct: null, meanCloudCoverPct: null, maxCapeJkg: null, maxWindGustMps: null, isMoistureLoaded: false, isRainThreat: false, isConvective: false, samples: [], warnings: [reason] };
+}
+
+function unavailableSatellite(reason: string): SatelliteProductsSummary {
+  return { source: "jma-himawari", status: "unavailable", updatedAt: new Date().toISOString(), area: "se2", availableProducts: [], products: [], fallbackAreas: ["r2w", "r5w"], warnings: [reason] };
+}
+
+function unavailableAhi(reason: string): AhiEvidenceSummary {
+  return { source: "noaa-himawari-ahi", status: "unavailable", sensor: "Himawari-9 AHI", dataset: "AHI-L1b-FLDK", bucket: "noaa-himawari9", slot: null, updatedAt: new Date().toISOString(), availableBands: [], bands: [], attribution: "NOAA Open Data / JMA Himawari-9 AHI", warnings: [reason] };
+}
+
+function unavailableStructure(storm: Storm, reason: string): BossStructureSummary {
+  return { state: "unknown", stateLabel: "结构待确认", cycleOrdinal: null, monitoredCycle: null, cycleLabel: "轮次待确认", confidence: 0, evidenceLevel: "visualHint", source: "unavailable", sourceLabel: "JTWC 热带气旋结构分析", sourceUrl: null, bulletinId: null, observedAt: storm.updatedAt, detail: "结构证据暂不可用，保留路径、强度和风圈事实。", signals: { innerEyewall: "unknown", outerEyewall: "unknown", innerRadiusNm: null, outerRadiusNm: null }, stale: true, warnings: [reason] };
 }
 
 function clamp(value: number, min: number, max: number) {

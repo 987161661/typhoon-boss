@@ -1,0 +1,34 @@
+[
+  {
+    "agent": "/root",
+    "role": "Orchestrator, asset integration, frontend implementation, browser QA",
+    "inputs": ["user brief", "reference screenshot", "repo", "specialist handoffs"],
+    "outputs": ["new full-only component", "assets", "tests", "QA"],
+    "writeScope": ["FutureWeatherArchivePanel files", "small TyphoonMap seam", "new tests", "new asset folder", "this run workspace"],
+    "parallelization": "merges specialist findings and owns all writes"
+  },
+  {
+    "agent": "/root/visual_analysis",
+    "role": "Reference Visual Analyst",
+    "inputs": ["434x1316 screenshot", "radical-redesign clarification"],
+    "outputs": ["hierarchy", "asset categories", "first-screen acceptance"],
+    "writeScope": [],
+    "parallelization": "ran beside project audit"
+  },
+  {
+    "agent": "/root/project_audit",
+    "role": "Project Audit Agent",
+    "inputs": ["repo", "runtime", "dirty worktree"],
+    "outputs": ["full-vs-compact boundary", "minimal write set", "verification commands"],
+    "writeScope": [],
+    "parallelization": "ran beside visual analysis"
+  },
+  {
+    "agent": "/root/design_direction",
+    "role": "Design-System and worldbuilding agent",
+    "inputs": ["brief", "existing canon"],
+    "outputs": ["Vault 07 direction", "tokens", "material and motion rules"],
+    "writeScope": [],
+    "parallelization": "ran beside audit"
+  }
+]

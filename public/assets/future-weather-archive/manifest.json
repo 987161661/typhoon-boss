@@ -1,0 +1,30 @@
+{
+  "version": 2,
+  "theme": "NO.7 回声封存柜",
+  "institution": "未来气象研究档案局 / 赤曜档案局",
+  "generationMode": "built-in image_gen",
+  "masterPrompt": {
+    "useCase": "stylized-concept",
+    "assetType": "game UI hero background for a narrow weather-intelligence sidebar",
+    "request": "A premium storm specimen film from a fictional future meteorological archive bureau, combining satellite cloud vortex, radar echoes, topographic contours, wind-stream particles and archival scan damage under smoked glass.",
+    "palette": ["#071116", "#123039", "#87D5D0", "#D8D8C5", "#D84A3A"],
+    "constraints": ["no text", "no controls", "no logo", "no watermark", "no neon-grid HUD", "dark lower band for DOM copy"]
+  },
+  "sourceNote": "Built-in image_gen output exec-65ff14e2-d140-49b9-a05f-1046c9f373d7.png; optimized and compositionally cropped with scripts/build_future_weather_archive_assets.mjs. The original generated file remains in the Codex generated-images store, not in the public bundle.",
+  "performanceManifest": "/assets/future-weather-archive/performance-manifest.json",
+  "assets": [
+    { "id": "storm-specimen", "filePath": "/assets/future-weather-archive/storm-specimen-v1.webp", "sourceType": "generated", "dimensions": "720x1518; cover crop", "usage": "active-warning hero specimen" },
+    { "id": "bureau-seal", "filePath": "/assets/future-weather-archive/bureau-seal-v1.webp", "sourceType": "generated-derivative", "dimensions": "480x480", "usage": "circular bureau mark" },
+    { "id": "cabinet-grain", "filePath": "/assets/future-weather-archive/cabinet-grain-v1.webp", "sourceType": "generated-derivative", "dimensions": "480x480; repeat-y", "usage": "cabinet material" },
+    { "id": "plaque-surface", "filePath": "/assets/future-weather-archive/plaque-surface-v1.webp", "sourceType": "generated-derivative", "dimensions": "480x480; stretched", "usage": "bureau plaque" },
+    { "id": "specimen-frame", "filePath": "/assets/future-weather-archive/specimen-frame-v1.webp", "sourceType": "generated-derivative", "dimensions": "480x480; stretched", "usage": "specimen backplate" },
+    { "id": "specimen-overlay", "filePath": "/assets/future-weather-archive/specimen-overlay-v1.webp", "sourceType": "generated-derivative", "dimensions": "480x480; alpha", "usage": "smoked-glass overlay" },
+    { "id": "calibration-marks", "filePath": "/assets/future-weather-archive/calibration-marks-v1.webp", "sourceType": "generated-derivative", "dimensions": "480x480; alpha", "usage": "weather-film calibration texture" },
+    { "id": "control-deck", "filePath": "/assets/future-weather-archive/control-deck-v1.webp", "sourceType": "generated-derivative", "dimensions": "480x480; stretched", "usage": "reel control surface" },
+    { "id": "caption-paper", "filePath": "/assets/future-weather-archive/caption-paper-v1.webp", "sourceType": "generated-derivative", "dimensions": "480x480; cover crop", "usage": "storm-caption material" },
+    { "id": "case-tab", "filePath": "/assets/future-weather-archive/case-tab-v1.webp", "sourceType": "generated-derivative", "dimensions": "480x480; stretched", "usage": "queued case tabs" },
+    { "id": "gate-plate", "filePath": "/assets/future-weather-archive/gate-plate-v1.webp", "sourceType": "generated-derivative", "dimensions": "480x480; stretched", "usage": "verification gates" },
+    { "id": "evidence-ticket", "filePath": "/assets/future-weather-archive/evidence-ticket-v1.webp", "sourceType": "generated-derivative", "dimensions": "480x480; stretched", "usage": "source vouchers" },
+    { "id": "evidence-thread", "filePath": "/assets/future-weather-archive/evidence-thread-v1.webp", "sourceType": "generated-derivative", "dimensions": "480x480; vertically stretched", "usage": "evidence-chain spine" }
+  ]
+}

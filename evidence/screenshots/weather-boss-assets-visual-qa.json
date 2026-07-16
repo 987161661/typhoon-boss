@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-15T03:48:48.066Z",
+  "manifest": "public/assets/weather-boss/manifest.json",
+  "assetCount": 29,
+  "textPolicy": "Assets must contain no body text, numbers, rankings, place names, warning titles, brands, logos, or watermarks. All copy is rendered by HTML.",
+  "compression": "lossless PNG compression level 9; no lossy color quantization",
+  "targets": [
+    {
+      "width": 1920,
+      "height": 1080,
+      "label": "1920x1080",
+      "output": "evidence/screenshots/weather-boss-assets-1920x1080.png",
+      "columns": 5,
+      "rows": 6,
+      "tileWidth": 366,
+      "tileHeight": 152
+    },
+    {
+      "width": 1366,
+      "height": 768,
+      "label": "1366x768",
+      "output": "evidence/screenshots/weather-boss-assets-1366x768.png",
+      "columns": 5,
+      "rows": 6,
+      "tileWidth": 261,
+      "tileHeight": 108
+    },
+    {
+      "width": 1280,
+      "height": 720,
+      "label": "1280x720-live",
+      "output": "evidence/screenshots/weather-boss-assets-1280x720-live.png",
+      "columns": 5,
+      "rows": 6,
+      "tileWidth": 244,
+      "tileHeight": 101
+    }
+  ],
+  "bitmapScaleQa": {
+    "output": "evidence/screenshots/weather-boss-bitmap-alpha-2x-qa.png",
+    "width": 1600,
+    "height": 900,
+    "metrics": [
+      {
+        "filename": "texture-terminal-salt-abrasion-alpha.png",
+        "width": 512,
+        "height": 512,
+        "visiblePixels": 10699,
+        "edgeAlphaMax": 0
+      },
+      {
+        "filename": "texture-scanline-subtle-alpha.png",
+        "width": 64,
+        "height": 64,
+        "visiblePixels": 1216,
+        "edgeAlphaMax": 18
+      },
+      {
+        "filename": "national-map-vignette-alpha.png",
+        "width": 1024,
+        "height": 1024,
+        "visiblePixels": 626076,
+        "edgeAlphaMax": 132
+      },
+      {
+        "filename": "texture-archive-pressure-grain-alpha.png",
+        "width": 512,
+        "height": 512,
+        "visiblePixels": 2866,
+        "edgeAlphaMax": 0
+      }
+    ]
+  }
+}

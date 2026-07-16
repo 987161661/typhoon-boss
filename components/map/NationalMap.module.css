@@ -1,0 +1,83 @@
+.modeControl {
+  position: absolute;
+  z-index: 21;
+  /* The command deck ends at 102px on the standard map. Keep this mode
+     selector below it so its high stacking context never steals pointer
+     input from the current-storm controls. */
+  top: 112px;
+  left: 50%;
+  display: flex;
+  max-width: min(72vw, 880px);
+  gap: 6px;
+  padding: 6px;
+  overflow-x: auto;
+  transform: translateX(-50%);
+  border: 1px solid rgba(85, 234, 190, 0.42);
+  border-radius: 8px;
+  background: rgba(4, 18, 24, 0.88);
+  backdrop-filter: blur(8px);
+}
+
+.modeControl button,
+.radarLauncher,
+.radarPanel button {
+  border: 1px solid rgba(92, 213, 183, 0.38);
+  border-radius: 5px;
+  color: #c9fff1;
+  background: rgba(11, 46, 52, 0.82);
+  font: inherit;
+  cursor: pointer;
+}
+
+.modeControl button { flex: 0 0 auto; padding: 5px 9px; }
+.modeControl button.active { border-color: #ffce55; color: #fff1bc; background: rgba(109, 73, 16, 0.86); }
+
+.radarLauncher {
+  position: absolute;
+  z-index: 18;
+  right: 18px;
+  bottom: 92px;
+  padding: 8px 11px;
+}
+
+.radarPanel {
+  position: absolute;
+  z-index: 18;
+  right: 18px;
+  bottom: 88px;
+  width: min(340px, 36vw);
+  padding: 9px;
+  border: 1px solid rgba(92, 213, 183, 0.5);
+  border-radius: 9px;
+  color: #d9fff5;
+  background: rgba(3, 19, 27, 0.94);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.42);
+}
+
+.radarPanel header,
+.radarPanel footer,
+.radarPanel footer div { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.radarPanel header div { display: grid; }
+.radarPanel small { color: #8dc5ba; font-size: 10px; }
+.radarPanel button { padding: 4px 7px; }
+.radarPanel button:disabled { cursor: not-allowed; opacity: 0.42; }
+
+.radarImage {
+  display: grid;
+  min-height: 150px;
+  margin: 8px 0;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(92, 213, 183, 0.25);
+  background: #071218;
+}
+
+.radarImage img { display: block; width: 100%; max-height: 240px; object-fit: contain; }
+.radarImage span { color: #86aaa2; }
+.radarPanel time { font-size: 11px; color: #b8dfd5; }
+
+@media (max-width: 760px) {
+  /* The compact command deck stacks brand and source controls vertically. */
+  .modeControl { top: 154px; max-width: 92vw; }
+  .radarPanel { right: 10px; bottom: 76px; width: min(310px, 86vw); }
+}

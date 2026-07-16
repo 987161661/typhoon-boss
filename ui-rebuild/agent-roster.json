@@ -1,0 +1,6 @@
+[
+  {"agent":"/root","role":"Orchestrator and frontend implementation","inputs":["request","reference","existing city data"],"outputs":["integration","tests","qa"],"writeScope":"project source and ui-rebuild artifacts","parallelization":"merges analysis"},
+  {"agent":"/root/visual_analysis","role":"Reference Visual Analyst","inputs":["reference screenshot"],"outputs":["layout and acceptance findings"],"writeScope":"none","parallelization":"completed"},
+  {"agent":"/root/project_audit","role":"Project Audit Agent","inputs":["current components and data"],"outputs":["component and data seam findings"],"writeScope":"none","parallelization":"completed"},
+  {"agent":"/root/design_system","role":"Design-System Agent","inputs":["reference and current visual language"],"outputs":["token and component guidance"],"writeScope":"none","parallelization":"completed"}
+]

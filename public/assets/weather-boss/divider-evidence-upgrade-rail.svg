@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="48" viewBox="0 0 1200 48" fill="none" shape-rendering="geometricPrecision" aria-hidden="true">
+  <polyline points="24,24 384,24 420,14 792,14 827.9999999999999,24 1176,24" fill="none" stroke="#00D8FF" stroke-width="2" stroke-linecap="square" stroke-linejoin="bevel" vector-effect="non-scaling-stroke"/>
+  <polygon points="24,18 30,24 24,30 18,24" fill="#05080A" stroke="#00D8FF" stroke-width="2"/>
+  <circle cx="600" cy="14" r="5" fill="#05080A" stroke="#00D8FF" stroke-width="1.5"/>
+  <polygon points="1176,18 1182,24 1176,30 1170,24" fill="#05080A" stroke="#00D8FF" stroke-width="1.5"/>
+  <line x1="92" y1="28" x2="92" y2="38" stroke="#ECFBFF" stroke-opacity="0.8" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <line x1="145.4736842105263" y1="28" x2="145.4736842105263" y2="33" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="198.94736842105263" y1="28" x2="198.94736842105263" y2="33" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="252.42105263157896" y1="28" x2="252.42105263157896" y2="33" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="305.89473684210526" y1="28" x2="305.89473684210526" y2="38" stroke="#ECFBFF" stroke-opacity="0.8" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <line x1="359.36842105263156" y1="28" x2="359.36842105263156" y2="33" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="412.8421052631579" y1="28" x2="412.8421052631579" y2="33" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="466.3157894736842" y1="28" x2="466.3157894736842" y2="33" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="519.7894736842105" y1="28" x2="519.7894736842105" y2="38" stroke="#ECFBFF" stroke-opacity="0.8" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <line x1="573.2631578947369" y1="28" x2="573.2631578947369" y2="33" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="626.7368421052631" y1="28" x2="626.7368421052631" y2="33" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="680.2105263157895" y1="28" x2="680.2105263157895" y2="33" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="733.6842105263158" y1="28" x2="733.6842105263158" y2="38" stroke="#ECFBFF" stroke-opacity="0.8" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <line x1="787.1578947368421" y1="28" x2="787.1578947368421" y2="33" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="840.6315789473684" y1="28" x2="840.6315789473684" y2="33" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="894.1052631578947" y1="28" x2="894.1052631578947" y2="33" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="947.578947368421" y1="28" x2="947.578947368421" y2="38" stroke="#ECFBFF" stroke-opacity="0.8" stroke-width="2" vector-effect="non-scaling-stroke"/>
+  <line x1="1001.0526315789474" y1="28" x2="1001.0526315789474" y2="33" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="1054.5263157894738" y1="28" x2="1054.5263157894738" y2="33" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <line x1="1108" y1="28" x2="1108" y2="33" stroke="#ECFBFF" stroke-opacity="0.38" stroke-width="1" vector-effect="non-scaling-stroke"/>
+  <g transform="rotate(90 420 14)"><polygon points="414,20 420,8 426,20" fill="none" stroke="#FFB000" stroke-width="2"/></g>
+  <g transform="rotate(90 792 14)"><polygon points="786,20 792,8 798,20" fill="none" stroke="#FFB000" stroke-width="2"/></g>
+</svg>

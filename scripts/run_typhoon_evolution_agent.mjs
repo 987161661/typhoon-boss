@@ -3,6 +3,12 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import {
+  buildDeterministicNationalSituationBroadcast,
+  buildNationalSituationBroadcastPrompt,
+  validateLegacyTyphoonNarrative,
+  validateNationalSituationBroadcast
+} from "../lib/agent/nationalSituationBroadcast.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const runtimeDir = path.join(root, ".runtime");
@@ -12,6 +18,8 @@ let apiBase = "https://typhoon.slt.zj.gov.cn/Api";
 let miniMaxEndpoint = "https://api.minimaxi.com/v1/chat/completions";
 let miniMaxModel = "MiniMax-M3";
 let documentAgentApiKey = "";
+let documentAgentTimeoutMs = 60_000;
+let documentAgentRetryCount = 1;
 const cityWindCacheMs = 50 * 60 * 1000;
 const cityLocations = [
   { region: "北京市", city: "北京", lat: 39.9042, lon: 116.4074 },
@@ -59,11 +67,21 @@ async function main() {
 
   const now = new Date();
   const previousState = await readJson(statePath, emptyState());
-  const [facts, cityWind] = await Promise.all([
+  const [facts, cityWind, nationalSnapshot] = await Promise.all([
     collectTyphoonFacts(now),
-    collectCityWind(previousState.cityWind ?? null, now)
+    collectCityWind(previousState.cityWind ?? null, now),
+    readJson(path.join(runtimeDir, "national-situation.json"), null)
   ]);
+  const nationalPrompt = buildNationalSituationBroadcastPrompt(nationalSnapshot, { now: now.toISOString() });
+  const trackSnapshot = await readJson(path.join(runtimeDir, "track-snapshot.json"), null);
   const changeSet = buildChangeSet(previousState.snapshotByStormId, facts.storms);
+  const lifecycleEvents = reconcileLifecycleEvents(
+    previousState.lifecycleEvents,
+    previousState.snapshotByStormId,
+    facts.storms,
+    trackSnapshot?.lastTrackedStorm,
+    now,
+  );
   let analysis;
   let analysisMode = "MiniMax M3 智能汇总";
   try {
@@ -72,19 +90,40 @@ async function main() {
     analysis = buildDeterministicAnalysis(facts, changeSet);
     analysisMode = `规则化保底汇总（MiniMax 本轮异常：${error instanceof Error ? error.message : "未知错误"}）`;
   }
+  let nationalBroadcast;
+  let nationalBroadcastMode = "MiniMax M3 结构化全国态势播报";
+  try {
+    nationalBroadcast = await requestNationalSituationBroadcast(apiKey, nationalPrompt);
+  } catch (error) {
+    nationalBroadcast = buildDeterministicNationalSituationBroadcast(nationalPrompt);
+    nationalBroadcastMode = `规则化保底播报（MiniMax 本轮异常：${error instanceof Error ? error.message : "未知错误"}）`;
+  }
   const history = buildHistory(previousState.history, facts, changeSet, analysis, now);
   const nextState = {
-    version: 2,
+    version: 4,
     updatedAt: now.toISOString(),
     snapshotByStormId: Object.fromEntries(facts.storms.map((storm) => [storm.id, compactSnapshot(storm)])),
     cityWind,
     history,
-    lastAnalysis: analysis
+    lifecycleEvents,
+    lastAnalysis: analysis,
+    lastNationalBroadcast: nationalBroadcast
   };
 
   await mkdir(runtimeDir, { recursive: true });
   await writeAtomicJson(statePath, nextState);
-  await writeAtomicText(reportPath, renderReport(facts, changeSet, cityWind, analysis, analysisMode, history, now));
+  await writeAtomicText(reportPath, renderReport(
+    facts,
+    changeSet,
+    cityWind,
+    analysis,
+    analysisMode,
+    nationalBroadcast,
+    nationalBroadcastMode,
+    history,
+    lifecycleEvents,
+    now
+  ));
   console.log(`Updated ${path.basename(reportPath)} with ${facts.storms.length} active storm(s) and ${cityWind.cities.length} city wind rows.`);
 }
 
@@ -98,6 +137,8 @@ async function applyControlConsoleOverrides() {
   if (typeof route.endpoint === "string" && route.endpoint.trim()) miniMaxEndpoint = route.endpoint.trim();
   if (typeof route.model === "string" && route.model.trim()) miniMaxModel = route.model.trim();
   if (typeof route.apiKey === "string" && route.apiKey.trim()) documentAgentApiKey = route.apiKey.trim();
+  if (Number.isFinite(Number(route.timeoutSeconds))) documentAgentTimeoutMs = Math.max(5_000, Math.min(180_000, Number(route.timeoutSeconds) * 1000));
+  if (Number.isFinite(Number(settings.automation?.retryCount))) documentAgentRetryCount = Math.max(0, Math.min(3, Math.round(Number(settings.automation.retryCount))));
 }
 
 async function collectTyphoonFacts(now) {
@@ -268,6 +309,41 @@ function buildChangeSet(previousById, storms) {
   });
 }
 
+// Lifecycle facts are deterministic feed transitions, not LLM conclusions.
+// Keeping a small ledger makes an item disappearing from the active list
+// answerable as "ended / no longer active" instead of "data unavailable".
+function reconcileLifecycleEvents(previousEvents, previousById, storms, snapshotHint, now) {
+  const retained = Array.isArray(previousEvents) ? previousEvents : [];
+  const activeIds = new Set(storms.map((storm) => storm.id));
+  const candidates = Object.values(previousById ?? {})
+    .filter((storm) => storm?.id && !activeIds.has(storm.id))
+    .map((storm) => ({
+      id: storm.id,
+      nameZh: storm.nameZh,
+      nameEn: storm.nameEn,
+      lastObservedAt: storm.latest?.observedAt ?? null,
+      exitedLiveTrackAt: now.toISOString(),
+      status: "exited-live-track",
+      source: "upstream-active-list",
+    }));
+  if (snapshotHint?.status === "exited-live-track" && snapshotHint.id && !activeIds.has(snapshotHint.id)) {
+    candidates.push({
+      id: snapshotHint.id,
+      nameZh: snapshotHint.nameZh,
+      nameEn: snapshotHint.nameEn,
+      lastObservedAt: snapshotHint.lastObservedAt ?? null,
+      exitedLiveTrackAt: snapshotHint.exitedLiveTrackAt ?? now.toISOString(),
+      status: "exited-live-track",
+      source: "upstream-active-list",
+    });
+  }
+  const byId = new Map(retained.map((event) => [event.id, event]));
+  for (const event of candidates) byId.set(event.id, event);
+  return [...byId.values()]
+    .sort((a, b) => Date.parse(b.exitedLiveTrackAt || 0) - Date.parse(a.exitedLiveTrackAt || 0))
+    .slice(0, 24);
+}
+
 function buildDeterministicAnalysis(facts, changeSet) {
   if (facts.storms.length === 0) {
     return "当前公开接口未返回活动台风。本轮仅记录数据状态，不生成路径或强度变化判断。";
@@ -296,9 +372,9 @@ function signedValue(value, unit) {
 }
 
 function windForceFromSpeed(speed) {
-  const upperBounds = [0.3, 1.6, 3.4, 5.5, 8.0, 10.8, 13.9, 17.2, 20.8, 24.5, 28.5, 32.7];
+  const upperBounds = [0.3, 1.6, 3.4, 5.5, 8.0, 10.8, 13.9, 17.2, 20.8, 24.5, 28.5, 32.7, 37, 41.5, 46.2, 51, 56.1, 61.3];
   const level = upperBounds.findIndex((bound) => speed < bound);
-  return level === -1 ? 12 : level;
+  return level === -1 ? "17+" : level;
 }
 
 function windDirectionLabel(degrees) {
@@ -322,7 +398,8 @@ async function requestAnalysis(apiKey, facts, changeSet, previousAnalysis) {
     previousAnalysis
   };
   const primary = await invokeMiniMax(apiKey, prompt);
-  if (primary) return primary;
+  const primaryValidation = validateLegacyTyphoonNarrative(primary);
+  if (primaryValidation.ok) return primaryValidation.value;
 
   // M3 can occasionally spend the whole completion budget on hidden reasoning.
   // Retry once with a compact brief instead of publishing an empty report.
@@ -332,28 +409,68 @@ async function requestAnalysis(apiKey, facts, changeSet, previousAnalysis) {
     changeSet,
     requirements: "每个台风仅写当前实况、与上一轮对比、路径预报、数据限制四条。必须写明实况时次；若上游无新点，明确写无新增实况；不得输出思维过程或未提供的气象原因。"
   });
-  if (compactRetry) return compactRetry;
-  throw new Error("MiniMax returned no publishable analysis after one retry.");
+  const retryValidation = validateLegacyTyphoonNarrative(compactRetry);
+  if (retryValidation.ok) return retryValidation.value;
+  throw new Error(`MiniMax returned no publishable typhoon analysis after one retry: ${retryValidation.errors.join("; ")}`);
 }
 
-async function invokeMiniMax(apiKey, prompt) {
-  const response = await fetch(miniMaxEndpoint, {
+async function requestNationalSituationBroadcast(apiKey, prompt) {
+  const first = await invokeMiniMax(apiKey, prompt.request, prompt.systemPrompt, 1_600);
+  const firstValidation = validateNationalSituationBroadcast(first, prompt);
+  if (firstValidation.ok) return firstValidation.value;
+
+  const compactSystem = `${prompt.systemPrompt}\n立即只输出一个符合 outputSchema 的 JSON 对象。所有段落必须带同类别 factRefs。`;
+  const retry = await invokeMiniMax(apiKey, {
+    task: prompt.request.task,
+    facts: prompt.request.facts,
+    outputSchema: prompt.request.outputSchema,
+    outputPolicy: prompt.request.outputPolicy
+  }, compactSystem, 1_200);
+  const retryValidation = validateNationalSituationBroadcast(retry, prompt);
+  if (retryValidation.ok) return retryValidation.value;
+  throw new Error(`MiniMax returned no contract-valid national broadcast: ${retryValidation.errors.join("; ")}`);
+}
+
+async function invokeMiniMax(
+  apiKey,
+  prompt,
+  systemPrompt = "你是严谨的热带气旋分析助手，优先陈述数据来源、时间与不确定性。",
+  maxCompletionTokens = 4_096
+) {
+  let response;
+  let lastError;
+  for (let attempt = 0; attempt <= documentAgentRetryCount; attempt += 1) {
+    try {
+      response = await fetch(miniMaxEndpoint, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({
+        body: JSON.stringify({
       model: miniMaxModel,
       temperature: 0.1,
-      max_completion_tokens: 2048,
-      reasoning_split: true,
+      // M3 may emit a long thinking segment before the publishable body. The
+      // report needs enough headroom to complete its constrained Markdown.
+      max_completion_tokens: maxCompletionTokens,
+      // This is a publishable operational report, not a reasoning task. With
+      // reasoning splitting enabled, M3 can exhaust the completion budget in
+      // hidden reasoning and return no usable report body.
+      reasoning_split: false,
       messages: [
-        { role: "system", content: "你是严谨的热带气旋分析助手，优先陈述数据来源、时间与不确定性。" },
+        { role: "system", content: systemPrompt },
         { role: "user", content: JSON.stringify(prompt) }
       ]
-    })
-  });
+        }),
+        signal: AbortSignal.timeout(documentAgentTimeoutMs)
+      });
+      if (response.ok || response.status < 500 || attempt === documentAgentRetryCount) break;
+    } catch (error) {
+      lastError = error;
+      if (attempt === documentAgentRetryCount) throw error;
+    }
+  }
+  if (!response) throw lastError instanceof Error ? lastError : new Error("MiniMax request failed before receiving a response.");
   const payload = await response.json().catch(() => null);
   if (!response.ok) throw new Error(`MiniMax request failed: ${response.status} ${payload?.base_resp?.status_msg ?? ""}`.trim());
   const content = payload?.choices?.[0]?.message?.content;
@@ -362,7 +479,18 @@ async function invokeMiniMax(apiKey, prompt) {
   return analysis || null;
 }
 
-function renderReport(facts, changeSet, cityWind, analysis, analysisMode, history, now) {
+function renderReport(
+  facts,
+  changeSet,
+  cityWind,
+  analysis,
+  analysisMode,
+  nationalBroadcast,
+  nationalBroadcastMode,
+  history,
+  lifecycleEvents,
+  now
+) {
   const sourceRows = facts.storms.length
     ? facts.storms.map((storm) => {
         const point = storm.latest;
@@ -370,6 +498,10 @@ function renderReport(facts, changeSet, cityWind, analysis, analysisMode, histor
       }).join("\n")
     : "| 无活动台风 | — | — | — | — |";
   const historyRows = history.map((entry) => `| ${entry.ranAt} | ${entry.stormCount} | ${entry.sourceTimes || "—"} | ${entry.changeNote} |`).join("\n");
+  const lifecycleRows = lifecycleEvents.length
+    ? lifecycleEvents.map((event) => `- ${event.nameZh} (${event.id}) \u5df2\u4ece\u4e0a\u6e38\u6d3b\u52a8\u53f0\u98ce\u5217\u8868\u9000\u51fa\uff1b\u6700\u540e\u53ef\u6838\u5b9e\u5b9e\u51b5\uff1a${event.lastObservedAt || "--"}\uff1b\u9000\u51fa\u65f6\u95f4\uff1a${event.exitedLiveTrackAt || "--"}\u3002`)
+        .join("\n")
+    : "- \u672c\u8f6e\u65e0\u65b0\u7684\u53f0\u98ce\u9000\u51fa\u6d3b\u52a8\u5217\u8868\u4e8b\u4ef6\u3002";
   const cityRows = cityWind.cities.map((city) => {
     const speed = Number.isFinite(city.windMps) ? `${city.windMps.toFixed(1)} m/s` : "—";
     const force = Number.isFinite(city.windForceLevel) ? `${city.windForceLevel} 级` : "—";
@@ -389,9 +521,18 @@ function renderReport(facts, changeSet, cityWind, analysis, analysisMode, histor
 - 城市风场来源：${cityWind.source}
 - 城市风场采集：${cityWind.freshCount}/${cityWind.cities.length} 个代表城市取得本轮新数据；${cityWind.note}
 
+## 全国态势播报
+
+- 输出模式：${nationalBroadcastMode}
+${renderNationalBroadcast(nationalBroadcast)}
+
 ## 最新演进判断
 
 ${analysis}
+
+## \u53f0\u98ce\u751f\u547d\u5468\u671f\u8f6c\u573a\u4e8b\u5b9e
+
+${lifecycleRows}
 
 ## 本轮公开实况
 
@@ -420,6 +561,13 @@ ${historyRows}
 - 城市风场获取失败时保留最后有效值并标注“延迟保护”，不会把旧数据伪装成最新时次。
 - 当上游未发布新实况点时，本文会保留最新状态并明确标注“无新增实况”，不会伪造连续变化。
 `;
+}
+
+function renderNationalBroadcast(broadcast) {
+  const labels = { official_fact: "官方事实", observation: "观察/元数据", model: "模式" };
+  const rows = broadcast.segments.map((segment) => `- **${labels[segment.category] ?? segment.category}**：${segment.text}（事实引用：${segment.factRefs.join("、")}）`);
+  if (broadcast.closing) rows.push(`- **口径**：${broadcast.closing}`);
+  return rows.join("\n");
 }
 
 function buildHistory(previousHistory, facts, changeSet, _analysis, now) {
@@ -474,9 +622,13 @@ function formatBeijingTime(value) {
 }
 
 function stripThinking(value) {
-  return value
-    .replace(/<think>[\s\S]*?<\/think>\s*/gi, "")
+  const withoutThinking = value.replace(/<think>[\s\S]*?<\/think>\s*/gi, "");
+  // Never publish an incomplete hidden-reasoning segment when a model reaches
+  // its completion limit before emitting a closing tag and final answer.
+  if (/<think>/i.test(withoutThinking)) return "";
+  return withoutThinking
     .replace(/^#\s+.*$/gm, "")
+    .replace(/[ \t]+$/gm, "")
     .trim();
 }
 

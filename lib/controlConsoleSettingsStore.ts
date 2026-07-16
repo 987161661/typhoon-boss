@@ -18,10 +18,18 @@ export async function readControlConsoleSettings(): Promise<ControlConsoleSettin
   const defaults = defaultControlConsoleSettings();
   try {
     const merged = merge(defaults, JSON.parse(await readFile(SETTINGS_PATH, "utf8")));
-    // Drop the old unused digital-human/TTS route presets on read. The
-    // external Linglan runtime owns those integrations; this console only
-    // routes the document agent that this project actually calls.
-    return { ...merged, routes: { documentAgent: merged.routes.documentAgent } };
+    // Keep this persisted contract narrow: stale settings must not look like
+    // live knobs after an upgrade. Linglan owns its own TTS routes and this
+    // console only keeps settings that are consumed by this application.
+    return {
+      ...merged,
+      routes: { documentAgent: merged.routes.documentAgent },
+      dataSources: { typhoonTrackBaseUrl: merged.dataSources.typhoonTrackBaseUrl },
+      reliability: {
+        requestTimeoutSeconds: merged.reliability.requestTimeoutSeconds,
+        retainLastGoodDataHours: merged.reliability.retainLastGoodDataHours
+      }
+    };
   } catch { return defaults; }
 }
 

@@ -1,10 +1,13 @@
 import { execFile } from "node:child_process";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { readLiveControlSettings } from "./liveControlSettingsStore";
 
 const execFileAsync = promisify(execFile);
 const RUN_TIMEOUT_MS = 8 * 60 * 1000;
+const RUN_LEASE_DIR = path.join(process.cwd(), ".runtime", "typhoon-evolution.lock");
+const RUN_LEASE_MAX_AGE_MS = RUN_TIMEOUT_MS + 60_000;
 
 type SchedulerState = {
   started: boolean;
@@ -19,7 +22,6 @@ type SchedulerState = {
 };
 
 declare global {
-  // eslint-disable-next-line no-var
   var typhoonEvolutionSchedulerState: SchedulerState | undefined;
 }
 
@@ -100,6 +102,12 @@ async function runAgent(
     return;
   }
 
+  const releaseLease = await acquireAgentLease(trigger);
+  if (!releaseLease) {
+    console.warn("[typhoon-evolution-agent] another web process owns the current run; trigger skipped.");
+    return;
+  }
+
   state.running = true;
   state.lastRunAt = Date.now();
   state.lastError = null;
@@ -119,6 +127,41 @@ async function runAgent(
     console.error(`[typhoon-evolution-agent] ${trigger} run failed.`, error);
   } finally {
     state.running = false;
+    await releaseLease();
+  }
+}
+
+async function acquireAgentLease(trigger: string): Promise<(() => Promise<void>) | null> {
+  await mkdir(path.dirname(RUN_LEASE_DIR), { recursive: true });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await mkdir(RUN_LEASE_DIR, { recursive: false });
+      await writeFile(path.join(RUN_LEASE_DIR, "owner.json"), JSON.stringify({
+        pid: process.pid,
+        trigger,
+        acquiredAt: new Date().toISOString()
+      }), "utf8");
+      return async () => {
+        await rm(RUN_LEASE_DIR, { recursive: true, force: true }).catch(() => undefined);
+      };
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "EEXIST") throw error;
+      const stale = await isAgentLeaseStale();
+      if (!stale) return null;
+      await rm(RUN_LEASE_DIR, { recursive: true, force: true });
+    }
+  }
+  return null;
+}
+
+async function isAgentLeaseStale() {
+  try {
+    const text = await readFile(path.join(RUN_LEASE_DIR, "owner.json"), "utf8");
+    const acquiredAt = Date.parse((JSON.parse(text) as { acquiredAt?: string }).acquiredAt ?? "");
+    return !Number.isFinite(acquiredAt) || Date.now() - acquiredAt > RUN_LEASE_MAX_AGE_MS;
+  } catch {
+    return true;
   }
 }
 

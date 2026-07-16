@@ -1,70 +1,72 @@
-# 台风 BOSS 雷达运维手册
+# 气象 Boss 雷达运维手册
 
-## 运行结构
+## 运行边界
 
-| 模块 | 责任 | 位置 |
+| 链路 | 地址 | 责任 |
 | --- | --- | --- |
-| 主数据适配 | 读取浙江省水利厅公开台风接口并构造页面快照 | `lib/realTyphoonData.ts` |
-| 主页面与图鉴 | 雷达、地图、Boss 图鉴、公开数据接口 | `app/`、`components/TyphoonMap.tsx` |
-| 直播导播 | 双场景轮换、底部互动栏、左侧导播面板 | `components/LiveDirector.tsx` |
-| 数字人窗口 | 凌岚 iframe、健康检查、聊天转发、可拖动缩放窗口 | `components/DigitalHostWindow.tsx` |
-| 实时整理智能体 | 台风事实、城市风场、文档报告的周期整理 | `lib/typhoonEvolutionScheduler.ts`、`scripts/run_typhoon_evolution_agent.mjs` |
+| 雷达与直播页 | `http://127.0.0.1:3038` | 本项目 Next 服务 |
+| 数字人上游 | 默认 `http://127.0.0.1:5173` | 外部凌岚运行时 |
 
-## 启动与验证
+3038 是本项目唯一约定端口。历史端口不应再出现在启动命令、日志名或排障结论中。
 
-1. 生产构建：`npm.cmd run build`
-2. 启动页面：`npm.cmd run start -- -H 127.0.0.1 -p 3038`
-3. 打开 `http://127.0.0.1:3038/live`。
-4. 在左侧“配置设置”确认页面轮换与实时整理智能体的状态。
-5. 数字人标题栏可拖动窗口，右下角青色手柄可缩放；位置和尺寸保存在浏览器本地设置中。
+## 启动与验收
 
-## 直播设置
+权威本机入口是项目根目录的 `Start-Typhoon-Live.cmd`。它会：
 
-直播设置通过 `GET/PATCH /api/live-control-settings` 读写，保存位置为：
+1. 启动或复用凌岚运行时；
+2. 如 3038 未监听，使用 Next 开发模式启动本项目；
+3. 验证 `/live`、`/api/health` 和 `/api/digital-host/health`；
+4. 显式启用后台演进任务，并验证调度器已进入启用状态；
+5. 仅在发现至少一个活动台风、数字人链路可达且后台任务已启用时成功退出。
 
-`D:\typhoon boss radar\.runtime\live-control-settings.json`
+不要在该入口运行期间再手动启动第二个 3038 进程。若需要生产式构建验证，停止开发进程后执行：
 
-可配置项：
+```powershell
+npm.cmd run build
+npm.cmd run start -- -H 127.0.0.1 -p 3038
+```
 
-- 直播场景轮换开关。
-- 态势页与数据页的停留秒数。
-- 实时文档整理智能体开关。
-- 整理更新频率（5 至 360 分钟）。
+## 演进报告任务
 
-设置修改后会立即重新安排下一次任务。环境变量 `TYPHOON_EVOLUTION_AGENT_ENABLED=false` 是最高优先级总开关。
+`scripts/run_typhoon_evolution_agent.mjs` 会读取公开实况、生成分析，并写入：
 
-## 凌岚数字人
+- `.runtime/typhoon-evolution-agent.json`：任务状态和历史快照；
+- `台风实时演进分析.md`：面向阅读的报告。
 
-默认数字人地址为 `http://127.0.0.1:5173`，可用 `NEXT_PUBLIC_LINGLAN_HOST_URL` 覆盖。直播页会读取 `/api/digital-host/health`，聊天消息通过 `postMessage` 转交给凌岚页面。
-
-数字人服务、TTS 和 B 站监听由 `D:\vtuber\aituber-onair-main` 维护；本项目只负责导播页嵌入和本地互动入口。
-
-## 实时文档整理智能体
-
-执行一次：
+手动执行：
 
 ```powershell
 npm.cmd run agent:run
 ```
 
-运行状态与报告：
+手动启动服务时，周期调度默认关闭；`Start-Typhoon-Live.cmd` 则会在健康检查后显式开启它，并触发首轮整理。`TYPHOON_EVOLUTION_AGENT_ENABLED=false` 可作为环境级总禁用开关；它优先于页面设置。多实例部署只允许一个实例使用该一键启动入口。
 
-- `.runtime/typhoon-evolution-agent.json`：状态与历史快照。
-- `台风实时演进分析.md`：可读报告。
+## 运行数据与清理
 
-需要在 `.env.local` 中配置 `MINIMAX_API_KEY`。不要提交 `.env.local`、`.runtime` 或任何调试日志。
+`.runtime` 的内容分三类：
 
-## 本地清理
+| 类别 | 示例 | 清理规则 |
+| --- | --- | --- |
+| 状态 | `live-control-settings.json`、`track-snapshot.json`、`storm-structure-ledger.json` | 保留，不能作为普通缓存删除 |
+| 运行依赖与缓存 | `tools/wgrib2`、`python-packages`、`wind-field`、`satellite-images` | 保留；按功能失效或容量策略另行处理 |
+| 诊断遗留 | ECMWF 测试抓包、旧预览日志、旧端口日志 | 可由清理脚本安全删除 |
+
+执行完整清理：
 
 ```powershell
 npm.cmd run clean:local
 ```
 
-该命令会删除：浏览器自动化配置目录、Codex/Next 调试日志、`tmp`、参考截图、`.next` 与 TypeScript 构建信息。它不会删除源代码、`public/ui-rebuild` 的正在使用纹理、`node_modules`、`.env.local` 或 `.runtime`。
+它会移除 `.next`，因此应在停止本项目 Web 服务后执行。服务仍在运行时，只清理第三类诊断遗留：
 
-## 维护原则
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/clean_local_artifacts.ps1 -RuntimeOnly
+```
 
-- 实时接口必须保持 `no-store`；不要用缓存模拟实时。
-- 将事实采集、演进整理、直播风格渲染分开维护。
-- 直播页修改后至少执行 `npm.cmd run build`，并检查 `/live` 的两种场景。
-- 新生成的设计实验、截图和代理工作流不要写入项目根目录；放在临时目录，并在验收后运行本地清理。
+当前启动日志固定写入 `runtime/logs/live-3038.current.*.log`；历史 `live-dev-*` 日志会被清理。数字人服务日志由其独立文件保留。
+
+## 配置原则
+
+- 控制台只展示当前实际被读取的设置；卫星源、环境预报源和“审计开关”等未接通选项已移除。
+- 台风路径入口、官方预警和 Boss 解释层保持分离；不要把任何单一来源误标为全国权威预警。
+- 实时接口必须使用 `no-store`；上游失败时展示最后有效状态及其时间，不能伪造新实况。

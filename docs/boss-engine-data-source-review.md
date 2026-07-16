@@ -937,7 +937,7 @@ cape
 
 - `npm.cmd run typecheck` 通过。
 - `npm.cmd run build` 通过。
-- 本地 `http://127.0.0.1:3010` 可访问。
+- 历史本地端口验证记录已废弃；当前项目雷达入口统一为 `http://127.0.0.1:3038/live`，以运维手册为准。
 - `/api/boss/current` 返回 200。
 - 浏览器 QA：右侧 Boss 类型显示为“风压核心型”，首屏可见 3 个主技能，无页面纵向滚动。
 - Phase 2 完成后需重新验证：Open-Meteo 可用时 BossProfile 带 `environment` 摘要和 `open-meteo` 证据；Open-Meteo 失败时仍返回 P0 风压/路径技能。

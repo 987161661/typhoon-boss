@@ -127,18 +127,6 @@ a:focus-visible {
   inset: 0;
 }
 
-.terrain-elevation-canvas {
-  position: absolute;
-  inset: 0;
-  z-index: 1;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  opacity: 0.9;
-  mix-blend-mode: multiply;
-  filter: saturate(1.35) contrast(1.08);
-}
-
 .satellite-cloud-overlay {
   position: absolute;
   z-index: 2;
@@ -152,7 +140,16 @@ a:focus-visible {
 }
 
 .storm-intensity-canvas,
+.gfs-scalar-canvas,
+.gfs-wave-canvas,
+.ecmwf-track-canvas,
+.regional-observation-canvas,
+.wind-color-canvas,
 .wind-particle-canvas,
+.wind-particle-interaction-canvas,
+.marine-current-canvas,
+.marine-current-interaction-canvas,
+.sea-surface-temperature-canvas,
 .forecast-route-canvas {
   position: absolute;
   inset: 0;
@@ -170,16 +167,347 @@ a:focus-visible {
   filter: saturate(1.28) contrast(1.12);
 }
 
-.wind-particle-canvas {
-  z-index: 4;
-  mix-blend-mode: screen;
+/* The city briefing is composition-driven: show all risk dimensions without
+   letting the former rain-only layout hide heat or wind-led situations. */
+.live-city-risk-arcs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.live-city-official-warning { position:relative; z-index:10; display:grid; grid-template-columns:auto 1fr; gap:5px 10px; margin:4px 0 9px; padding:8px 10px; border:1px solid rgba(255,92,68,.62); background:rgba(96,18,14,.38); color:#fff2d6; }
+.live-city-official-warning b { color:#ffce66; letter-spacing:.08em; }
+.live-city-official-warning small { grid-column:2; color:#f2c8af; }
+.live-city-official-warning p { grid-column:1 / -1; margin:0; color:#ffe8d3; font-size:12px; line-height:1.45; }
+.live-city-data-gap { position:relative; z-index:10; margin:4px 0 9px; padding:8px 10px; border:1px solid rgba(255,190,74,.44); background:rgba(78,50,12,.34); color:#ffe7ac; font-size:12px; line-height:1.45; }
+.live-city-card.is-deploy .live-city-official-warning { opacity:0; transform:translateY(9px); }
+.live-city-card.is-card .live-city-official-warning { animation:cityInstrumentCharge .3s .05s ease-out both; }
+
+.official-alert-strip {
+  position: absolute;
+  z-index: 18;
+  top: 108px;
+  left: 50%;
+  display: flex;
+  max-width: min(720px, calc(100vw - 560px));
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 184, 60, 0.46);
+  background: rgba(18, 12, 4, 0.82);
+  color: #ffe7a0;
+  font-size: 10px;
+  transform: translateX(-50%);
+  backdrop-filter: blur(8px);
+}
+
+.official-alert-strip > div { display: flex; gap: 10px; overflow: hidden; }
+.official-alert-strip span { white-space: nowrap; }
+.official-alert-strip i { margin-right: 4px; color: #ff8d4c; font-style: normal; }
+
+.gfs-scalar-canvas {
+  z-index: 3;
+  opacity: 0.92;
+  mix-blend-mode: multiply;
+  image-rendering: auto;
+}
+
+.gfs-wave-canvas {
+  z-index: 3;
+  opacity: 0.92;
+  mix-blend-mode: normal;
+}
+
+.ecmwf-track-canvas {
+  z-index: 6;
   opacity: 1;
-  filter: brightness(1.16) contrast(1.08) drop-shadow(0 0 1px rgba(255, 255, 255, 0.4));
+}
+
+.regional-observation-canvas { z-index: 7; opacity: 1; }
+
+.wind-color-canvas {
+  z-index: 4;
+  inset: -34%;
+  width: 168%;
+  height: 168%;
+  mix-blend-mode: normal;
+  opacity: 0.94;
+  filter: saturate(1.2);
+}
+
+.wind-particle-canvas,
+.wind-particle-interaction-canvas {
+  z-index: 5;
+  inset: -20%;
+  width: 140%;
+  height: 140%;
+  mix-blend-mode: normal;
+  opacity: 0.98;
+  filter: saturate(1.28) contrast(1.12) drop-shadow(0 0 1px rgba(120, 255, 194, 0.52));
   will-change: contents;
 }
 
-.forecast-route-canvas {
+.sea-surface-temperature-canvas {
   z-index: 5;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  mix-blend-mode: normal;
+  opacity: 0.84;
+  filter: saturate(1.24);
+}
+
+.marine-current-canvas,
+.marine-current-interaction-canvas {
+  z-index: 6;
+  inset: -20%;
+  width: 140%;
+  height: 140%;
+  pointer-events: none;
+  mix-blend-mode: screen;
+  opacity: 0.9;
+  filter: saturate(1.18) contrast(1.08) drop-shadow(0 0 1px rgba(102, 239, 255, 0.45));
+  will-change: contents;
+}
+
+.wind-particle-canvas,
+.marine-current-canvas {
+  transition: opacity 120ms linear;
+}
+
+.wind-particle-interaction-canvas,
+.marine-current-interaction-canvas {
+  z-index: 6;
+  opacity: 0;
+  visibility: hidden;
+  will-change: transform, opacity;
+  transition: opacity 120ms linear;
+}
+
+.wind-field-time-badge {
+  position: absolute;
+  right: clamp(18px, 22vw, 342px);
+  bottom: 26px;
+  z-index: 18;
+  display: grid;
+  min-width: 176px;
+  gap: 2px;
+  padding: 9px 12px 8px;
+  border: 1px solid rgba(84, 255, 172, 0.58);
+  border-left: 3px solid #39f09a;
+  background: linear-gradient(110deg, rgba(3, 24, 20, 0.9), rgba(5, 13, 17, 0.82));
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3), inset 0 0 18px rgba(49, 240, 153, 0.08);
+  color: #a9efd1;
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+  backdrop-filter: blur(8px);
+}
+
+/* The GFS valid-time window belongs to the layer controls in the main
+   console.  Keeping both in one stack makes the timestamp follow any change
+   in the environment panel height instead of relying on a fragile viewport
+   coordinate. */
+.environment-panel-stack {
+  position: absolute;
+  right: 18px;
+  top: 138px;
+  z-index: 7;
+  display: grid;
+  gap: 8px;
+  width: 214px;
+}
+
+.environment-panel-stack .environment-panel {
+  position: relative;
+  top: auto;
+  right: auto;
+  width: 100%;
+}
+
+.wind-field-time-badge.is-main {
+  position: relative;
+  right: auto;
+  bottom: auto;
+  z-index: auto;
+  width: 100%;
+  min-width: 0;
+}
+
+.left-tactical-stack .environment-panel-stack {
+  position: relative;
+  inset: auto;
+  display: grid;
+  gap: 6px;
+  width: 100%;
+}
+
+.wind-field-time-badge span {
+  color: rgba(190, 255, 220, 0.7);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.wind-field-time-badge strong {
+  color: #effff7;
+  font-family: "Bahnschrift", "DIN Alternate", monospace;
+  font-size: 16px;
+  letter-spacing: 0.04em;
+}
+
+.wind-field-time-badge small {
+  color: #5fdaab;
+  font-size: 10px;
+}
+
+.wind-field-time-badge em {
+  color: #f6c2bb;
+  font-size: 10px;
+  font-style: normal;
+}
+
+.wind-field-time-badge[data-stale="true"] {
+  border-color: rgba(255, 184, 60, 0.68);
+  border-left-color: #ffb83c;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3), inset 0 0 18px rgba(255, 184, 60, 0.1);
+}
+
+.wind-field-time-badge[data-stale="true"] span,
+.wind-field-time-badge[data-stale="true"] small {
+  color: #ffd98b;
+}
+
+/* In broadcast, data provenance is a compact HUD note: it follows the top
+   command bar rather than competing with the programme strip at the bottom. */
+.radar-shell[data-view="live"] .wind-field-time-badge.is-live {
+  top: 120px;
+  right: 18px;
+  bottom: auto;
+}
+
+.latest-path-center-marker {
+  position: absolute;
+  z-index: 24;
+  display: grid;
+  place-items: center;
+  gap: 2px;
+  min-width: 76px;
+  transform: translate(-50%, -50%);
+  color: var(--track-color, #ff382f);
+  pointer-events: none;
+  text-align: center;
+  text-shadow: 0 0 5px color-mix(in srgb, var(--track-color, #ff382f) 96%, white), 0 0 15px color-mix(in srgb, var(--track-color, #ff382f) 72%, transparent), 0 0 26px color-mix(in srgb, var(--track-color, #ff382f) 52%, transparent);
+}
+
+/* A center can legitimately sit beneath the fixed top HUD. Move its label
+   below the HUD while retaining a short leader to the true map coordinate. */
+.latest-path-center-marker[data-hud-offset="true"] {
+  transform: translate(-50%, 0);
+}
+
+.latest-path-center-marker[data-hud-offset="true"]::before {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  width: 1px;
+  height: var(--hud-offset);
+  background: linear-gradient(to top, var(--track-color, #ff382f), color-mix(in srgb, var(--track-color, #ff382f) 20%, transparent));
+  box-shadow: 0 0 5px var(--track-color, #ff382f);
+  content: "";
+}
+
+.historical-track-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.historical-track-layer,
+.latest-track-center-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.historical-track-layer {
+  z-index: 8;
+}
+
+.latest-track-center-layer {
+  z-index: 24;
+}
+
+.historical-track-shadow,
+.historical-track-line {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.historical-track-shadow {
+  stroke: color-mix(in srgb, var(--track-color, #ff5447) 35%, #02080c);
+  stroke-width: 6.6;
+}
+
+.historical-track-line {
+  stroke: var(--track-color, #ff5447);
+  stroke-width: 3.2;
+  stroke-linecap: round;
+  filter: none;
+}
+
+.latest-path-center-marker span {
+  font-size: 32px;
+  line-height: 26px;
+  filter: drop-shadow(0 0 7px var(--track-color, #ff382f));
+}
+
+.latest-path-center-marker small {
+  padding: 2px 4px;
+  border: 1px solid color-mix(in srgb, var(--track-color, #ff382f) 70%, white);
+  background: rgba(35, 5, 4, 0.82);
+  color: color-mix(in srgb, var(--track-color, #ff382f) 42%, white);
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.latest-path-center-marker em {
+  padding: 1px 3px;
+  background: rgba(35, 5, 4, 0.7);
+  color: color-mix(in srgb, var(--track-color, #ff382f) 58%, white);
+  font-size: 9px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+/* Broadcast capture is viewed farther away than the normal map: preserve the
+   marker's position while making its real-time provenance legible on stream. */
+.radar-shell[data-view="live"] .latest-path-center-marker {
+  min-width: 112px;
+  gap: 4px;
+}
+
+.radar-shell[data-view="live"] .latest-path-center-marker span {
+  font-size: 42px;
+  line-height: 34px;
+}
+
+.radar-shell[data-view="live"] .latest-path-center-marker small {
+  padding: 3px 7px;
+  font-size: clamp(14px, 0.86vw, 17px);
+  line-height: 1.15;
+}
+
+.radar-shell[data-view="live"] .latest-path-center-marker em {
+  padding: 3px 6px;
+  font-size: clamp(12px, 0.74vw, 15px);
+  line-height: 1.1;
+}
+
+.forecast-route-canvas {
+  z-index: 6;
   mix-blend-mode: screen;
   opacity: 0.98;
 }
@@ -236,9 +564,7 @@ a:focus-visible {
 
 .map-region-label {
   position: absolute;
-  display: grid;
-  gap: 1px;
-  min-width: 74px;
+  min-width: 42px;
   color: rgba(12, 45, 54, 0.78);
   text-align: center;
   text-shadow:
@@ -249,13 +575,8 @@ a:focus-visible {
 
 .map-region-label b {
   color: rgba(9, 44, 52, 0.9);
-  font-size: 18px;
+  font-size: 16px;
   line-height: 1;
-}
-
-.map-region-label span {
-  font-size: 11px;
-  letter-spacing: 0.08em;
 }
 
 .forecast-badge {
@@ -1607,20 +1928,11 @@ a:focus-visible {
   color: rgba(47, 34, 22, 0.92);
 }
 
-.radar-shell[data-theme="archive-command"] .path-time-label,
-.radar-shell[data-theme="archive-command"] .storm-target-label {
+.radar-shell[data-theme="archive-command"] .path-time-label {
   border-color: rgba(91, 65, 37, 0.62);
   background: rgba(226, 204, 160, 0.9);
   color: #352719;
   box-shadow: 0 10px 18px rgba(29, 18, 9, 0.22);
-}
-
-.radar-shell[data-theme="archive-command"] .storm-target-label span {
-  color: #8f352c;
-}
-
-.radar-shell[data-theme="archive-command"] .storm-target-label strong {
-  color: #352719;
 }
 
 .dossier-panel {
@@ -2987,6 +3299,223 @@ a:focus-visible {
   white-space: nowrap;
 }
 
+.brand-run-indicator {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-left: 10px;
+  border-radius: 50%;
+  background: #52656b;
+  box-shadow: 0 0 0 2px rgba(5, 8, 10, 0.78);
+  vertical-align: middle;
+}
+
+.brand-run-indicator.is-running {
+  background: #42e58d;
+  box-shadow: 0 0 10px #42e58d, 0 0 0 2px rgba(5, 8, 10, 0.78);
+}
+
+.command-strip {
+  grid-template-columns: minmax(230px, 1.5fr) minmax(104px, 0.75fr) minmax(104px, 0.75fr);
+}
+
+.current-storm-control {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  min-height: 42px;
+  padding: 5px 7px;
+  border: 1px solid rgba(0, 216, 255, 0.48);
+  background: linear-gradient(90deg, rgba(0, 216, 255, 0.12), rgba(5, 15, 19, 0.9) 48%);
+  box-shadow: inset 3px 0 0 var(--cyan);
+}
+
+.current-storm-control > span {
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+
+.current-storm-control > div {
+  display: grid;
+  grid-template-columns: 24px minmax(84px, 1fr) minmax(76px, 0.9fr) 24px;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.current-storm-control button {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  color: var(--cyan);
+  background: rgba(0, 216, 255, 0.08);
+  cursor: pointer;
+}
+
+.current-storm-control button:hover:not(:disabled) { background: rgba(0, 216, 255, 0.2); }
+.current-storm-control button:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.current-storm-control button:disabled { opacity: 0.28; cursor: default; }
+
+.current-storm-control strong,
+.current-storm-control em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.current-storm-control strong { color: var(--mist); font: 800 12px/1 Consolas, monospace; }
+.current-storm-control em { color: var(--amber); font-size: 10px; font-style: normal; }
+
+.gfs-scalar-control,
+.cwa-radar-control,
+.gfs-wave-control,
+.marine-current-control,
+.marine-sst-control,
+.ecmwf-track-control,
+.observation-control,
+.wind-render-mode {
+  display: grid;
+  gap: 5px;
+  margin-top: 8px;
+  padding: 8px 9px;
+  border-left: 2px solid rgba(88, 212, 229, 0.72);
+  background: rgba(5, 22, 28, 0.6);
+}
+
+.gfs-scalar-control > span,
+.cwa-radar-control > span,
+.gfs-wave-control > span,
+.marine-current-control > span,
+.marine-sst-control > span,
+.ecmwf-track-control > span,
+.observation-control > span,
+.wind-render-mode > span {
+  color: rgba(213, 246, 250, 0.82);
+  font: 800 10px/1 "Bahnschrift", "Microsoft YaHei", sans-serif;
+  letter-spacing: 0.08em;
+}
+
+.wind-render-mode > div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.gfs-scalar-control > div {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.gfs-scalar-control button,
+.cwa-radar-control button,
+.gfs-wave-control button,
+.marine-current-control button,
+.marine-sst-control button,
+.ecmwf-track-control button,
+.observation-control button,
+.wind-render-mode button {
+  min-height: 25px;
+  border: 1px solid rgba(187, 232, 238, 0.2);
+  border-radius: 2px;
+  background: rgba(1, 12, 17, 0.72);
+  color: rgba(221, 237, 239, 0.62);
+  font: 800 10px/1 "Microsoft YaHei", sans-serif;
+  cursor: pointer;
+}
+
+.gfs-scalar-control button.active,
+.cwa-radar-control button.active,
+.gfs-wave-control button.active,
+.marine-current-control button.active,
+.marine-sst-control button.active,
+.ecmwf-track-control button.active,
+.observation-control button.active,
+.wind-render-mode button.active {
+  border-color: rgba(103, 222, 240, 0.72);
+  background: rgba(19, 104, 119, 0.38);
+  color: #e9fdff;
+}
+
+.gfs-scalar-control small,
+.cwa-radar-control small,
+.gfs-wave-control small,
+.marine-current-control small,
+.marine-sst-control small,
+.ecmwf-track-control small,
+.observation-control small,
+.wind-render-mode small {
+  color: rgba(191, 218, 222, 0.68);
+  font-size: 9px;
+  line-height: 1.35;
+}
+
+.cwa-radar-control button,
+.gfs-wave-control button,
+.marine-current-control button,
+.marine-sst-control button {
+  width: 100%;
+}
+
+.ecmwf-track-control button { width: 100%; }
+.ecmwf-track-control button:disabled { cursor: wait; opacity: 0.48; }
+.observation-control button { width: 100%; }
+.observation-control button:disabled { cursor: wait; opacity: 0.48; }
+
+.supplemental-layer-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.supplemental-layer-grid > div {
+  min-width: 0;
+  gap: 3px;
+  margin-top: 0;
+  padding: 5px;
+}
+
+.supplemental-layer-grid > div > span { display: none; }
+.supplemental-layer-grid button { min-height: 27px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.supplemental-layer-grid small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.cwa-radar-control button:disabled {
+  cursor: wait;
+  opacity: 0.48;
+}
+
+.gfs-wind-key {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 1px;
+  margin-top: 1px;
+}
+
+.gfs-wind-key i {
+  display: block;
+  height: 4px;
+}
+
+.gfs-wind-key i:nth-child(1) { background: #1e55ab; }
+.gfs-wind-key i:nth-child(2) { background: #24c2b8; }
+.gfs-wind-key i:nth-child(3) { background: #63d668; }
+.gfs-wind-key i:nth-child(4) { background: #f8d64b; }
+.gfs-wind-key i:nth-child(5) { background: linear-gradient(90deg, #fa812f, #dc3239, #a6267a); }
+
+.gfs-wind-key span {
+  grid-column: 1 / -1;
+  margin-top: 2px;
+  color: rgba(205, 234, 238, 0.64);
+  font: 700 8px/1.2 "Bahnschrift", sans-serif;
+  letter-spacing: 0.03em;
+}
+
 .terrain-elevation-key {
   display: grid;
   gap: 5px;
@@ -3088,6 +3617,101 @@ a:focus-visible {
     drop-shadow(0 0 var(--storm-glow-radius, 22px) rgba(0, 216, 255, 0.18));
   transform-origin: center;
   transition: width 80ms linear, height 80ms linear;
+}
+
+.gfs-analysis-center-marker {
+  position: absolute;
+  z-index: 12;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+  --gfs-center-color: #ffb000;
+}
+
+.gfs-analysis-center-crosshair {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--gfs-center-color);
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px rgba(4, 12, 18, 0.82), 0 0 16px color-mix(in srgb, var(--gfs-center-color) 72%, transparent);
+  transform: translate(-50%, -50%);
+}
+
+.gfs-analysis-center-crosshair::before,
+.gfs-analysis-center-crosshair::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  background: color-mix(in srgb, var(--gfs-center-color) 66%, white);
+  transform: translate(-50%, -50%);
+}
+
+.gfs-analysis-center-crosshair::before {
+  width: 26px;
+  height: 1px;
+}
+
+.gfs-analysis-center-crosshair::after {
+  width: 1px;
+  height: 26px;
+}
+
+.gfs-analysis-center-label {
+  position: absolute;
+  left: 15px;
+  top: -31px;
+  display: grid;
+  gap: 2px;
+  min-width: max-content;
+  padding: 5px 7px;
+  color: color-mix(in srgb, var(--gfs-center-color) 72%, white);
+  background: rgba(5, 16, 21, 0.88);
+  border: 1px solid color-mix(in srgb, var(--gfs-center-color) 68%, transparent);
+  box-shadow: 0 5px 16px rgba(0, 0, 0, 0.32);
+  font-size: 12px;
+  line-height: 1.1;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.gfs-analysis-center-label strong {
+  font-size: 14px;
+}
+
+.gfs-analysis-center-label small {
+  color: rgba(219, 231, 226, 0.82);
+  font-size: 11px;
+}
+
+.gfs-analysis-center-marker.is-active .gfs-analysis-center-crosshair {
+  box-shadow: 0 0 0 2px rgba(4, 12, 18, 0.88), 0 0 22px color-mix(in srgb, var(--gfs-center-color) 88%, transparent);
+}
+
+.gfs-analysis-center-marker.is-active .gfs-analysis-center-label {
+  background: rgba(5, 16, 21, 0.94);
+  border-width: 2px;
+}
+
+/* All camera gestures share one cheap composition mode. Geographic content
+   still moves continuously; decorative storm work resumes after moveend. */
+.map-stage[data-camera-moving="true"] .storm-map-marker,
+.map-stage[data-camera-moving="true"] .storm-map-marker *,
+.map-stage[data-camera-moving="true"] .storm-map-marker *::before,
+.map-stage[data-camera-moving="true"] .storm-map-marker *::after {
+  animation-play-state: paused !important;
+  transition: none !important;
+}
+
+.map-stage[data-camera-moving="true"] .storm-map-marker,
+.map-stage[data-camera-moving="true"] .wind-particle-canvas,
+.map-stage[data-camera-moving="true"] .wind-particle-interaction-canvas,
+.map-stage[data-camera-moving="true"] .marine-current-canvas,
+.map-stage[data-camera-moving="true"] .marine-current-interaction-canvas {
+  filter: none;
 }
 
 .storm-satellite-core {
@@ -3222,7 +3846,7 @@ a:focus-visible {
   z-index: 3;
   width: 110%;
   height: 110%;
-  opacity: calc(0.92 + var(--storm-core-intensity, 0.8) * 0.08);
+  opacity: var(--storm-texture-opacity, 1);
   filter:
     saturate(calc(0.98 + var(--storm-core-intensity, 0.8) * 0.26))
     contrast(1.34)
@@ -3237,7 +3861,9 @@ a:focus-visible {
   transform: translateZ(0) scale(1.025) scaleX(var(--storm-texture-mirror, 1));
   backface-visibility: hidden;
   will-change: filter;
-  animation: stormCanvasSignal 5.4s ease-in-out infinite;
+  animation:
+    stormTextureOrbit var(--storm-texture-spin-duration, 42s) linear infinite,
+    stormCanvasSignal 5.4s ease-in-out infinite;
 }
 
 .storm-analysis-lock-ring {
@@ -3522,33 +4148,6 @@ a:focus-visible {
   --storm-core-glow: rgba(255, 59, 50, 0.68);
 }
 
-.storm-target-label {
-  position: absolute;
-  left: 50%;
-  top: calc(50% + 160px);
-  display: grid;
-  min-width: 128px;
-  gap: 2px;
-  padding: 8px 12px;
-  border: 1px solid rgba(255, 75, 62, 0.72);
-  border-radius: 4px;
-  background: rgba(5, 8, 10, 0.82);
-  text-align: center;
-  transform: translateX(-50%);
-  opacity: 0;
-}
-
-.storm-target-label span {
-  color: var(--red);
-  font-size: 20px;
-  font-weight: 900;
-}
-
-.storm-target-label strong {
-  color: var(--mist);
-  font-size: 13px;
-}
-
 .legend-line {
   display: grid;
   grid-template-columns: 40px minmax(0, 1fr) auto;
@@ -3591,7 +4190,10 @@ a:focus-visible {
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 7;
+  /* The historical track sits at z=8 so it can stay above the wind canvas.
+     Keep this actual HUD in its own, higher layer rather than relying on DOM order. */
+  z-index: 12;
+  isolation: isolate;
   display: grid;
   grid-template-columns: 232px minmax(0, 1fr) 300px;
   grid-template-rows: minmax(68px, auto) 34px;
@@ -3634,6 +4236,22 @@ a:focus-visible {
   color: var(--cyan);
   font-size: 12px;
   font-weight: 800;
+}
+
+.bottom-command.is-cycle-closed {
+  border-top-color: rgba(0, 216, 255, 0.72);
+  background:
+    var(--texture-rail) top center / 96% 30px no-repeat,
+    linear-gradient(180deg, rgba(0, 216, 255, 0.16), rgba(5, 8, 10, 0.94)),
+    rgba(5, 8, 10, 0.86);
+}
+
+.bottom-command.is-cycle-closed .bottom-defense-title {
+  border-right-color: rgba(0, 216, 255, 0.3);
+}
+
+.bottom-command.is-cycle-closed .bottom-defense-title span {
+  color: #b6ff52;
 }
 
 .boss-event-strip {
@@ -3680,6 +4298,20 @@ a:focus-visible {
 .boss-event-card.level-low,
 .boss-event-card.level-idle {
   border-left-color: var(--cyan);
+}
+
+.boss-event-card.is-cycle-closure {
+  border-color: rgba(0, 216, 255, 0.3);
+  border-left-color: #b6ff52;
+  background: linear-gradient(90deg, rgba(182, 255, 82, 0.1), rgba(4, 13, 18, 0.76));
+}
+
+.boss-event-card.is-cycle-closure b {
+  color: #eaffce;
+}
+
+.boss-event-card.is-cycle-closure small {
+  color: rgba(182, 255, 82, 0.76);
 }
 
 .boss-event-card b,
@@ -5440,6 +6072,144 @@ a:focus-visible {
       brightness(1.12)
       drop-shadow(0 0 22px rgba(236, 251, 255, 0.28));
   }
+}
+
+.standby-intel-panel {
+  gap: 10px;
+  background:
+    linear-gradient(180deg, rgba(0, 216, 255, 0.035), transparent 42%),
+    var(--panel);
+}
+
+.standby-topline {
+  border-bottom-color: rgba(0, 216, 255, 0.38);
+}
+
+.standby-radar-card {
+  position: relative;
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr);
+  gap: 18px;
+  align-items: center;
+  min-height: 188px;
+  overflow: hidden;
+  padding: 18px;
+  border-color: rgba(0, 216, 255, 0.38);
+  background:
+    radial-gradient(circle at 70px 50%, rgba(0, 216, 255, 0.14), transparent 34%),
+    linear-gradient(120deg, rgba(0, 216, 255, 0.08), transparent 58%),
+    rgba(3, 12, 17, 0.88);
+}
+
+.standby-radar-card::after {
+  content: "WATCH AREA 100°E—180° / 0°—50°N";
+  position: absolute;
+  right: 12px;
+  bottom: 8px;
+  color: rgba(142, 225, 239, 0.4);
+  font: 700 9px/1 Consolas, monospace;
+  letter-spacing: 0.08em;
+}
+
+.standby-scope {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 132px;
+  height: 132px;
+  overflow: hidden;
+  border: 1px solid rgba(0, 216, 255, 0.64);
+  border-radius: 50%;
+  background:
+    repeating-radial-gradient(circle, transparent 0 20px, rgba(0, 216, 255, 0.17) 21px 22px),
+    rgba(0, 28, 35, 0.64);
+  box-shadow: inset 0 0 28px rgba(0, 216, 255, 0.12), 0 0 30px rgba(0, 216, 255, 0.1);
+}
+
+.standby-scope svg {
+  z-index: 3;
+  width: 26px;
+  height: 26px;
+  color: var(--cyan);
+  filter: drop-shadow(0 0 8px rgba(0, 216, 255, 0.9));
+}
+
+.standby-sweep {
+  position: absolute;
+  z-index: 2;
+  inset: 50% 50% 0 0;
+  transform-origin: 100% 0;
+  background: linear-gradient(34deg, transparent 34%, rgba(0, 216, 255, 0.04) 35%, rgba(0, 216, 255, 0.38));
+  animation: standby-scan 5.4s linear infinite;
+}
+
+.standby-crosshair {
+  position: absolute;
+  z-index: 1;
+  background: rgba(0, 216, 255, 0.18);
+}
+
+.standby-crosshair.horizontal { left: 5px; right: 5px; height: 1px; }
+.standby-crosshair.vertical { top: 5px; bottom: 5px; width: 1px; }
+
+.standby-radar-copy { min-width: 0; }
+.standby-radar-copy > span { color: var(--cyan); font: 800 10px/1 Consolas, monospace; letter-spacing: 0.14em; }
+.standby-radar-copy h1 { margin: 8px 0; color: #ecfbff; font-size: clamp(23px, 1.55vw, 30px); line-height: 1.05; text-shadow: 0 0 18px rgba(0, 216, 255, 0.16); }
+.standby-radar-copy p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.7; }
+
+.standby-watch-ledger {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  padding: 1px;
+  background: rgba(0, 216, 255, 0.16);
+}
+
+.standby-watch-ledger > div {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 3px 8px;
+  min-width: 0;
+  padding: 11px;
+  background: #071217;
+}
+
+.standby-watch-ledger svg { grid-row: 1 / 3; align-self: center; width: 18px; color: var(--cyan); }
+.standby-watch-ledger span { color: var(--muted); font-size: 10px; }
+.standby-watch-ledger strong { overflow: hidden; color: var(--paper); font: 800 12px/1.2 Consolas, monospace; text-overflow: ellipsis; white-space: nowrap; }
+
+.standby-source-note {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  padding: 13px;
+}
+
+.standby-source-note > svg { width: 20px; color: var(--amber); }
+.standby-source-note span { color: var(--amber); font-size: 10px; font-weight: 900; letter-spacing: 0.1em; }
+.standby-source-note p { margin: 4px 0 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+
+.standby-actions { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.82fr); gap: 8px; }
+.standby-actions a { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 42px; padding: 0 10px; font-size: 12px; font-weight: 900; }
+.standby-actions svg { width: 17px; }
+.standby-primary-action { color: #021014; background: var(--cyan); }
+.standby-secondary-action { color: var(--cyan); border: 1px solid rgba(0, 216, 255, 0.4); background: rgba(0, 216, 255, 0.05); }
+.standby-actions a:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+.standby-intel-panel.is-degraded .standby-radar-card { border-color: rgba(255, 59, 50, 0.5); }
+.standby-intel-panel.is-degraded .standby-radar-copy > span,
+.standby-intel-panel.is-degraded .standby-scope svg { color: var(--red); }
+
+@keyframes standby-scan { to { transform: rotate(360deg); } }
+
+@media (max-width: 760px) {
+  .standby-radar-card { grid-template-columns: 92px minmax(0, 1fr); min-height: 138px; padding: 12px; }
+  .standby-scope { width: 84px; height: 84px; }
+  .standby-radar-card::after { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .standby-sweep { animation: none; transform: rotate(42deg); }
 }
 
 @keyframes stormLockResolve {
@@ -7321,14 +8091,6 @@ a:focus-visible {
   font-size: var(--live-label);
 }
 
-.radar-shell[data-view="live"] .storm-target-label span {
-  font-size: var(--live-key);
-}
-
-.radar-shell[data-view="live"] .storm-target-label strong {
-  font-size: var(--live-body);
-}
-
 .radar-shell[data-view="live"] .maplibregl-ctrl-bottom-right {
   right: 8px;
   bottom: 8px;
@@ -7571,6 +8333,29 @@ a:focus-visible {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   grid-template-rows: 78px 68px 44px 72px minmax(214px, 1.25fr) minmax(88px, 0.75fr) 32px;
   gap: 6px;
+}
+
+/* No active storm is a complete audience state, not the first cell of the
+   active-storm dashboard.  Let the standby message own the whole left rail. */
+.live-audience-panel.is-empty {
+  display: block;
+}
+
+.live-audience-panel.is-empty .live-standby-panel {
+  min-height: 100%;
+  height: 100%;
+  padding: clamp(28px, 5vh, 64px) clamp(22px, 2vw, 40px);
+  border-color: rgba(0, 216, 255, 0.36);
+  background:
+    radial-gradient(circle at 50% 32%, rgba(0, 216, 255, 0.12), transparent 31%),
+    linear-gradient(180deg, rgba(0, 216, 255, 0.08), transparent 48%),
+    var(--texture-noise),
+    rgba(5, 10, 13, 0.92);
+}
+
+.live-audience-panel.is-empty .live-standby-panel > svg {
+  width: clamp(72px, 7vw, 104px);
+  height: clamp(72px, 7vw, 104px);
 }
 
 .live-audience-hero,
@@ -7895,6 +8680,105 @@ a:focus-visible {
   min-height: 0;
   align-items: center;
   animation: liveLandfallPage 280ms cubic-bezier(0.22, 0.8, 0.24, 1) both;
+}
+
+.live-landfall-broadcast > article.is-landing-priority {
+  border-color: rgba(255, 91, 91, .94);
+  box-shadow: 0 0 0 1px rgba(255, 91, 91, .34), 0 0 30px rgba(255, 45, 45, .22);
+  animation: liveLandfallPage 280ms cubic-bezier(0.22, 0.8, 0.24, 1) both, live-landing-priority-pulse 1.25s ease-in-out infinite alternate;
+}
+
+.live-landfall-broadcast > article.is-landing-priority .live-landfall-destination span {
+  color: #ff9d9d;
+  font-weight: 800;
+}
+
+.live-city-ticker-slot {
+  position: absolute;
+  z-index: 15;
+  left: clamp(520px, 30.5vw, 640px);
+  right: calc(var(--live-chat-right) + var(--live-chat-width) + 18px);
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  gap: 1px 8px;
+  align-items: center;
+  min-width: 0;
+  height: calc(100% - 12px);
+  padding: 4px 10px;
+  overflow: hidden;
+  border-left-color: rgba(255, 91, 91, .78) !important;
+  background: linear-gradient(90deg, rgba(153, 18, 24, .32), rgba(153, 18, 24, .04));
+}
+
+.live-city-ticker-slot svg {
+  grid-row: 1 / 3;
+  width: 27px;
+  height: 27px;
+  color: var(--live-evidence);
+}
+
+.live-city-ticker-slot span,
+.live-city-ticker-slot strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Closure cards carry operational notes that must remain legible in a narrow
+   three-card strip.  Only text that exceeds the viewport becomes a looping
+   telemetry crawl; short labels stay still. */
+.boss-event-card.is-cycle-closure .boss-event-scroll {
+  display: block;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.boss-event-scroll-track {
+  display: inline-flex;
+  min-width: 100%;
+  white-space: nowrap;
+}
+
+.boss-event-scroll.is-overflowing .boss-event-scroll-track {
+  min-width: max-content;
+  animation: bossEventTelemetryCrawl 9s linear infinite;
+}
+
+.boss-event-scroll.is-overflowing .boss-event-scroll-track > span {
+  padding-right: 34px;
+}
+
+.boss-event-card.is-cycle-closure:hover .boss-event-scroll-track {
+  animation-play-state: paused;
+}
+
+@keyframes bossEventTelemetryCrawl {
+  0%, 16% { transform: translateX(0); }
+  84%, 100% { transform: translateX(-50%); }
+}
+
+.live-city-ticker-slot span {
+  color: rgba(236, 251, 255, 0.58);
+  font-size: 15px;
+}
+
+.live-city-ticker-slot strong {
+  display: block;
+  color: #ffb8b8;
+  font-size: 19px;
+  animation: live-city-ticker-reveal 260ms ease-out both;
+}
+
+@keyframes live-city-ticker-reveal {
+  from { opacity: 0; transform: translateX(14px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes live-landing-priority-pulse {
+  from { background-color: rgba(119, 10, 17, .18); }
+  to { background-color: rgba(177, 18, 26, .38); }
 }
 
 .live-landfall-destination,
@@ -8332,7 +9216,7 @@ a:focus-visible {
 
 .live-pro-forecast-table > * {
   display: grid;
-  grid-template-columns: 1.4fr 0.75fr 0.85fr 0.5fr;
+  grid-template-columns: 1.4fr 0.75fr 0.85fr;
   gap: 4px;
   align-items: center;
   min-height: 27px;
@@ -8353,11 +9237,6 @@ a:focus-visible {
 
 .live-pro-forecast-table strong {
   color: var(--live-data);
-}
-
-.live-pro-forecast-table b {
-  color: var(--live-evidence);
-  text-align: right;
 }
 
 .live-agency-chips,
@@ -8456,6 +9335,11 @@ a:focus-visible {
   background: rgba(255, 176, 0, 0.06);
 }
 
+.live-event-timeline article.is-historical {
+  border-left-color: rgba(236, 251, 255, 0.42);
+  background: rgba(236, 251, 255, 0.04);
+}
+
 .live-event-timeline time,
 .live-event-timeline b {
   font: 800 18px/1.1 "Bahnschrift", Consolas, monospace;
@@ -8521,6 +9405,18 @@ a:focus-visible {
   font-size: 18px;
 }
 
+.live-source-ledger > .status-historical strong {
+  color: var(--live-evidence);
+}
+
+.live-source-ledger > .status-metadata strong {
+  color: #79b6ff;
+}
+
+.live-source-ledger > .status-unavailable strong {
+  color: #ff8490;
+}
+
 .live-pro-sources > p {
   margin: 8px 0 0;
   color: rgba(236, 251, 255, 0.56);
@@ -8574,13 +9470,78 @@ a:focus-visible {
   font-size: 19px;
 }
 
-.live-fact-rail > div:nth-child(2) svg,
-.live-fact-rail > div:nth-child(3) svg {
+.live-fact-rail > .live-landfall-fact svg,
+.live-fact-rail > .live-energy-fact svg {
   color: var(--live-evidence);
 }
 
-.live-fact-rail > div:nth-child(4) strong {
+.live-fact-rail > .live-deck-status strong {
   color: var(--live-radar);
+}
+
+/* Once the live path feed drops a storm, the bottom rail becomes a closure
+   receipt and listening status.  It must not retain province/energy combat UI
+   with placeholder values. */
+.live-fact-rail.status-standby {
+  border-top-color: rgba(0, 216, 255, 0.72);
+  background:
+    var(--texture-rail) center top / 100% 16px no-repeat,
+    linear-gradient(90deg, rgba(0, 216, 255, 0.16), transparent 46%, rgba(182, 255, 82, 0.08)),
+    #04080b;
+}
+
+.live-fact-rail > .live-cycle-closure svg {
+  color: var(--live-evidence);
+}
+
+.live-fact-rail > .live-cycle-last-fix svg {
+  color: #b6ff52;
+}
+
+.live-fact-rail > .live-cycle-listening svg {
+  color: var(--live-radar);
+}
+
+.live-fact-rail > .live-cycle-closure strong {
+  color: #fff2cf;
+}
+
+.live-fact-rail > .live-cycle-last-fix strong {
+  color: #dfffe4;
+}
+
+/* The two closure fields can be narrower than their rendered Chinese copy.
+   The track is duplicated only after measuring actual overflow in React. */
+.live-fact-rail .live-fact-marquee {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.live-fact-rail .live-fact-marquee-track {
+  display: inline-flex;
+  width: max-content;
+  min-width: 100%;
+  white-space: nowrap;
+}
+
+.live-fact-rail .live-fact-marquee.is-overflowing .live-fact-marquee-track {
+  min-width: max-content;
+  animation: liveFactRailMarquee 11s linear infinite;
+}
+
+.live-fact-rail .live-fact-marquee.is-overflowing .live-fact-marquee-track > span {
+  padding-right: 46px;
+}
+
+.live-fact-rail .live-fact-marquee.is-overflowing:hover .live-fact-marquee-track {
+  animation-play-state: paused;
+}
+
+@keyframes liveFactRailMarquee {
+  0%, 14% { transform: translateX(0); }
+  86%, 100% { transform: translateX(-50%); }
 }
 
 .radar-shell[data-live-deck="analysis"] .live-forecast-overlay {
@@ -9102,6 +10063,10 @@ a:focus-visible {
   --live-chat-height: 48px;
   --live-fact-rail-height: 64px;
   --live-chat-clearance: 0px;
+  --live-chat-width: clamp(300px, 27vw, 480px);
+  --live-chat-right: clamp(460px, 27vw, 500px);
+  --live-host-width: clamp(220px, 15vw, 300px);
+  --live-host-right: clamp(14px, 1.15vw, 24px);
 }
 
 .live-director .live-director-scene {
@@ -9141,11 +10106,12 @@ a:focus-visible {
 
 .live-command-drawer {
   --drawer-width: clamp(252px, 17vw, 306px);
+  --drawer-handle-width: 26px;
   position: absolute;
   z-index: 24;
   top: 50%;
   left: 0;
-  width: calc(var(--drawer-width) + 48px);
+  width: calc(var(--drawer-width) + var(--drawer-handle-width));
   min-height: 334px;
   color: #ecfbff;
   transform: translate3d(calc(-1 * var(--drawer-width)), -50%, 0);
@@ -9163,12 +10129,12 @@ a:focus-visible {
   position: absolute;
   top: 50%;
   right: 0;
-  width: 48px;
-  height: 154px;
+  width: var(--drawer-handle-width);
+  height: 92px;
   display: grid;
   place-items: center;
   align-content: center;
-  gap: 9px;
+  gap: 6px;
   overflow: hidden;
   color: #00d8ff;
   background:
@@ -9192,14 +10158,29 @@ a:focus-visible {
 }
 
 .live-command-sensor svg {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
+}
+
+/* A live city report owns both side stages. Keep the map and its city lock
+   fully legible while the normal operator chrome quietly clears the towers. */
+.live-director[data-city-broadcast-active="true"] .digital-host-window,
+.live-director[data-city-broadcast-active="true"] .live-command-drawer,
+.live-director[data-city-broadcast-active="true"] .live-chat-dock,
+.live-director[data-city-broadcast-active="true"] .live-route-legend,
+.live-director[data-city-broadcast-active="true"] .live-forecast-overlay {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 160ms ease,
+    visibility 0ms step-end 160ms;
 }
 
 .live-command-sensor span {
   color: rgba(236, 251, 255, 0.72);
-  font: 800 10px/1 "Bahnschrift", sans-serif;
-  letter-spacing: 0.18em;
+  font: 800 9px/1 "Bahnschrift", sans-serif;
+  letter-spacing: 0.14em;
   writing-mode: vertical-rl;
 }
 
@@ -9319,10 +10300,10 @@ a:focus-visible {
 .live-chat-dock {
   position: absolute;
   z-index: 22;
-  right: clamp(460px, 27vw, 500px);
+  right: var(--live-chat-right);
   bottom: 6px;
   left: auto;
-  width: clamp(300px, 27vw, 480px);
+  width: var(--live-chat-width);
   height: 42px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 76px;
@@ -9340,15 +10321,25 @@ a:focus-visible {
 }
 
 @media (max-width: 1500px) and (min-width: 981px) {
+  .live-director {
+    --live-chat-right: calc(var(--live-host-right) + var(--live-host-width) + 14px);
+    --live-chat-width: clamp(280px, 24vw, 340px);
+  }
+
   .live-chat-dock {
-    right: 460px;
-    width: 300px;
+    right: calc(var(--live-host-right) + var(--live-host-width) + 14px);
+    width: clamp(280px, 24vw, 340px);
     grid-template-columns: minmax(0, 1fr) 68px;
   }
 
   .live-director .live-chat-ident,
   .live-director .live-chat-status {
     display: none;
+  }
+
+  .live-city-ticker-slot {
+    left: clamp(520px, 40.5vw, 610px);
+    right: calc(var(--live-chat-right) + var(--live-chat-width) + 18px);
   }
 }
 
@@ -9435,6 +10426,19 @@ a:focus-visible {
   height: 16px;
 }
 
+.main-chat-dock {
+  position: absolute;
+  z-index: 2;
+  right: 12px;
+  bottom: calc(100% + 8px);
+  width: min(440px, calc(100vw - 28px));
+}
+
+.main-chat-dock .live-chat-ident,
+.main-chat-dock .live-chat-status {
+  display: none;
+}
+
 .live-chat-status {
   overflow: hidden;
   color: rgba(236, 251, 255, 0.52);
@@ -9445,9 +10449,18 @@ a:focus-visible {
 
 /* The chat is intentionally a short control embedded in the empty end of the
    lower fact rail. It should never turn into a second bottom toolbar. */
-.live-director .live-chat-ident,
-.live-director .live-chat-status {
+.live-director .live-chat-ident {
   display: none;
+}
+
+.live-director .live-chat-status {
+  display: block;
+  grid-column: 1 / -1;
+  margin-top: 3px;
+  color: rgba(175, 239, 247, 0.86);
+  font-size: 10px;
+  line-height: 1.2;
+  letter-spacing: 0.04em;
 }
 
 .live-director .live-audience-panel {
@@ -9939,6 +10952,8 @@ a:focus-visible {
     --live-chat-height: 44px;
     --live-fact-rail-height: 58px;
     --live-chat-clearance: 0px;
+    --live-chat-right: calc(var(--live-host-right) + var(--live-host-width) + 12px);
+    --live-chat-width: clamp(240px, 24vw, 320px);
   }
 
   .live-command-drawer {
@@ -9957,10 +10972,10 @@ a:focus-visible {
   }
 
   .live-chat-dock {
-    right: 214px;
+    right: calc(var(--live-host-right) + var(--live-host-width) + 12px);
     bottom: 5px;
-    left: 168px;
-    width: calc(100% - 382px);
+    left: auto;
+    width: clamp(240px, 24vw, 320px);
     grid-template-columns: minmax(180px, 1fr) 74px;
     padding-inline: 6px;
   }
@@ -9992,4 +11007,368 @@ a:focus-visible {
   .live-command-panel nav > button {
     transition-duration: 1ms;
   }
+}
+
+/* Live composition: both decks share a fixed left information rail. The map
+   therefore keeps one viewport and one camera anchor while the content rail
+   changes from audience-facing context to professional analysis. */
+@media (min-width: 1000px) {
+  .radar-shell[data-view="live"],
+  .radar-shell[data-live-deck="briefing"],
+  .radar-shell[data-live-deck="analysis"] {
+    --live-info-rail-width: clamp(420px, 30vw, 560px);
+    grid-template-columns: var(--live-info-rail-width) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) 64px;
+  }
+
+  .radar-shell[data-view="live"] .map-stage {
+    grid-column: 2;
+    grid-row: 1;
+    border-right: 0;
+    border-left: 1px solid rgba(0, 216, 255, 0.48);
+  }
+
+  .radar-shell[data-view="live"] .live-audience-panel,
+  .radar-shell[data-view="live"] .live-intel-panel,
+  .radar-shell[data-view="live"] .live-professional-panel,
+  .radar-shell[data-view="live"] .environment-panel.live-standby-environment-panel {
+    grid-column: 1;
+    grid-row: 1;
+    width: auto;
+    justify-self: stretch;
+    border-right: 1px solid rgba(0, 216, 255, 0.34);
+    border-left: 0;
+  }
+
+  .radar-shell[data-view="live"] .live-professional-panel {
+    z-index: auto;
+    box-shadow: 22px 0 36px rgba(0, 0, 0, 0.42);
+  }
+
+  .radar-shell[data-view="live"] .live-bottom-bar {
+    /* The lower broadcast rail is a whole-screen transmission strip. Keeping
+       it in the map column makes the left information rail steal its width. */
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  /* With no active storm, the left rail returns to the complete map-control
+     panel rather than pretending the storm-specific decks are still useful. */
+  .radar-shell[data-view="live"] .environment-panel.live-standby-environment-panel {
+    position: relative;
+    top: auto;
+    right: auto;
+    z-index: auto;
+    min-height: 0;
+    height: 100%;
+    max-height: 100%;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 18px 20px 24px;
+    border-right: 1px solid rgba(0, 216, 255, 0.34);
+    border-left: 0;
+    box-shadow: 22px 0 36px rgba(0, 0, 0, 0.42);
+    scrollbar-color: rgba(0, 216, 255, 0.68) rgba(5, 13, 17, 0.72);
+    transition: transform .46s cubic-bezier(.22,.9,.22,1), box-shadow .3s ease;
+    will-change: transform;
+  }
+
+  .radar-shell[data-view="live"] .live-standby-environment-panel .section-title {
+    gap: 9px;
+    font-size: 18px;
+  }
+
+  .radar-shell[data-view="live"] .live-standby-environment-panel .environment-panel-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex: 0 0 auto;
+  }
+
+  .radar-shell[data-view="live"] .live-standby-environment-panel .environment-panel-collapse {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 32px;
+    padding: 6px 9px;
+    color: #bff8ff;
+    border: 1px solid rgba(69, 215, 244, 0.44);
+    background: rgba(0, 49, 64, 0.5);
+    font: 700 12px/1 "Microsoft YaHei UI", sans-serif;
+    letter-spacing: .08em;
+    cursor: pointer;
+  }
+
+  .radar-shell[data-view="live"] .live-standby-environment-panel .environment-panel-collapse:hover {
+    border-color: rgba(143, 241, 255, 0.9);
+    background: rgba(0, 96, 119, 0.6);
+  }
+
+  .radar-shell[data-view="live"] .live-standby-environment-panel .environment-panel-content {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr);
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  .radar-shell[data-view="live"] .live-standby-environment-panel .environment-panel-content-inner {
+    min-height: 0;
+    overflow-y: auto;
+    padding-right: 2px;
+  }
+
+  /* Pull the whole left rail upward. Only the return handle remains at the
+     bottom edge; its contents are not folded in place. */
+  .radar-shell[data-view="live"] .live-standby-environment-panel.is-collapsed {
+    transform: translateY(calc(-100% + 48px));
+    box-shadow: none;
+  }
+
+  .radar-shell[data-view="live"] .live-standby-environment-panel.is-collapsed .section-title { visibility: hidden; }
+
+  .radar-shell[data-view="live"] .live-standby-environment-panel.is-collapsed .environment-panel-collapse {
+    position: absolute;
+    right: 14px;
+    bottom: 7px;
+  }
+
+  .radar-shell[data-view="live"] .live-standby-environment-panel .section-title svg {
+    width: 20px;
+    height: 20px;
+  }
+
+  .radar-shell[data-view="live"] .live-standby-environment-panel .section-subtitle {
+    margin-top: 4px;
+    font-size: 12px;
+  }
+
+  .radar-shell[data-view="live"] .live-standby-environment-panel .environment-layer-list {
+    gap: 10px;
+    margin-top: 14px;
+  }
+
+  .radar-shell[data-view="live"] .live-standby-environment-panel .environment-layer-row {
+    grid-template-columns: 22px minmax(0, 1fr) auto;
+    gap: 10px;
+    min-height: 72px;
+    padding: 11px 12px;
+  }
+
+  .radar-shell[data-view="live"] .live-standby-environment-panel .environment-layer-row svg {
+    width: 19px;
+    height: 19px;
+  }
+
+  .radar-shell[data-view="live"] .live-standby-environment-panel .environment-layer-row span {
+    font-size: 15px;
+  }
+
+  .radar-shell[data-view="live"] .live-standby-environment-panel .environment-layer-row b {
+    font-size: 12px;
+  }
+
+  .radar-shell[data-view="live"] .live-standby-environment-panel .environment-layer-row small,
+  .radar-shell[data-view="live"] .live-standby-environment-panel .gfs-scalar-control small,
+  .radar-shell[data-view="live"] .live-standby-environment-panel .cwa-radar-control small,
+  .radar-shell[data-view="live"] .live-standby-environment-panel .gfs-wave-control small,
+  .radar-shell[data-view="live"] .live-standby-environment-panel .ecmwf-track-control small,
+  .radar-shell[data-view="live"] .live-standby-environment-panel .observation-control small,
+  .radar-shell[data-view="live"] .live-standby-environment-panel .wind-render-mode small,
+  .radar-shell[data-view="live"] .live-standby-environment-panel .environment-attribution {
+    font-size: 12px;
+  }
+
+  .radar-shell[data-view="live"] .live-standby-environment-panel .gfs-scalar-control,
+  .radar-shell[data-view="live"] .live-standby-environment-panel .cwa-radar-control,
+  .radar-shell[data-view="live"] .live-standby-environment-panel .gfs-wave-control,
+  .radar-shell[data-view="live"] .live-standby-environment-panel .ecmwf-track-control,
+  .radar-shell[data-view="live"] .live-standby-environment-panel .observation-control,
+  .radar-shell[data-view="live"] .live-standby-environment-panel .wind-render-mode {
+    gap: 7px;
+    margin-top: 12px;
+    padding: 11px 12px;
+  }
+
+  .radar-shell[data-view="live"] .live-standby-environment-panel .gfs-scalar-control > span,
+  .radar-shell[data-view="live"] .live-standby-environment-panel .cwa-radar-control > span,
+  .radar-shell[data-view="live"] .live-standby-environment-panel .gfs-wave-control > span,
+  .radar-shell[data-view="live"] .live-standby-environment-panel .ecmwf-track-control > span,
+  .radar-shell[data-view="live"] .live-standby-environment-panel .observation-control > span,
+  .radar-shell[data-view="live"] .live-standby-environment-panel .wind-render-mode > span {
+    font-size: 13px;
+  }
+
+  .radar-shell[data-view="live"] .live-standby-environment-panel .gfs-scalar-control button,
+  .radar-shell[data-view="live"] .live-standby-environment-panel .cwa-radar-control button,
+  .radar-shell[data-view="live"] .live-standby-environment-panel .gfs-wave-control button,
+  .radar-shell[data-view="live"] .live-standby-environment-panel .ecmwf-track-control button,
+  .radar-shell[data-view="live"] .live-standby-environment-panel .observation-control button,
+  .radar-shell[data-view="live"] .live-standby-environment-panel .wind-render-mode button {
+    min-height: 34px;
+    font-size: 12px;
+  }
+}
+
+@media (max-width: 999px) {
+  .radar-shell[data-view="live"] .environment-panel.live-standby-environment-panel {
+    position: relative;
+    top: auto;
+    right: auto;
+    width: 100%;
+    max-height: 42vh;
+    overflow-y: auto;
+    padding: 14px;
+  }
+}
+
+/* GFS provenance is operational information, not a fixed decoration. Keep
+   the contents click-through while exposing a clear, keyboard-accessible drag
+   handle for the broadcast operator. */
+.wind-field-time-badge {
+  pointer-events: none;
+  will-change: transform;
+}
+
+.wind-field-time-badge-handle {
+  width: max-content;
+  max-width: 100%;
+  padding: 0;
+  color: rgba(190, 255, 220, 0.7);
+  background: transparent;
+  border: 0;
+  cursor: grab;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.wind-field-time-badge-handle:active {
+  cursor: grabbing;
+}
+
+.wind-field-time-badge-handle:focus-visible {
+  outline: 1px solid #a9efd1;
+  outline-offset: 3px;
+}
+
+.wind-field-time-badge[data-stale="true"] .wind-field-time-badge-handle {
+  color: #ffd98b;
+}
+
+/* Broadcast HUD always reads above map canvases, projected markers, route
+   overlays and the active information rail. */
+.radar-shell[data-view="live"] .live-topbar,
+.radar-shell[data-view="live"] .live-bottom-bar {
+  z-index: 1000;
+  isolation: isolate;
+}
+
+/* One reusable MapLibre marker represents the currently selected viewer city.
+   The ring intentionally plays once; the city card takes over after the ping. */
+.city-attention-marker { position:relative; width:44px; height:44px; pointer-events:none; transform:translateZ(0); }
+.city-attention-marker i { position:absolute; inset:14px; display:block; border-radius:50%; background:#e7fcff; border:3px solid #00d8ff; box-shadow:0 0 0 5px rgba(0,216,255,.23), 0 0 24px rgba(0,216,255,.92); }
+.city-attention-marker b, .city-attention-marker span { position:absolute; inset:0; border:2px solid rgba(0,216,255,.94); border-radius:50%; opacity:0; }
+.city-attention-marker[data-phase="flash"] b { animation:cityAttentionPulse .72s ease-out 0s 2 both; }
+.city-attention-marker[data-phase="flash"] span { animation:cityAttentionPulse .72s ease-out .17s 2 both; }
+.city-attention-marker[data-phase="card"] b { opacity:.42; transform:scale(.82); }
+
+.live-city-overlay { position:fixed; z-index:2147483000; inset:0; pointer-events:none; isolation:isolate; }
+.live-city-overlay .city-target-lock { z-index:3; }
+
+@keyframes cityAttentionPulse { from { opacity:.95; transform:scale(.22); } to { opacity:0; transform:scale(1.1); } }
+
+/* City target mode is promoted out of the MapLibre/meteorology canvas stack:
+   wind and satellite layers can never dim this director-facing HUD. */
+.city-attention-marker { opacity:0; }
+.city-target-lock { position:fixed; z-index:2400; left:var(--city-lock-x); top:var(--city-lock-y); width:118px; height:118px; pointer-events:none; transform:translate(-50%,-50%); color:#fff6dd; filter:drop-shadow(0 0 12px #ff4b38); }
+.city-target-lock::before,.city-target-lock::after { content:""; position:absolute; inset:20px; border:1px solid rgba(255,99,72,.95); clip-path:polygon(0 20%,20% 20%,20% 0,80% 0,80% 20%,100% 20%,100% 80%,80% 80%,80% 100%,20% 100%,20% 80%,0 80%); }
+.city-target-lock::after { inset:34px; border-color:#ffc247; animation:cityLockFlicker 1.2s steps(2,end) infinite; }
+.city-target-lock-sweep { position:absolute; inset:2px; border-radius:50%; background:conic-gradient(from 215deg,transparent 0 69%,rgba(255,75,56,.5) 73%,transparent 82%); mask:radial-gradient(transparent 59%,#000 61%); animation:cityLockSpin 1.7s linear infinite; }
+.city-target-lock-orbit { position:absolute; border:1px solid rgba(255,120,94,.66); border-radius:50%; }
+.city-target-lock-orbit.is-inner { inset:29px; border-style:dashed; animation:cityLockSpin 4s linear infinite reverse; }
+.city-target-lock-orbit.is-outer { inset:6px; animation:cityLockBreath 1.15s ease-in-out infinite; }
+.city-target-lock-bracket { position:absolute; width:19px; height:19px; border-color:#ff684d; border-style:solid; }
+.city-target-lock-bracket.is-nw { left:7px; top:7px; border-width:2px 0 0 2px; }
+.city-target-lock-bracket.is-ne { right:7px; top:7px; border-width:2px 2px 0 0; }
+.city-target-lock-bracket.is-sw { left:7px; bottom:7px; border-width:0 0 2px 2px; }
+.city-target-lock-bracket.is-se { right:7px; bottom:7px; border-width:0 2px 2px 0; }
+.city-target-lock-core { position:absolute; inset:39px 15px; display:grid; place-content:center; gap:2px; text-align:center; background:rgba(28,8,9,.86); border:1px solid #ff684d; box-shadow:0 0 20px rgba(255,75,56,.28) inset; }
+.city-target-lock-core b { font-size:14px; letter-spacing:.12em; }
+.city-target-lock-core small { color:#ffc247; font:700 7px/1 ui-monospace,Consolas,monospace; letter-spacing:.13em; white-space:nowrap; }
+.city-target-lock[data-phase="flash"] { animation:cityLockAcquire .72s cubic-bezier(.14,.95,.23,1.2) both; }
+.city-target-lock[data-phase="flash"] .city-target-lock-orbit.is-outer { animation-duration:.45s; }
+.city-target-lock[data-phase="card"] .city-target-lock-core { border-color:#ffbf52; }
+
+@keyframes cityLockAcquire { 0% { opacity:0; transform:translate(-50%,-50%) scale(1.7) rotate(-25deg); } 65% { opacity:1; transform:translate(-50%,-50%) scale(.88); } 100% { transform:translate(-50%,-50%) scale(1); } }
+@keyframes cityLockSpin { to { transform:rotate(360deg); } }
+@keyframes cityLockBreath { 50% { transform:scale(1.18); opacity:.25; } }
+@keyframes cityLockFlicker { 50% { opacity:.2; } }
+
+@media (prefers-reduced-motion:reduce) {
+  .city-target-lock,
+  .city-target-lock *,
+  .city-attention-marker b,
+  .city-attention-marker span {
+    animation-duration:1ms !important;
+    animation-iteration-count:1 !important;
+  }
+}
+
+/* Standby uses a full-width map from the first frame. The environment rail is
+   an overlay drawer, so sliding it away only uncovers existing map pixels and
+   never resizes or re-centres the camera/top bar. */
+@media (min-width: 1000px) {
+  .radar-shell[data-view="live"][data-live-standby="true"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .radar-shell[data-view="live"][data-live-standby="true"] .map-stage {
+    grid-column: 1;
+    border-left: 0;
+  }
+
+  /* The map is full-bleed under the rail, but the editorial top bar keeps its
+     original safe area to the right of that rail in both drawer states. */
+  .radar-shell[data-view="live"][data-live-standby="true"] .live-topbar {
+    left: calc(clamp(420px, 30vw, 560px) + 16px);
+  }
+
+  .radar-shell[data-view="live"][data-live-standby="true"] .environment-panel.live-standby-environment-panel {
+    position: absolute;
+    z-index: 1020;
+    top: 0;
+    bottom: 64px;
+    height: auto;
+    max-height: none;
+    width: clamp(420px, 30vw, 560px);
+    max-width: calc(100vw - 24px);
+    grid-column: 1;
+    grid-row: 1;
+  }
+}
+
+/* Console-only city audience access table. */
+.console-audience-access { max-width: 1080px; }
+.console-audience-form { grid-template-columns: minmax(150px, .7fr) minmax(240px, 1.25fr) minmax(220px, 1fr); }
+.console-audience-add { margin-left: auto; }
+.console-audience-table-card { min-width: 0; }
+.console-audience-table-wrap { overflow-x: auto; border: 1px solid rgba(132, 223, 244, .14); }
+.console-audience-table { width: 100%; min-width: 720px; border-collapse: collapse; color: #c6e2e7; font-size: 12px; }
+.console-audience-table th,
+.console-audience-table td { padding: 11px 12px; border-bottom: 1px solid rgba(132, 223, 244, .12); text-align: left; vertical-align: middle; }
+.console-audience-table th { color: #6eabb8; background: rgba(0, 216, 255, .055); font: 700 10px/1 ui-monospace, Consolas, monospace; letter-spacing: .1em; text-transform: uppercase; }
+.console-audience-table tbody tr:last-child td { border-bottom: 0; }
+.console-audience-table tbody tr:hover { background: rgba(0, 216, 255, .035); }
+.console-audience-table code { color: #effdff; font-size: 12px; overflow-wrap: anywhere; }
+.console-audience-empty { color: #66868e; text-align: center !important; padding: 28px 12px !important; }
+.console-audience-delete { display: inline-flex; align-items: center; gap: 6px; padding: 6px 8px; color: #ffaaa1; background: rgba(255, 80, 62, .06); border: 1px solid rgba(255, 112, 96, .28); cursor: pointer; }
+.console-audience-delete:hover { color: #fff1ef; border-color: rgba(255, 112, 96, .62); }
+.console-audience-delete:disabled { opacity: .5; cursor: wait; }
+@media (max-width: 760px) {
+  .console-audience-form { grid-template-columns: 1fr; }
+  .console-audience-add { width: 100%; justify-content: center; }
 }

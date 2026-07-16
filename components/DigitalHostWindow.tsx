@@ -8,13 +8,23 @@ import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent
 } from "react";
+import {
+  isHostLiveComment,
+  isHostViewerRelationEvent,
+  type HostLiveEvent
+} from "@/lib/liveCityInteraction";
 
 type DirectorScene = "briefing" | "analysis";
 
 export type HostChatRequest = {
   id: string;
   text: string;
+  directReply?: string;
+  viewerId?: string;
+  viewerName?: string;
 };
+
+export type { HostLiveEvent } from "@/lib/liveCityInteraction";
 
 type HostHealth = {
   queueDepth?: number;
@@ -37,6 +47,7 @@ const HOST_WINDOW_MIN_HEIGHT = 220;
 const HOST_WINDOW_PADDING = 8;
 const CHAT_RETRY_INTERVAL_MS = 750;
 const CHAT_MAX_ATTEMPTS = 8;
+const DEFAULT_RADAR_VIEWER = "001号人类";
 
 type HostWindowBounds = {
   left: number;
@@ -73,11 +84,13 @@ function isHostReady(health: HostHealth | null) {
 export function DigitalHostWindow({
   scene,
   visible = true,
-  chatRequest
+  chatRequest,
+  onLiveEvent
 }: {
   scene: DirectorScene;
   visible?: boolean;
   chatRequest?: HostChatRequest | null;
+  onLiveEvent?: (event: HostLiveEvent) => void;
 }) {
   const hostWindowRef = useRef<HTMLElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -87,9 +100,13 @@ export function DigitalHostWindow({
   const pendingChatRef = useRef<{
     id: string;
     text: string;
+    directReply?: string;
+    viewerId: string;
+    viewerName: string;
     attempts: number;
     acknowledged: boolean;
   } | null>(null);
+  const onLiveEventRef = useRef(onLiveEvent);
   const [frameLoaded, setFrameLoaded] = useState(false);
   const frameLoadedRef = useRef(false);
   const [hostFrameReady, setHostFrameReady] = useState(false);
@@ -111,6 +128,10 @@ export function DigitalHostWindow({
   useEffect(() => {
     sceneRef.current = scene;
   }, [scene]);
+
+  useEffect(() => {
+    onLiveEventRef.current = onLiveEvent;
+  }, [onLiveEvent]);
 
   useEffect(() => {
     frameLoadedRef.current = frameLoaded;
@@ -179,6 +200,10 @@ export function DigitalHostWindow({
   useEffect(() => {
     const handleHostMessage = (event: MessageEvent<unknown>) => {
       if (event.origin !== hostOrigin || event.source !== iframeRef.current?.contentWindow) return;
+      if (isHostLiveComment(event.data) || isHostViewerRelationEvent(event.data)) {
+        onLiveEventRef.current?.(event.data);
+        return;
+      }
       const data = event.data as { type?: unknown; requestId?: unknown };
       if (data?.type === "linglan:ready") {
         setHostFrameReady(true);
@@ -208,6 +233,12 @@ export function DigitalHostWindow({
     pendingChatRef.current = {
       id: chatRequest.id,
       text: chatRequest.text.trim(),
+      directReply: chatRequest.directReply?.trim(),
+      viewerId: chatRequest.viewerId?.trim() || DEFAULT_RADAR_VIEWER,
+      viewerName:
+        chatRequest.viewerName?.trim() ||
+        chatRequest.viewerId?.trim() ||
+        DEFAULT_RADAR_VIEWER,
       attempts: 0,
       acknowledged: false
     };
@@ -232,6 +263,9 @@ export function DigitalHostWindow({
           type: "linglan:chat",
           requestId: pending.id,
           text: pending.text,
+          directReply: pending.directReply,
+          viewerId: pending.viewerId,
+          viewerName: pending.viewerName,
           requestedAt: Date.now()
         },
         hostOrigin
@@ -251,7 +285,13 @@ export function DigitalHostWindow({
       void fetch("/api/digital-host/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ requestId: pending.id, text: pending.text })
+        body: JSON.stringify({
+          requestId: pending.id,
+          text: pending.text,
+          directReply: pending.directReply,
+          viewerId: pending.viewerId,
+          viewerName: pending.viewerName
+        })
       })
         .then((response) => {
           if (!response.ok || pending.acknowledged) return;

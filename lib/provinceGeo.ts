@@ -118,6 +118,15 @@ export function getProvinceSampleCoordinates(name: string, maxPoints = 7): Array
   return Array.from({ length: maxPoints }, (_, index) => candidates[Math.round(index * (candidates.length - 1) / (maxPoints - 1))]);
 }
 
+export function getProvinceBoundaryCoordinates(name: string, maxPoints = 240): Array<{ lon: number; lat: number }> {
+  const normalized = normalizeProvinceName(name);
+  const feature = provinceGeoJson.features.find((item) => normalizeProvinceName(item.properties.name) === normalized || item.properties.name === name);
+  if (!feature) return [];
+  const coordinates = geometryCoordinates(feature.geometry).map(([lon, lat]) => ({ lon, lat }));
+  if (coordinates.length <= maxPoints) return coordinates;
+  return Array.from({ length: maxPoints }, (_, index) => coordinates[Math.round(index * (coordinates.length - 1) / (maxPoints - 1))]);
+}
+
 function geometryCoordinates(geometry: Geometry): [number, number][] {
   const positions = geometry.type === "Polygon"
     ? geometry.coordinates.flat()

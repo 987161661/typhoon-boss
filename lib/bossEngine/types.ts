@@ -28,7 +28,8 @@ export type CoreStructureState =
   | "replacement-active"
   | "replacement-stalled"
   | "replacement-completed"
-  | "replacement-collapsed";
+  | "replacement-collapsed"
+  | "overland-dissipation";
 
 export type BossIntensityPhase = "forming" | "intensifying" | "mature" | "weakening" | "archived";
 export type BossThreatPhase = "open-ocean" | "landfall-pressure" | "archived";
@@ -46,6 +47,8 @@ export interface BossStructureSummary {
   cycleOrdinal: number | null;
   monitoredCycle: number | null;
   cycleLabel: string;
+  /** Number of JTWC structure observations retained for this storm locally. */
+  historyCount?: number;
   confidence: number;
   evidenceLevel: BossEvidenceLevel;
   source: "jtwc" | "track-inference" | "unavailable";
@@ -88,7 +91,7 @@ export interface BossProvinceCurrentConditions {
 
 export interface BossProvinceBriefing {
   province: string;
-  headlineLabel: "预计登陆" | "预计最接近" | "影响判断";
+  headlineLabel: "路径入省推演" | "预计最接近" | "影响判断" | "中心位置";
   impactStatus: "landfall" | "direct" | "watch" | "unaffected" | "unavailable";
   impactLabel: string;
   estimatedAt: string | null;
@@ -103,7 +106,8 @@ export interface BossProvinceBriefing {
 
 export interface BossLandfallScenario {
   province: string;
-  probability: number;
+  pathRelation: "current-position" | "future-entry" | "nearby-corridor";
+  relativeWeight: number;
   estimatedAt: string | null;
   windSpeedMs: number | null;
   windForceLevel: string;
@@ -111,6 +115,8 @@ export interface BossLandfallScenario {
   agencyTotal: number;
   evidenceLevel: "inferred";
   basis: string;
+  generatedAt: string;
+  limitations: string;
   currentConditions?: BossProvinceCurrentConditions;
 }
 

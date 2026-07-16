@@ -1,27 +1,45 @@
 import { buildBossProfiles } from "@/lib/bossEngine";
 import type { BossProfile, BossProvinceBriefing, BossProvinceCurrentConditions } from "@/lib/bossEngine/types";
 import { getImpactArea, getSatelliteLayer, getWindField } from "@/lib/environmentData";
-import { findProvinceReferencePoint, getProvinceReferencePoints, getProvinceSampleCoordinates, normalizeProvinceName } from "@/lib/provinceGeo";
-import { getCurrentStorms, getDataSourceLabel } from "@/lib/realTyphoonData";
+import { findProvinceReferencePoint, getProvinceBoundaryCoordinates, getProvinceReferencePoints, getProvinceSampleCoordinates, normalizeProvinceName } from "@/lib/provinceGeo";
+import { distanceBetweenKm, distanceToPathKm, windForceFromSpeed } from "@/lib/meteorology";
+import { getDataSourceLabel, getTrackSnapshot, type LastTrackedStorm } from "@/lib/realTyphoonData";
 import type { ImpactAreaPayload, SatelliteLayerPayload, Storm, WindFieldPayload } from "@/lib/types";
 
 const DERIVED_CACHE_TTL_MS = 4 * 60 * 1000;
 const DEGRADED_DERIVED_CACHE_TTL_MS = 2 * 60 * 1000;
 const STALE_DERIVED_CACHE_TTL_MS = 10 * 60 * 1000;
+// A decorative or analytical layer must never prevent the live path feed from
+// reaching the broadcast page. Timed-out layers fall back independently.
+const DERIVED_REQUEST_TIMEOUT_MS = 7_000;
 const CHINA_WIND_BOUNDS = { west: 73, east: 135, south: 18, north: 54 };
+const MODEL_WIND_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const FAST_PROVINCE_BRIEFINGS = new Set(["西藏", "青海", "宁夏", "海南", "香港", "澳门"]);
 
 export interface RadarSnapshotEnvironment {
   satellite: SatelliteLayerPayload;
   windField: WindFieldPayload;
+  windCenters: Record<string, StormWindCenter>;
   impactArea: ImpactAreaPayload;
+}
+
+export interface StormWindCenter {
+  stormId: string;
+  status: WindFieldPayload["status"];
+  source: string;
+  updatedAt: string;
+  analysisCenter: WindFieldPayload["analysisCenter"] | null;
 }
 
 export interface RadarSnapshot {
   source: string;
   updatedAt: string;
+  observedAt: string | null;
+  fetchedAt: string;
+  status: "fresh" | "stale" | "unavailable";
   activeStormId: string | null;
   storms: Storm[];
+  lastTrackedStorm: LastTrackedStorm | null;
   bosses: BossProfile[];
   environment: RadarSnapshotEnvironment;
   warnings: string[];
@@ -46,7 +64,8 @@ const derivedCache = new Map<string, DerivedSnapshot>();
 const derivedInFlight = new Map<string, Promise<DerivedSnapshot>>();
 
 export async function getRadarSnapshot(stormId?: string | null): Promise<RadarSnapshot> {
-  const storms = await getCurrentStorms();
+  const trackSnapshot = await getTrackSnapshot();
+  const storms = trackSnapshot.storms;
   const selectedStorm = storms.find((storm) => storm.id === stormId) ?? storms[0] ?? null;
   const activeStormId = selectedStorm?.id ?? null;
   const derived = await getDerivedSnapshot(storms, activeStormId);
@@ -54,11 +73,15 @@ export async function getRadarSnapshot(stormId?: string | null): Promise<RadarSn
   return {
     source: getDataSourceLabel(),
     updatedAt: new Date().toISOString(),
+    observedAt: trackSnapshot.observedAt,
+    fetchedAt: trackSnapshot.fetchedAt,
+    status: trackSnapshot.status,
     activeStormId,
     storms,
+    lastTrackedStorm: trackSnapshot.lastTrackedStorm,
     bosses: derived.bosses,
     environment: derived.environment,
-    warnings: derived.warnings,
+    warnings: [...trackSnapshot.warnings, ...derived.warnings],
     cache: {
       stormUpdatedAt: selectedStorm?.updatedAt ?? storms[0]?.updatedAt ?? null,
       derivedGeneratedAt: derived.generatedAt,
@@ -116,17 +139,19 @@ function refreshDerivedSnapshot(key: string, storms: Storm[], activeStormId: str
 async function loadDerivedSnapshot(storms: Storm[], activeStormId: string | null): Promise<DerivedSnapshot> {
   const generatedAt = new Date().toISOString();
   const warnings: string[] = [];
-  const [bossResult, satelliteResult, windResult, impactResult, chinaWindResult] = await Promise.allSettled([
-    buildBossProfiles(storms),
-    getSatelliteLayer(storms.find((storm) => storm.id === activeStormId)?.updatedAt ?? storms[0]?.updatedAt),
-    getWindField(activeStormId),
-    getImpactArea(activeStormId),
-    getWindField(activeStormId, CHINA_WIND_BOUNDS)
+  const [bossResult, satelliteResult, windResult, windCentersResult, impactResult, chinaWindResult] = await Promise.allSettled([
+    withTimeout(buildBossProfiles(storms), "Boss profile"),
+    withTimeout(getSatelliteLayer(storms.find((storm) => storm.id === activeStormId)?.updatedAt ?? storms[0]?.updatedAt), "Satellite layer"),
+    withTimeout(getWindField(activeStormId), "Local wind field"),
+    withTimeout(loadStormWindCenters(storms), "Storm wind centers"),
+    withTimeout(getImpactArea(activeStormId), "Impact area"),
+    withTimeout(getWindField(activeStormId, CHINA_WIND_BOUNDS), "Nationwide wind field")
   ]);
 
   const baseBosses = settleValue(bossResult, [], warnings, "Boss profile generation failed.");
   const satellite = settleValue(satelliteResult, fallbackSatellite(generatedAt), warnings, "Satellite layer generation failed.");
   const directWindField = settleValue(windResult, fallbackWindField(generatedAt), warnings, "Wind field generation failed.");
+  const windCenters = settleValue(windCentersResult, {}, warnings, "Storm wind center generation failed.");
   const impactArea = settleValue(impactResult, fallbackImpactArea(generatedAt), warnings, "Impact area generation failed.");
   const chinaWindField = settleValue(chinaWindResult, directWindField, warnings, "Nationwide province wind field generation failed.");
   const windField = directWindField.status === "available"
@@ -145,7 +170,8 @@ async function loadDerivedSnapshot(storms: Storm[], activeStormId: string | null
     bosses,
     environment: {
       satellite,
-      windField,
+      windField: compactWindField(windField),
+      windCenters,
       impactArea
     },
     generatedAt,
@@ -153,6 +179,50 @@ async function loadDerivedSnapshot(storms: Storm[], activeStormId: string | null
     staleUntil: Date.now() + STALE_DERIVED_CACHE_TTL_MS,
     warnings
   };
+}
+
+async function loadStormWindCenters(storms: Storm[]): Promise<Record<string, StormWindCenter>> {
+  const entries = await Promise.all(storms.map(async (storm) => {
+    try {
+      const field = await getWindField(storm.id);
+      return [storm.id, {
+        stormId: storm.id,
+        status: field.status,
+        source: field.source,
+        updatedAt: field.updatedAt,
+        analysisCenter: field.analysisCenter ?? null
+      } satisfies StormWindCenter] as const;
+    } catch {
+      return [storm.id, {
+        stormId: storm.id,
+        status: "unavailable",
+        source: "Wind field unavailable",
+        updatedAt: new Date().toISOString(),
+        analysisCenter: null
+      } satisfies StormWindCenter] as const;
+    }
+  }));
+  return Object.fromEntries(entries);
+}
+
+function compactWindField(payload: WindFieldPayload): WindFieldPayload {
+  return {
+    ...payload,
+    points: [],
+    reason: payload.reason
+      ? `${payload.reason} 完整风场请通过视口风场接口按需获取。`
+      : "完整风场请通过视口风场接口按需获取。"
+  };
+}
+
+function withTimeout<T>(request: Promise<T>, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${DERIVED_REQUEST_TIMEOUT_MS / 1000}s.`)), DERIVED_REQUEST_TIMEOUT_MS);
+    request.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); }
+    );
+  });
 }
 
 function enrichProvinceCurrentConditions(
@@ -193,16 +263,22 @@ function buildProvinceCurrentConditions(
     ? samples.reduce((total, point) => total + point.speed, 0) / samples.length
     : null;
   const reference = findProvinceReferencePoint(province);
+  const boundary = getProvinceBoundaryCoordinates(province);
   const distanceToStormKm = storm && reference
-    ? Math.round(distanceBetweenKm(storm.position, { lon: reference.center[0], lat: reference.center[1] }))
+    ? Math.round(Math.min(...(boundary.length ? boundary : [{ lon: reference.center[0], lat: reference.center[1] }]).map((point) => distanceBetweenKm(storm.position, point))))
     : null;
+  const windSourceAgeMs = windField.status === "available"
+    ? Date.now() - Date.parse(windField.updatedAt)
+    : Number.POSITIVE_INFINITY;
   return {
     averageWindSpeedMs: averageWindSpeedMs === null ? null : Math.round(averageWindSpeedMs * 10) / 10,
     windForceLevel: averageWindSpeedMs === null ? "--" : windForceFromSpeed(averageWindSpeedMs),
     windDirection: averageWindDirection(samples),
     windSampleCount: samples.length,
     windObservedAt: windField.status === "available" ? windField.updatedAt : null,
-    windDataStale: Boolean(windField.isStale),
+    // This is an NWP analysis field, not a station observation. Mark it stale
+    // both when retrieval failed and when its valid time is no longer recent.
+    windDataStale: Boolean(windField.isStale) || !Number.isFinite(windSourceAgeMs) || windSourceAgeMs > MODEL_WIND_MAX_AGE_MS,
     windDataReason: windField.reason ?? null,
     distanceToStormKm,
     source: windField.attribution
@@ -215,64 +291,73 @@ function buildProvinceBriefings(
   currentConditions: Map<string, BossProvinceCurrentConditions>
 ): BossProvinceBriefing[] {
   if (!storm) return [];
-  const primaryForecast = storm.forecastScenarios.find((scenario) => scenario.isPrimary)?.points ?? storm.forecast;
+  const nowMs = Date.now();
+  const futurePoints = (points: Storm["forecast"]) => points.filter((point) => {
+    const time = Date.parse(point.time);
+    return Number.isFinite(time) && time >= nowMs;
+  });
+  const primaryForecast = futurePoints(storm.forecastScenarios.find((scenario) => scenario.isPrimary)?.points ?? storm.forecast);
   const agencyTotal = storm.forecastScenarios.length;
   const briefings = getProvinceReferencePoints().map((province) => {
-    const landfall = boss.landfallScenarios.find(
+    const pathScenario = boss.landfallScenarios.find(
       (scenario) => normalizeProvinceName(scenario.province) === province.shortName
     );
-    const nearest = closestForecastPoint(primaryForecast, province.center);
+    const nearest = closestForecastPoint(primaryForecast, province.shortName, province.center);
     const supportDistanceKm = Math.max(storm.windRadiiKm.r7 || 0, 380);
     const agencySupport = storm.forecastScenarios.filter((scenario) => {
-      const closest = closestForecastPoint(scenario.points, province.center);
+      const closest = closestForecastPoint(futurePoints(scenario.points), province.shortName, province.center);
       return closest !== null && closest.distanceKm <= supportDistanceKm;
     }).length;
-    const timedLandfall = landfall?.estimatedAt ? landfall : null;
-    const closestApproachKm = timedLandfall ? 0 : nearest?.distanceKm ?? null;
-    const assessment = timedLandfall
-      ? { status: "landfall" as const, label: landfallLikelihoodLabel(timedLandfall.probability) }
+    const timedPathEntry = pathScenario?.pathRelation === "future-entry" && pathScenario.estimatedAt
+      ? pathScenario
+      : null;
+    const currentProvince = pathScenario?.pathRelation === "current-position" ? pathScenario : null;
+    const closestApproachKm = timedPathEntry || currentProvince ? 0 : nearest?.distanceKm ?? null;
+    const assessment = timedPathEntry
+      ? { status: "direct" as const, label: "机构未来路径进入该省范围（模式推演）" }
+      : currentProvince
+        ? { status: "direct" as const, label: "台风中心当前位于该省范围（不等同官方登陆确认）" }
       : provinceImpactAssessment(closestApproachKm, storm.windRadiiKm.r7);
     const noImpactTiming = assessment.status === "unaffected" || assessment.status === "unavailable";
     return {
       province: province.shortName,
-      headlineLabel: timedLandfall
-        ? "预计登陆" as const
+      headlineLabel: timedPathEntry
+        ? "路径入省推演" as const
+        : currentProvince
+          ? "中心位置" as const
         : noImpactTiming ? "影响判断" as const : "预计最接近" as const,
       impactStatus: assessment.status,
       impactLabel: assessment.label,
-      estimatedAt: noImpactTiming ? null : timedLandfall?.estimatedAt ?? nearest?.point.time ?? null,
-      stormWindSpeedMs: noImpactTiming ? null : timedLandfall?.windSpeedMs ?? nearest?.point.wind ?? null,
+      estimatedAt: noImpactTiming ? null : timedPathEntry?.estimatedAt ?? nearest?.point.time ?? null,
+      stormWindSpeedMs: noImpactTiming ? null : timedPathEntry?.windSpeedMs ?? nearest?.point.wind ?? null,
       stormWindForceLevel: noImpactTiming
         ? "--"
-        : timedLandfall?.windForceLevel ?? (nearest?.point.wind ? windForceFromSpeed(nearest.point.wind) : "--"),
+        : timedPathEntry?.windForceLevel ?? (nearest?.point.wind ? windForceFromSpeed(nearest.point.wind) : "--"),
       closestApproachKm,
-      agencySupport: timedLandfall?.agencySupport ?? agencySupport,
-      agencyTotal: timedLandfall?.agencyTotal ?? agencyTotal,
+      agencySupport: timedPathEntry?.agencySupport ?? agencySupport,
+      agencyTotal: timedPathEntry?.agencyTotal ?? agencyTotal,
       displayDurationMs: FAST_PROVINCE_BRIEFINGS.has(province.shortName) ? 1500 as const : 2500 as const,
       currentConditions: currentConditions.get(province.shortName)
         ?? buildProvinceCurrentConditions(province.shortName, storm, fallbackWindField(new Date().toISOString()))
     };
   });
   return briefings.sort((left, right) => {
-    const leftPriority = left.headlineLabel === "预计登陆" ? -1 : left.closestApproachKm ?? Number.POSITIVE_INFINITY;
-    const rightPriority = right.headlineLabel === "预计登陆" ? -1 : right.closestApproachKm ?? Number.POSITIVE_INFINITY;
+    const leftPriority = left.headlineLabel === "路径入省推演" ? -1 : left.closestApproachKm ?? Number.POSITIVE_INFINITY;
+    const rightPriority = right.headlineLabel === "路径入省推演" ? -1 : right.closestApproachKm ?? Number.POSITIVE_INFINITY;
     return leftPriority - rightPriority;
   });
 }
 
-function closestForecastPoint(points: Storm["forecast"], center: [number, number]) {
+function closestForecastPoint(points: Storm["forecast"], province: string, center: [number, number]) {
   if (points.length === 0) return null;
-  return points.reduce<{ point: Storm["forecast"][number]; distanceKm: number } | null>((best, point) => {
-    const distanceKm = Math.round(distanceBetweenKm(point, { lon: center[0], lat: center[1] }));
+  const boundary = getProvinceBoundaryCoordinates(province);
+  const targets = boundary.length ? boundary : [{ lon: center[0], lat: center[1] }];
+  const pathDistance = Math.round(Math.min(...targets.map((target) => distanceToPathKm(target, points) ?? Number.POSITIVE_INFINITY)));
+  const nearest = points.reduce<{ point: Storm["forecast"][number]; distanceKm: number } | null>((best, point) => {
+    const distanceKm = Math.round(Math.min(...targets.map((target) => distanceBetweenKm(point, target))));
     return !best || distanceKm < best.distanceKm ? { point, distanceKm } : best;
   }, null);
-}
-
-function landfallLikelihoodLabel(probability: number) {
-  if (probability >= 70) return "登陆可能很高";
-  if (probability >= 45) return "登陆可能较高";
-  if (probability >= 20) return "存在登陆可能";
-  return "备选登陆路径";
+  return nearest ? { ...nearest, distanceKm: Math.min(nearest.distanceKm, pathDistance) } : null;
 }
 
 function provinceImpactAssessment(distanceKm: number | null, windRadiusKm: number) {
@@ -284,7 +369,7 @@ function provinceImpactAssessment(distanceKm: number | null, windRadiusKm: numbe
     return { status: "direct" as const, label: "可能受外围风雨影响" };
   }
   if (distanceKm <= 900) return { status: "watch" as const, label: "需要留意路径变化" };
-  return { status: "unaffected" as const, label: "预计不受直接影响" };
+  return { status: "unaffected" as const, label: "当前已载入预报时段未显示直接影响" };
 }
 
 function averageWindDirection(points: WindFieldPayload["points"]) {
@@ -319,22 +404,6 @@ function interpolateWindAt(windField: WindFieldPayload, target: { lon: number; l
 
 function isWindSample(point: WindFieldPayload["points"][number] | null): point is WindFieldPayload["points"][number] {
   return point !== null;
-}
-
-function windForceFromSpeed(speed: number) {
-  const thresholds = [0.3, 1.6, 3.4, 5.5, 8, 10.8, 13.9, 17.2, 20.8, 24.5, 28.5, 32.7, 37, 41.5, 46.2, 51, 56.1, 61.3];
-  const level = thresholds.findIndex((threshold) => speed < threshold);
-  return level === -1 ? "17+" : String(level);
-}
-
-function distanceBetweenKm(a: { lon: number; lat: number }, b: { lon: number; lat: number }) {
-  const radians = (value: number) => value * Math.PI / 180;
-  const deltaLat = radians(b.lat - a.lat);
-  const deltaLon = radians(b.lon - a.lon);
-  const lat1 = radians(a.lat);
-  const lat2 = radians(b.lat);
-  const h = Math.sin(deltaLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLon / 2) ** 2;
-  return 6_371 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(1 - h));
 }
 
 function settleValue<T>(result: PromiseSettledResult<T>, fallback: T, warnings: string[], message: string) {

@@ -35,10 +35,10 @@ const PRODUCTS: Array<{ id: HimawariProduct; label: string; use: string }> = [
   { id: "hrp", label: "Heavy Rainfall Potential", use: "暴雨潜势视觉提示" }
 ];
 
-export async function getHimawariProductsForStorm(storm: Storm): Promise<SatelliteProductsSummary> {
+export async function getHimawariProductsForStorm(storm: Storm, signal?: AbortSignal): Promise<SatelliteProductsSummary> {
   const area = chooseArea(storm);
   const fallbackAreas = (["se2", "r2w", "r5w"] as HimawariArea[]).filter((item) => item !== area);
-  const products = await Promise.all(PRODUCTS.map((product) => probeProduct([area, ...fallbackAreas], product.id)));
+  const products = await Promise.all(PRODUCTS.map((product) => probeProduct([area, ...fallbackAreas], product.id, signal)));
   const availableProducts = products.filter((product) => product.status === "available").map((product) => product.product);
   const latestProduct = products.find((product) => product.time);
   const fallbackCount = products.filter((product) => product.status === "available" && product.area !== area).length;
@@ -60,7 +60,7 @@ export async function getHimawariProductsForStorm(storm: Storm): Promise<Satelli
   };
 }
 
-async function probeProduct(areas: HimawariArea[], product: HimawariProduct): Promise<SatelliteProductState> {
+async function probeProduct(areas: HimawariArea[], product: HimawariProduct, signal?: AbortSignal): Promise<SatelliteProductState> {
   const meta = PRODUCTS.find((item) => item.id === product);
   let lastReason = "no current Himawari slot matched.";
 
@@ -68,8 +68,8 @@ async function probeProduct(areas: HimawariArea[], product: HimawariProduct): Pr
     for (const slot of recentSlots()) {
       const imageUrl = jmaProductUrl(area, product, slot);
       try {
-        const response = await fetchWithTimeout(imageUrl, "HEAD");
-        const fallbackResponse = response.ok ? response : await fetchWithTimeout(imageUrl, "GET");
+        const response = await fetchWithTimeout(imageUrl, "HEAD", signal);
+        const fallbackResponse = response.ok ? response : await fetchWithTimeout(imageUrl, "GET", signal);
         if (fallbackResponse.ok && String(fallbackResponse.headers.get("content-type") ?? "").includes("image")) {
           return {
             source: "jma-himawari",
@@ -102,7 +102,7 @@ async function probeProduct(areas: HimawariArea[], product: HimawariProduct): Pr
   };
 }
 
-async function fetchWithTimeout(url: string, method: "HEAD" | "GET") {
+async function fetchWithTimeout(url: string, method: "HEAD" | "GET", outerSignal?: AbortSignal) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 6500);
   try {
@@ -114,7 +114,7 @@ async function fetchWithTimeout(url: string, method: "HEAD" | "GET") {
         "User-Agent": "TyphoonBossRadar/1.0"
       },
       cache: "no-store",
-      signal: controller.signal
+      signal: outerSignal ? AbortSignal.any([controller.signal, outerSignal]) : controller.signal
     });
   } finally {
     clearTimeout(timeout);

@@ -20,6 +20,7 @@ import { FlipValue, HudPanel, MetricRow, MiniReadout } from "./HudPrimitives";
 import type { BossProfile, BossSkill } from "@/lib/bossEngine/types";
 import { StormSatellitePortrait } from "./StormSatellitePortrait";
 import type { SatelliteLayerPayload, Storm } from "@/lib/types";
+import { windForceFromSpeed as sharedWindForceFromSpeed } from "@/lib/meteorology";
 
 const UI = {
   currentIntel: "\u5f53\u524d\u53f0\u98ce Boss \u60c5\u62a5",
@@ -94,25 +95,57 @@ export function IntelPanel({
   }
 
   if (!storm) {
+    const syncedLabel = lastSyncedAt
+      ? new Date(lastSyncedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })
+      : "等待首次同步";
     return (
-      <aside className="intel-panel" aria-label={UI.currentIntel}>
-        <div className="panel-topline">
-          <span>BOSS 情报</span>
-          <strong>{dataError ? UI.linkError : UI.standby}</strong>
+      <aside className={`intel-panel standby-intel-panel ${dataError ? "is-degraded" : ""}`} aria-label="台风监测静息状态">
+        <div className="panel-topline standby-topline">
+          <div className="panel-title-copy">
+            <span>WESTERN PACIFIC / AUTO WATCH</span>
+            <strong>{dataError ? UI.linkError : "西北太平洋静息"}</strong>
+          </div>
+          <RealtimeSyncStatus
+            lastSyncedAt={lastSyncedAt}
+            refreshSequence={refreshSequence}
+            pollIntervalMs={pollIntervalMs}
+            hasError={Boolean(dataError)}
+          />
         </div>
-        <HudPanel className="no-boss-panel">
-          <RadioTower size={38} />
-          <h1>{UI.noActiveStorm}</h1>
-          <p>{UI.noActiveDesc}</p>
+
+        <HudPanel className="standby-radar-card">
+          <div className="standby-scope" aria-hidden="true">
+            <i className="standby-sweep" />
+            <i className="standby-crosshair horizontal" />
+            <i className="standby-crosshair vertical" />
+            <RadioTower />
+          </div>
+          <div className="standby-radar-copy">
+            <span>{dataError ? "SOURCE DEGRADED" : "NO ACTIVE CYCLONE"}</span>
+            <h1>{dataError ? "监测链路降级" : "当前无活动台风"}</h1>
+            <p>{dataError ? "保留最近一次有效资料，系统将在下一轮自动重试。" : "当前路径源未报告活动台风。雷达继续巡检公开路径、卫星与环境场。"}</p>
+          </div>
         </HudPanel>
-        <HudPanel className="notice-box">
-          <AlertTriangle size={18} />
-          <p>{dataError ? `${UI.dataErrorPrefix}${dataError}` : `${UI.dataSourcePrefix}${source ?? UI.waitingSource}`}</p>
+
+        <HudPanel className="standby-watch-ledger">
+          <div><Activity /><span>路径巡检</span><strong>{dataError ? "重试中" : "运行中"}</strong></div>
+          <div><Satellite /><span>卫星资料</span><strong>独立降级</strong></div>
+          <div><Database /><span>最近同步</span><strong>{syncedLabel}</strong></div>
+          <div><RotateCw /><span>自动刷新</span><strong>{Math.round(pollIntervalMs / 1000)} 秒</strong></div>
         </HudPanel>
-        <Link className="dex-link" href="/dex">
-          <Database size={18} />
-          {UI.viewDex}
-        </Link>
+
+        <HudPanel className="standby-source-note">
+          {dataError ? <AlertTriangle /> : <Satellite />}
+          <div>
+            <span>{dataError ? "链路说明" : "当前判据"}</span>
+            <p>{dataError ? dataError : `来源：${source ?? UI.waitingSource}。无活动台风不代表没有局地强天气。`}</p>
+          </div>
+        </HudPanel>
+
+        <div className="standby-actions">
+          <Link className="standby-primary-action" href="/dex"><Database />查看历史台风图鉴</Link>
+          <Link className="standby-secondary-action" href="/console"><Activity />监测控制台</Link>
+        </div>
       </aside>
     );
   }
@@ -189,9 +222,9 @@ export function IntelPanel({
         </div>
         <MetricRow icon={<Wind size={17} />} label={UI.maxWind} value={<FlipValue value={storm.maxWind || UI.pending} />} unit="m/s" hot />
         <MetricRow icon={<Gauge size={17} />} label={UI.pressure} value={<FlipValue value={storm.minPressure || UI.pending} />} unit="hPa" />
-        <MetricRow icon={<Crosshair size={17} />} label={UI.r7} value={<FlipValue value={storm.windRadiiKm.r7 || UI.pending} />} unit="km" />
-        <MetricRow icon={<Crosshair size={17} />} label={UI.r10} value={<FlipValue value={storm.windRadiiKm.r10 || UI.pending} />} unit="km" hot={storm.windRadiiKm.r10 > 0} />
-        <MetricRow icon={<Crosshair size={17} />} label={UI.r12} value={<FlipValue value={storm.windRadiiKm.r12 || UI.pending} />} unit="km" hot={storm.windRadiiKm.r12 > 0} />
+        {storm.windRadiiKm.r7 > 0 ? <MetricRow icon={<Crosshair size={17} />} label={UI.r7} value={<FlipValue value={storm.windRadiiKm.r7} />} unit="km" /> : null}
+        {storm.windRadiiKm.r10 > 0 ? <MetricRow icon={<Crosshair size={17} />} label={UI.r10} value={<FlipValue value={storm.windRadiiKm.r10} />} unit="km" hot /> : null}
+        {storm.windRadiiKm.r12 > 0 ? <MetricRow icon={<Crosshair size={17} />} label={UI.r12} value={<FlipValue value={storm.windRadiiKm.r12} />} unit="km" hot /> : null}
         <MetricRow icon={<MapPin size={17} />} label={UI.moveDirection} value={storm.moveDirection} />
         <MetricRow icon={<RotateCw size={17} />} label={UI.moveSpeed} value={<FlipValue value={storm.moveSpeed || UI.pending} />} unit="km/h" />
       </HudPanel>
@@ -296,10 +329,8 @@ function RealtimeSyncStatus({
 }
 
 function windForceFromSpeed(speed: number) {
-  const thresholds = [0.3, 1.6, 3.4, 5.5, 8, 10.8, 13.9, 17.2, 20.8, 24.5, 28.5, 32.7, 37, 41.5, 46.2, 51, 56.1, 61.3];
   if (!Number.isFinite(speed) || speed < 0) return { level: "--" };
-  const level = thresholds.findIndex((threshold) => speed < threshold);
-  return { level: level === -1 ? "17+" : String(level) };
+  return { level: sharedWindForceFromSpeed(speed) };
 }
 
 function formatCoordinate(value: number, axis: "lat" | "lon") {
@@ -326,9 +357,9 @@ function DossierIntelPanel({
     ? [
         { label: UI.maxWind, value: storm.maxWind || UI.pending, unit: "m/s", hot: true },
         { label: UI.pressure, value: storm.minPressure || UI.pending, unit: "hPa" },
-        { label: UI.r7, value: storm.windRadiiKm.r7 || UI.pending, unit: "km" },
-        { label: UI.r10, value: storm.windRadiiKm.r10 || UI.pending, unit: "km", hot: storm.windRadiiKm.r10 > 0 },
-        { label: UI.r12, value: storm.windRadiiKm.r12 || UI.pending, unit: "km", hot: storm.windRadiiKm.r12 > 0 },
+        ...(storm.windRadiiKm.r7 > 0 ? [{ label: UI.r7, value: storm.windRadiiKm.r7, unit: "km" }] : []),
+        ...(storm.windRadiiKm.r10 > 0 ? [{ label: UI.r10, value: storm.windRadiiKm.r10, unit: "km", hot: true }] : []),
+        ...(storm.windRadiiKm.r12 > 0 ? [{ label: UI.r12, value: storm.windRadiiKm.r12, unit: "km", hot: true }] : []),
         { label: UI.moveDirection, value: storm.moveDirection || UI.pending },
         { label: UI.moveSpeed, value: storm.moveSpeed || UI.pending, unit: "km/h" }
       ]

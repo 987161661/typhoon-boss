@@ -1,36 +1,41 @@
-# 台风 BOSS 雷达
+# 气象 Boss 雷达
 
-面向直播与值守场景的本地台风态势页面。项目同时提供：主雷达页、Boss 图鉴、直播导播页、凌岚数字人窗口，以及台风实时演进整理任务。
+面向直播和值守场景的全国气象态势页。首页默认展示官方预警、雷达索引、环境信号、主事件与来源时效；活动台风通过独立指挥视角继续提供路径、风圈、预报、Boss 图鉴和 `/live` 导播能力。
 
-## 页面与入口
+数据口径：官方预警事实、实况/元数据观察和模式推断在统一快照中分层呈现。图像索引和产品目录不被改写为天气数值，来源失败也不表示“无风险”；城市预警只接受可由官方行政层级唯一确定的归属。
 
-- `/`：主雷达页。
-- `/dex`：台风 Boss 图鉴。
-- `/live`：双场景直播导播页；左侧为控制面板，底栏可向凌岚发送消息。
+## 权威启动入口
 
-## 启动
+双击 [Start-Typhoon-Live.cmd](Start-Typhoon-Live.cmd)。它会自动启动并验证雷达直播页和凌岚数字人：
+
+- 雷达直播页：`http://127.0.0.1:3038/live`
+- 凌岚数字人：通过 `http://127.0.0.1:3038/api/digital-host/health` 验证，默认上游为 `5173`。数字人本体不依赖 B 站房间号；如需仅启动雷达，可在 PowerShell 执行 `scripts/start_live_with_linglan.ps1 -NoLinglan`。
+
+该入口当前以 Next 开发模式启动，适合本机直播和值守。不要同时再用 `npm run dev` 或 `npm run start` 占用 3038。
+
+生产式手动验证仅在需要构建产物时使用：
 
 ```powershell
-cd "D:\typhoon boss radar"
 npm.cmd run build
 npm.cmd run start -- -H 127.0.0.1 -p 3038
 ```
 
-若需同时检查凌岚服务与本项目的直播入口：
-
-```powershell
-npm.cmd run live:with-host
-```
-
-完整的运行、配置和故障处理说明见 [运维手册](docs/OPERATIONS.md)。
+完整的运行、清理和故障边界见 [运维手册](docs/OPERATIONS.md)。
 
 ## 常用命令
 
 ```powershell
 npm.cmd run typecheck
-npm.cmd run build
+npm.cmd run lint
+npm.cmd run test
 npm.cmd run agent:run
 npm.cmd run clean:local
 ```
 
-`clean:local` 只删除本地调试缓存、日志、浏览器自动化配置和构建中间物；不删除 `.runtime` 里的直播设置与演进状态。
+`agent:run` 是一次性的演进报告生成。手动启动的周期任务默认关闭；但 `Start-Typhoon-Live.cmd` 会在健康检查通过后显式开启后台演进调度。它可能调用已配置的文档模型并更新 `台风实时演进分析.md`。
+
+`clean:local` 会清除构建物和已知诊断遗留；需要在服务仍运行时只清理安全的运行诊断，可执行：
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/clean_local_artifacts.ps1 -RuntimeOnly
+```

@@ -1,15 +1,29 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import sharp from "sharp";
-import { makeCircle } from "@/lib/provinceGeo";
+import { makeQuadrantWindPolygon } from "@/lib/meteorology";
+import {
+  globalMercatorLatitudeCrop,
+  HIMAWARI_TEASIA_BOUNDS,
+  selectSynchronizedSatellitePair
+} from "@/lib/satelliteGeoreference";
 import { getCurrentStorms } from "@/lib/realTyphoonData";
+import { findCyclonicVorticityCenter, resolveWindAnalysisReference } from "@/lib/windFieldDiagnostics";
 import type {
   ImpactAreaPayload,
+  RadarMosaicLayerPayload,
   SatelliteLayerPayload,
   Storm,
+  GfsScalarLayerId,
+  GfsScalarLayerPayload,
+  GfsScalarPoint,
+  GfsWaveLayerPayload,
+  GfsWavePoint,
+  MarineLayerPayload,
+  MarinePoint,
   WindFieldPayload,
   WindFieldPoint
 } from "@/lib/types";
@@ -18,12 +32,7 @@ const JMA_REGION = {
   id: "teasia",
   label: "Himawari Tropical Southeast Asia RGB",
   product: "rgb",
-  bounds: {
-    west: 69.8,
-    south: 0,
-    east: 150.4,
-    north: 40.1
-  }
+  bounds: HIMAWARI_TEASIA_BOUNDS
 };
 const NOAA_HIMAWARI_BASE_URL = "https://www.ospo.noaa.gov/jma/teasia";
 const NOAA_HIMAWARI_FRAME_LIST_URL = `${NOAA_HIMAWARI_BASE_URL}/txtfiles/rgb_names.txt`;
@@ -40,6 +49,14 @@ const OPEN_METEO_SOURCE = "Open-Meteo Forecast API";
 const OPEN_METEO_ATTRIBUTION = "Open-Meteo weather forecast model blend";
 const MET_NORWAY_SOURCE = "MET Norway Locationforecast API";
 const MET_NORWAY_ATTRIBUTION = "MET Norway Locationforecast 2.0 global forecast";
+const NCEP_GFS_SOURCE = "NOAA/NCEP NOMADS Grib Filter";
+const NCEP_GFS_ATTRIBUTION = "NOAA NCEP GFS 0.25 degree analysis";
+const NCEP_GFS_FILTER_URL = "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl";
+const NCEP_GFS_WAVE_FILTER_URL = "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfswave.pl";
+const NCEP_GFS_NATIVE_RESOLUTION_DEGREES = 0.25;
+const NCEP_GFS_MAX_DISPLAY_POINTS = 18_000;
+const NCEP_GFS_WAVE_MAX_DISPLAY_POINTS = 6_000;
+const WGRIB2_PATH = process.env.WGRIB2_PATH ?? join(process.cwd(), ".runtime", "tools", "wgrib2", "wgrib2.exe");
 const SATELLITE_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const SATELLITE_IMAGE_CACHE_TTL_MS = 2 * 60 * 60 * 1000;
 const WIND_FIELD_CACHE_TTL_MS = 15 * 60 * 1000;
@@ -49,15 +66,50 @@ const PERSISTED_WIND_FIELD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const OPEN_METEO_RATE_LIMIT_COOLDOWN_MS = 10 * 60 * 1000;
 const OPEN_METEO_REQUEST_SPACING_MS = 900;
 const WIND_FIELD_CACHE_DIR = join(process.cwd(), ".runtime", "wind-field");
+const SATELLITE_IMAGE_CACHE_DIR = join(process.cwd(), ".runtime", "satellite-images");
+// NOAA imagery occasionally takes several seconds to start transferring even
+// when the product is healthy. Keep this outside the core radar request path,
+// but allow enough time for the background image proxy to complete.
+const SATELLITE_FETCH_TIMEOUT_MS = 20_000;
+const SATELLITE_CIRCUIT_COOLDOWN_MS = 5 * 60 * 1000;
+const CWA_RADAR_SOURCE = "Taiwan CWA radar composite";
+const CWA_RADAR_ATTRIBUTION = "台湾中央气象署雷达整合回波透明图层";
+const CWA_RADAR_PRODUCT = "O-A0058-005";
+const CWA_RADAR_REMOTE_URL = `https://cwaopendata.s3.ap-northeast-1.amazonaws.com/Observation/${CWA_RADAR_PRODUCT}.png`;
+const CWA_RADAR_BOUNDS = { west: 115, south: 17.75, east: 126.5, north: 29.25 };
+const CWA_RADAR_REFRESH_INTERVAL_MS = 10 * 60 * 1000;
+const CWA_RADAR_METADATA_TTL_MS = 5 * 60 * 1000;
 const IMPACT_SOURCE = "浙江省水利厅台风路径公开接口风圈半径";
 const NO_STORE_HEADERS = {
   "Cache-Control": "no-store, max-age=0"
 };
 const execFileAsync = promisify(execFile);
-const satelliteImageCache = new Map<string, { expiresAt: number; bytes: Uint8Array; contentType: string }>();
+interface CachedSatelliteImage {
+  expiresAt: number;
+  bytes: Uint8Array;
+  contentType: string;
+  status: "fresh" | "stale";
+  fetchedAt: string;
+}
+
+const satelliteImageCache = new Map<string, CachedSatelliteImage>();
+const satelliteImageInFlight = new Map<string, Promise<CachedSatelliteImage>>();
+const satelliteSourceFailures = new Map<string, { count: number; blockedUntil: number }>();
 const windFieldCache = new Map<string, { expiresAt: number; payload: WindFieldPayload }>();
 const windFieldInFlight = new Map<string, Promise<WindFieldPayload>>();
 const windFieldLastSuccess = new Map<string, WindFieldPayload>();
+const gfsScalarCache = new Map<string, { expiresAt: number; payload: GfsScalarLayerPayload }>();
+const gfsScalarInFlight = new Map<string, Promise<GfsScalarLayerPayload>>();
+const gfsScalarLastSuccess = new Map<string, GfsScalarLayerPayload>();
+const gfsWaveCache = new Map<string, { expiresAt: number; payload: GfsWaveLayerPayload }>();
+const gfsWaveInFlight = new Map<string, Promise<GfsWaveLayerPayload>>();
+const gfsWaveLastSuccess = new Map<string, GfsWaveLayerPayload>();
+const marineLayerCache = new Map<string, { expiresAt: number; payload: MarineLayerPayload }>();
+const marineLayerInFlight = new Map<string, Promise<MarineLayerPayload>>();
+const marineLayerLastSuccess = new Map<string, MarineLayerPayload>();
+let cwaRadarLayerCache: { expiresAt: number; payload: RadarMosaicLayerPayload } | null = null;
+let cwaRadarLayerInFlight: Promise<RadarMosaicLayerPayload> | null = null;
+let cwaRadarLastSuccess: RadarMosaicLayerPayload | null = null;
 let openMeteoBlockedUntil = 0;
 let openMeteoLastRequestAt = 0;
 let openMeteoRequestChain: Promise<unknown> = Promise.resolve();
@@ -153,13 +205,22 @@ export async function fetchJmaImage(region: string, product: string, frame: stri
   }
 
   const remoteUrl = `${NOAA_HIMAWARI_BASE_URL}/img/${frame}.jpg`;
-  const image = await getCachedSatelliteImage(`regional:${frame}`, remoteUrl, prepareRegionalCloudOverlay);
+  let image: CachedSatelliteImage;
+  try {
+    // Version the cache key when changing the image geometry: older cached
+    // payloads were vertically cropped but still advertised full-frame bounds.
+    image = await getCachedSatelliteImage(`regional-georef-v2:${frame}`, "regional", remoteUrl, prepareRegionalCloudOverlay);
+  } catch (error) {
+    return satelliteUnavailableResponse("regional", error);
+  }
   return new Response(Buffer.from(image.bytes), {
     status: 200,
     headers: {
       "Content-Type": image.contentType,
       "Cache-Control": "public, max-age=1800, stale-while-revalidate=3600, immutable",
-      "X-Remote-Source": remoteUrl
+      "X-Remote-Source": remoteUrl,
+      "X-Data-Status": image.status,
+      "X-Data-Fetched-At": image.fetchedAt
     }
   });
 }
@@ -170,58 +231,249 @@ export async function fetchGlobalSatelliteImage(frame: string): Promise<Response
   }
 
   const remoteUrl = `${NOAA_GMGSI_BASE_URL}/${NOAA_GMGSI_PRODUCT}/${frame}.gif`;
-  const image = await getCachedSatelliteImage(`global:${frame}`, remoteUrl, prepareGlobalCloudOverlay);
+  let image: CachedSatelliteImage;
+  try {
+    image = await getCachedSatelliteImage(`global-georef-v2:${frame}`, "global", remoteUrl, prepareGlobalCloudOverlay);
+  } catch (error) {
+    return satelliteUnavailableResponse("global", error);
+  }
   return new Response(Buffer.from(image.bytes), {
     status: 200,
     headers: {
       "Content-Type": image.contentType,
       "Cache-Control": "public, max-age=1800, stale-while-revalidate=3600, immutable",
-      "X-Remote-Source": remoteUrl
+      "X-Remote-Source": remoteUrl,
+      "X-Data-Status": image.status,
+      "X-Data-Fetched-At": image.fetchedAt
     }
   });
 }
 
+interface MarineLocation {
+  latitude: number;
+  longitude: number;
+  hourly?: {
+    time?: string[];
+    ocean_current_velocity?: number[];
+    ocean_current_direction?: number[];
+    sea_surface_temperature?: number[];
+  };
+}
+
+export async function getCwaRadarLayer(): Promise<RadarMosaicLayerPayload> {
+  if (cwaRadarLayerCache && cwaRadarLayerCache.expiresAt > Date.now()) return cwaRadarLayerCache.payload;
+  if (cwaRadarLayerInFlight) return cwaRadarLayerInFlight;
+
+  cwaRadarLayerInFlight = loadCwaRadarLayer()
+    .then((payload) => {
+      cwaRadarLayerCache = { expiresAt: Date.now() + CWA_RADAR_METADATA_TTL_MS, payload };
+      if (payload.status === "available" && !payload.isStale) cwaRadarLastSuccess = payload;
+      return payload;
+    })
+    .finally(() => {
+      cwaRadarLayerInFlight = null;
+    });
+  return cwaRadarLayerInFlight;
+}
+
+async function loadCwaRadarLayer(): Promise<RadarMosaicLayerPayload> {
+  try {
+    const response = await fetch(CWA_RADAR_REMOTE_URL, {
+      method: "HEAD",
+      cache: "no-store",
+      signal: AbortSignal.timeout(5_000)
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const contentLength = Number(response.headers.get("content-length") ?? 0);
+    if (contentLength <= 0 || contentLength > 8 * 1024 * 1024) throw new Error("invalid radar image size");
+    const updatedAt = parseHttpDate(response.headers.get("last-modified")) ?? new Date().toISOString();
+    const isStale = Date.now() - new Date(updatedAt).getTime() > 40 * 60 * 1000;
+    return {
+      source: CWA_RADAR_SOURCE,
+      updatedAt,
+      status: "available",
+      attribution: CWA_RADAR_ATTRIBUTION,
+      imageUrl: `/api/environment/cwa-radar-image?v=${encodeURIComponent(updatedAt)}`,
+      product: CWA_RADAR_PRODUCT,
+      isStale,
+      refreshIntervalMinutes: CWA_RADAR_REFRESH_INTERVAL_MS / 60_000,
+      bounds: CWA_RADAR_BOUNDS,
+      reason: isStale ? "实况雷达图已超过 40 分钟未更新。" : undefined
+    };
+  } catch (error) {
+    if (cwaRadarLastSuccess) {
+      return {
+        ...cwaRadarLastSuccess,
+        isStale: true,
+        reason: `上游暂不可用，保留最后有效图：${errorMessage(error)}`
+      };
+    }
+    return {
+      source: CWA_RADAR_SOURCE,
+      updatedAt: new Date().toISOString(),
+      status: "unavailable",
+      attribution: CWA_RADAR_ATTRIBUTION,
+      imageUrl: null,
+      product: CWA_RADAR_PRODUCT,
+      isStale: false,
+      refreshIntervalMinutes: CWA_RADAR_REFRESH_INTERVAL_MS / 60_000,
+      bounds: CWA_RADAR_BOUNDS,
+      reason: `实况雷达图暂不可用：${errorMessage(error)}`
+    };
+  }
+}
+
+export async function fetchCwaRadarImage(): Promise<Response> {
+  const layer = await getCwaRadarLayer();
+  const version = layer.status === "available" ? layer.updatedAt : "last-good";
+  try {
+    const image = await getCachedSatelliteImage(
+      `cwa-radar:${version}`,
+      "cwa-radar",
+      CWA_RADAR_REMOTE_URL,
+      validatePngImage,
+      true
+    );
+    return new Response(Buffer.from(image.bytes), {
+      status: 200,
+      headers: {
+        "Content-Type": "image/png",
+        "Cache-Control": "public, max-age=300, stale-while-revalidate=1800",
+        "X-Remote-Source": CWA_RADAR_REMOTE_URL,
+        "X-Data-Status": image.status,
+        "X-Data-Fetched-At": image.fetchedAt
+      }
+    });
+  } catch (error) {
+    return satelliteUnavailableResponse("cwa-radar", error);
+  }
+}
+
 async function getCachedSatelliteImage(
   key: string,
+  sourceKey: "regional" | "global" | "cwa-radar",
   remoteUrl: string,
-  transform: (bytes: Uint8Array) => Promise<Uint8Array>
-) {
+  transform: (bytes: Uint8Array) => Promise<Uint8Array>,
+  allowBinaryImage = false
+): Promise<CachedSatelliteImage> {
   const cached = satelliteImageCache.get(key);
   if (cached && cached.expiresAt > Date.now()) {
     return cached;
   }
-  const source = await fetchRemoteBytesWithPowershell(remoteUrl);
-  const bytes = await transform(source);
+  const inFlight = satelliteImageInFlight.get(key);
+  if (inFlight) return inFlight;
+
+  const request = loadSatelliteImage(sourceKey, remoteUrl, transform, allowBinaryImage).finally(() => satelliteImageInFlight.delete(key));
+  satelliteImageInFlight.set(key, request);
+  const entry = await request;
   if (satelliteImageCache.size > 12) satelliteImageCache.clear();
-  const entry = {
-    expiresAt: Date.now() + SATELLITE_IMAGE_CACHE_TTL_MS,
-    bytes,
-    contentType: "image/png"
-  };
   satelliteImageCache.set(key, entry);
   return entry;
 }
 
-async function fetchRemoteBytesWithPowershell(remoteUrl: string) {
-  const script = [
-    "$ProgressPreference='SilentlyContinue'",
-    `$bytes=(Invoke-WebRequest -UseBasicParsing '${remoteUrl}').Content`,
-    "[Console]::Out.Write([Convert]::ToBase64String($bytes))"
-  ].join("; ");
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+async function loadSatelliteImage(
+  sourceKey: "regional" | "global" | "cwa-radar",
+  remoteUrl: string,
+  transform: (bytes: Uint8Array) => Promise<Uint8Array>,
+  allowBinaryImage = false
+): Promise<CachedSatelliteImage> {
+  const failure = satelliteSourceFailures.get(sourceKey);
+  if (!failure || failure.blockedUntil <= Date.now()) {
     try {
-      const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], {
-        maxBuffer: 2 * 1024 * 1024,
-        windowsHide: true
-      });
-      return Uint8Array.from(Buffer.from(stdout.trim(), "base64"));
+      const source = await fetchRemoteBytes(remoteUrl, allowBinaryImage);
+      const bytes = await transform(source);
+      const fetchedAt = new Date().toISOString();
+      await persistLastGoodSatelliteImage(sourceKey, bytes, fetchedAt);
+      satelliteSourceFailures.delete(sourceKey);
+      return { expiresAt: Date.now() + SATELLITE_IMAGE_CACHE_TTL_MS, bytes, contentType: "image/png", status: "fresh", fetchedAt };
     } catch (error) {
-      lastError = error;
-      await delay(400 + attempt * 700);
+      const count = (failure?.count ?? 0) + 1;
+      satelliteSourceFailures.set(sourceKey, {
+        count,
+        blockedUntil: count >= 2 ? Date.now() + SATELLITE_CIRCUIT_COOLDOWN_MS : 0
+      });
+      console.warn(`[satellite-image] ${sourceKey} source unavailable; using last good image when present: ${errorMessage(error)}`);
     }
   }
-  throw lastError instanceof Error ? lastError : new Error("NOAA Himawari image request failed.");
+
+  const persisted = await readLastGoodSatelliteImage(sourceKey);
+  if (persisted) return persisted;
+  throw new Error(`${sourceKey} satellite image unavailable and no last-good image has been stored.`);
+}
+
+async function fetchRemoteBytes(remoteUrl: string, allowBinaryImage = false) {
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await fetch(remoteUrl, { signal: AbortSignal.timeout(SATELLITE_FETCH_TIMEOUT_MS), cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const contentType = response.headers.get("content-type") ?? "";
+      if (!contentType.startsWith("image/") && !(allowBinaryImage && contentType === "binary/octet-stream")) {
+        throw new Error(`unexpected content type ${contentType || "unknown"}`);
+      }
+      return new Uint8Array(await response.arrayBuffer());
+    } catch (error) {
+      lastError = error;
+      if (attempt === 0) await delay(500);
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("Satellite image request failed.");
+}
+
+async function persistLastGoodSatelliteImage(sourceKey: string, bytes: Uint8Array, fetchedAt: string) {
+  await mkdir(SATELLITE_IMAGE_CACHE_DIR, { recursive: true });
+  const imagePath = join(SATELLITE_IMAGE_CACHE_DIR, `${sourceKey}.png`);
+  const metadataPath = join(SATELLITE_IMAGE_CACHE_DIR, `${sourceKey}.json`);
+  await writeFile(`${imagePath}.tmp`, bytes);
+  await rename(`${imagePath}.tmp`, imagePath);
+  await writeFile(`${metadataPath}.tmp`, JSON.stringify({ fetchedAt }), "utf8");
+  await rename(`${metadataPath}.tmp`, metadataPath);
+}
+
+async function readLastGoodSatelliteImage(sourceKey: string): Promise<CachedSatelliteImage | null> {
+  try {
+    const imagePath = join(SATELLITE_IMAGE_CACHE_DIR, `${sourceKey}.png`);
+    const metadataPath = join(SATELLITE_IMAGE_CACHE_DIR, `${sourceKey}.json`);
+    const [bytes, metadataText] = await Promise.all([readFile(imagePath), readFile(metadataPath, "utf8")]);
+    const metadata = JSON.parse(metadataText) as { fetchedAt?: string };
+    return {
+      expiresAt: Date.now() + 5 * 60 * 1000,
+      bytes,
+      contentType: "image/png",
+      status: "stale",
+      fetchedAt: metadata.fetchedAt ?? new Date(0).toISOString()
+    };
+  } catch {
+    return null;
+  }
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function satelliteUnavailableResponse(sourceKey: string, error: unknown) {
+  console.warn(`[satellite-image] ${sourceKey} unavailable: ${errorMessage(error)}`);
+  return new Response("Satellite image temporarily unavailable", {
+    status: 503,
+    headers: {
+      "Cache-Control": "public, max-age=30",
+      "Retry-After": "60",
+      "X-Data-Status": "unavailable"
+    }
+  });
+}
+
+async function validatePngImage(bytes: Uint8Array) {
+  const metadata = await sharp(bytes).metadata();
+  if (metadata.format !== "png" || !metadata.width || !metadata.height) throw new Error("invalid radar PNG");
+  return bytes;
+}
+
+function parseHttpDate(value: string | null) {
+  if (!value) return null;
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
 }
 
 export async function getImpactArea(stormId?: string | null): Promise<ImpactAreaPayload> {
@@ -233,9 +485,9 @@ export async function getImpactArea(stormId?: string | null): Promise<ImpactArea
     }
 
     const features = [
-      impactFeature(storm, "r7", storm.windRadiiKm.r7),
-      impactFeature(storm, "r10", storm.windRadiiKm.r10),
-      impactFeature(storm, "r12", storm.windRadiiKm.r12)
+      impactFeature(storm, "r7"),
+      impactFeature(storm, "r10"),
+      impactFeature(storm, "r12")
     ].filter((feature): feature is GeoJSON.Feature => Boolean(feature));
 
     return {
@@ -258,25 +510,34 @@ export async function getImpactArea(stormId?: string | null): Promise<ImpactArea
 }
 
 export async function getWindField(stormId?: string | null, requestedBounds?: WindFieldBounds | null): Promise<WindFieldPayload> {
-  const bounds = requestedBounds ? normalizeWindFieldBounds(requestedBounds) : null;
-  const cacheKey = bounds ? `viewport:${windBoundsCacheKey(bounds)}` : stormId ?? "default";
+  const requestedStormId = stormId ?? null;
+  const storms = await getCurrentStorms().catch(() => []);
+  const storm = stormId ? storms.find((item) => item.id === stormId) ?? null : storms[0] ?? null;
+  const sampling: NonNullable<WindFieldPayload["sampling"]> = requestedBounds ? "viewport" : "storm";
+  const bounds = requestedBounds
+    ? normalizeWindFieldBounds(requestedBounds)
+    : storm
+      ? normalizeWindFieldBounds(buildStormWindBounds(storm))
+      : null;
+  const cacheKey = bounds ? `field:${windBoundsCacheKey(bounds)}` : "field:unavailable";
+  const attachContext = (payload: WindFieldPayload) => withWindFieldContext(payload, requestedStormId, storm, sampling);
   const cached = windFieldCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) {
-    return cached.payload;
+    return attachContext(cached.payload);
   }
   const inFlight = windFieldInFlight.get(cacheKey);
   if (inFlight) {
-    return inFlight;
+    return inFlight.then(attachContext);
   }
 
   const request = (async () => {
-    const persisted = shouldPersistWindField(bounds) ? await readPersistedWindField(cacheKey) : null;
+    const persisted = shouldPersistWindField(bounds, sampling) ? await readPersistedWindField(cacheKey) : null;
     const lastSuccess = windFieldLastSuccess.get(cacheKey) ?? persisted;
     if (persisted && !windFieldLastSuccess.has(cacheKey)) {
       windFieldLastSuccess.set(cacheKey, persisted);
     }
 
-    const payload = await loadWindField(stormId, bounds);
+    const payload = stripWindFieldContext(await loadWindField(bounds, sampling));
     if (payload.status === "available" && payload.points.length > 0) {
       const freshPayload = {
         ...payload,
@@ -288,7 +549,7 @@ export async function getWindField(stormId?: string | null, requestedBounds?: Wi
         expiresAt: Date.now() + windFieldCacheTtl(bounds),
         payload: freshPayload
       });
-      if (shouldPersistWindField(bounds)) {
+      if (shouldPersistWindField(bounds, sampling)) {
         void persistWindField(cacheKey, freshPayload);
       }
       return freshPayload;
@@ -313,13 +574,14 @@ export async function getWindField(stormId?: string | null, requestedBounds?: Wi
     }
   );
   windFieldInFlight.set(cacheKey, request);
-  return request;
+  return request.then(attachContext);
 }
 
-async function loadWindField(stormId?: string | null, viewportBounds?: WindFieldBounds | null): Promise<WindFieldPayload> {
-  const storms = await getCurrentStorms().catch(() => []);
-  const storm = storms.find((item) => item.id === stormId) ?? storms[0] ?? null;
-  if (!storm && !viewportBounds) {
+async function loadWindField(
+  sampleBounds: WindFieldBounds | null,
+  sampling: NonNullable<WindFieldPayload["sampling"]>
+): Promise<WindFieldPayload> {
+  if (!sampleBounds) {
     return {
       source: OPEN_METEO_SOURCE,
       updatedAt: new Date().toISOString(),
@@ -331,8 +593,14 @@ async function loadWindField(stormId?: string | null, viewportBounds?: WindField
       points: []
     };
   }
-  const sampleBounds = viewportBounds ?? buildStormWindBounds(storm as Storm);
   const samplePoints = buildWindSampleGrid(sampleBounds);
+
+  let ncepReason = "";
+  try {
+    return await loadNcepGfsWindField(sampleBounds, sampling === "viewport");
+  } catch (error) {
+    ncepReason = error instanceof Error ? error.message : "NCEP GFS GRIB2 decoding failed.";
+  }
 
   try {
     const batches = await Promise.all(chunk(samplePoints, 54).map(async (points) => {
@@ -344,7 +612,8 @@ async function loadWindField(stormId?: string | null, viewportBounds?: WindField
         hourly: "wind_speed_10m,wind_direction_10m",
         forecast_hours: "1",
         timezone: "UTC",
-        wind_speed_unit: "ms"
+        wind_speed_unit: "ms",
+        models: "gfs_global"
       });
       const response = await fetchOpenMeteoWithRetry(query);
       if (!response.ok) throw new Error(`Open-Meteo wind request failed: ${response.status}`);
@@ -360,28 +629,645 @@ async function loadWindField(stormId?: string | null, viewportBounds?: WindField
       updatedAt: locations[0]?.hourly?.time?.[0] ?? new Date().toISOString(),
       status: "available",
       attribution: OPEN_METEO_ATTRIBUTION,
-      model: "Open-Meteo best match, 10m wind",
+      reason: ncepReason ? `Direct NCEP feed unavailable: ${ncepReason}` : undefined,
+      model: "NCEP GFS global via Open-Meteo, 10m wind",
       unit: "m/s",
       points,
-      sampling: viewportBounds ? "viewport" : "storm",
+      sampling,
       coverage: sampleBounds
     };
   } catch (error) {
     const openMeteoReason = error instanceof Error ? error.message : "风场接口暂时不可用。";
-    if (isNationwideWindBounds(viewportBounds)) {
+    // A throttled primary GFS mirror must not make an otherwise valid local
+    // viewport blank. The fallback is labeled separately in its payload.
+    if (samplePoints.length > 0) {
       try {
-        return await loadMetNorwayWindField(samplePoints, sampleBounds);
+        return await loadMetNorwayWindField(samplePoints, sampleBounds, sampling);
       } catch (fallbackError) {
         const fallbackReason = fallbackError instanceof Error ? fallbackError.message : "MET Norway fallback failed.";
-        return unavailableWindField(viewportBounds ?? null, sampleBounds, `${openMeteoReason}；${fallbackReason}`);
+        return unavailableWindField(sampling, sampleBounds, `${openMeteoReason}；${fallbackReason}`);
       }
     }
-    return unavailableWindField(viewportBounds ?? null, sampleBounds, openMeteoReason);
+    return unavailableWindField(sampling, sampleBounds, openMeteoReason);
   }
 }
 
+function withWindFieldContext(
+  payload: WindFieldPayload,
+  stormId: string | null,
+  storm: Storm | null,
+  sampling: NonNullable<WindFieldPayload["sampling"]>
+): WindFieldPayload {
+  const analysisCenter = payload.source === NCEP_GFS_SOURCE && storm
+    ? findCyclonicVorticityCenter(payload.points, resolveWindAnalysisReference(storm, payload.updatedAt))
+    : undefined;
+  return { ...payload, stormId, sampling, analysisCenter };
+}
+
+function stripWindFieldContext(payload: WindFieldPayload): WindFieldPayload {
+  return { ...payload, stormId: undefined, analysisCenter: undefined };
+}
+
+const GFS_SCALAR_LAYERS: Record<GfsScalarLayerId, {
+  label: string;
+  variable: string;
+  level: string;
+  unit: GfsScalarLayerPayload["unit"];
+  convert: (value: number) => number;
+}> = {
+  pressure: { label: "海平面气压", variable: "PRMSL", level: "mean_sea_level", unit: "hPa", convert: (value) => value / 100 },
+  precipitation: { label: "模型降水率", variable: "PRATE", level: "surface", unit: "mm/h", convert: (value) => value * 3_600 },
+  gust: { label: "地面阵风", variable: "GUST", level: "surface", unit: "m/s", convert: (value) => value },
+  reflectivity: { label: "模型合成反射率", variable: "REFC", level: "entire_atmosphere", unit: "dBZ", convert: (value) => value },
+  "precipitable-water": { label: "整层可降水量", variable: "PWAT", level: "entire_atmosphere_(considered_as_a_single_layer)", unit: "mm", convert: (value) => value }
+};
+
+export function isGfsScalarLayerId(value: string | null): value is GfsScalarLayerId {
+  return Boolean(value && value in GFS_SCALAR_LAYERS);
+}
+
+export async function getGfsScalarLayer(layer: GfsScalarLayerId, requestedBounds: WindFieldBounds): Promise<GfsScalarLayerPayload> {
+  const bounds = snapNcepBounds(normalizeWindFieldBounds(requestedBounds));
+  const cacheKey = `${layer}:${windBoundsCacheKey(bounds)}`;
+  const cached = gfsScalarCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.payload;
+  const inFlight = gfsScalarInFlight.get(cacheKey);
+  if (inFlight) return inFlight;
+
+  const request = loadNcepGfsScalarLayer(layer, bounds).then(
+    (payload) => {
+      gfsScalarLastSuccess.set(cacheKey, payload);
+      gfsScalarCache.set(cacheKey, { expiresAt: Date.now() + WIND_FIELD_CACHE_TTL_MS, payload });
+      gfsScalarInFlight.delete(cacheKey);
+      return payload;
+    },
+    (error) => {
+      gfsScalarInFlight.delete(cacheKey);
+      const last = gfsScalarLastSuccess.get(cacheKey);
+      if (last) {
+        const stale = {
+          ...last,
+          status: "available" as const,
+          isStale: true,
+          reason: `NCEP GFS refresh failed; using last valid layer: ${errorMessage(error)}`
+        };
+        gfsScalarCache.set(cacheKey, { expiresAt: Date.now() + DEGRADED_WIND_FIELD_RETRY_MS, payload: stale });
+        return stale;
+      }
+      throw error;
+    }
+  );
+  gfsScalarInFlight.set(cacheKey, request);
+  return request;
+}
+
+async function loadNcepGfsScalarLayer(layer: GfsScalarLayerId, bounds: WindFieldBounds): Promise<GfsScalarLayerPayload> {
+  const config = GFS_SCALAR_LAYERS[layer];
+  const errors: string[] = [];
+  for (const cycle of ncepCycleCandidates()) {
+    const query = new URLSearchParams({
+      file: `gfs.t${cycle.hour}z.pgrb2.0p25.f000`,
+      [`lev_${config.level}`]: "on",
+      [`var_${config.variable}`]: "on",
+      subregion: "",
+      leftlon: String(bounds.west),
+      rightlon: String(bounds.east),
+      toplat: String(bounds.north),
+      bottomlat: String(bounds.south),
+      dir: `/gfs.${cycle.date}/${cycle.hour}/atmos`
+    });
+    try {
+      const response = await fetch(`${NCEP_GFS_FILTER_URL}?${query.toString()}`, {
+        cache: "no-store",
+        headers: {
+          Accept: "application/octet-stream",
+          "User-Agent": process.env.WEATHER_API_USER_AGENT ?? "TyphoonBossRadar/1.0 local-deployment"
+        },
+        signal: AbortSignal.timeout(35_000)
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.length < 16 || String.fromCharCode(...bytes.slice(0, 4)) !== "GRIB") throw new Error("response was not GRIB2");
+      const decoded = await decodeNcepGfsScalar(bytes, cycle, bounds, config.variable, config.convert);
+      return {
+        source: NCEP_GFS_SOURCE,
+        updatedAt: decoded.updatedAt,
+        status: "available",
+        attribution: NCEP_GFS_ATTRIBUTION,
+        layer,
+        label: config.label,
+        model: `NCEP GFS 0.25 degree analysis, ${config.variable}`,
+        unit: config.unit,
+        points: decoded.points,
+        nativeResolutionDegrees: NCEP_GFS_NATIVE_RESOLUTION_DEGREES,
+        displayResolutionDegrees: decoded.displayResolutionDegrees,
+        cycle: `${cycle.date} ${cycle.hour}Z`,
+        lastSuccessfulAt: decoded.updatedAt,
+        sampling: "viewport",
+        coverage: bounds
+      };
+    } catch (error) {
+      errors.push(`${cycle.date}${cycle.hour}: ${errorMessage(error)}`);
+    }
+  }
+  throw new Error(`NCEP GFS ${layer} unavailable (${errors.join(" | ")})`);
+}
+
+export async function getGfsWaveLayer(requestedBounds: WindFieldBounds): Promise<GfsWaveLayerPayload> {
+  const bounds = snapNcepBounds(normalizeWindFieldBounds(requestedBounds));
+  const cacheKey = windBoundsCacheKey(bounds);
+  const cached = gfsWaveCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.payload;
+  const inFlight = gfsWaveInFlight.get(cacheKey);
+  if (inFlight) return inFlight;
+  const request = loadNcepGfsWaveLayer(bounds).then(
+    (payload) => {
+      gfsWaveLastSuccess.set(cacheKey, payload);
+      gfsWaveCache.set(cacheKey, { expiresAt: Date.now() + WIND_FIELD_CACHE_TTL_MS, payload });
+      gfsWaveInFlight.delete(cacheKey);
+      return payload;
+    },
+    (error) => {
+      gfsWaveInFlight.delete(cacheKey);
+      const last = gfsWaveLastSuccess.get(cacheKey);
+      if (!last) throw error;
+      const stale = { ...last, isStale: true, reason: `GFS Wave refresh failed; using last valid layer: ${errorMessage(error)}` };
+      gfsWaveCache.set(cacheKey, { expiresAt: Date.now() + DEGRADED_WIND_FIELD_RETRY_MS, payload: stale });
+      return stale;
+    }
+  );
+  gfsWaveInFlight.set(cacheKey, request);
+  return request;
+}
+
+export async function getMarineLayer(requestedBounds: WindFieldBounds): Promise<MarineLayerPayload> {
+  const bounds = normalizeWindFieldBounds(requestedBounds);
+  const cacheKey = `marine:${windBoundsCacheKey(bounds)}`;
+  const cached = marineLayerCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.payload;
+  const inFlight = marineLayerInFlight.get(cacheKey);
+  if (inFlight) return inFlight;
+  const request = loadMarineLayer(bounds).then(
+    (payload) => {
+      marineLayerLastSuccess.set(cacheKey, payload);
+      marineLayerCache.set(cacheKey, { expiresAt: Date.now() + 30 * 60 * 1000, payload });
+      marineLayerInFlight.delete(cacheKey);
+      return payload;
+    },
+    (error) => {
+      marineLayerInFlight.delete(cacheKey);
+      const last = marineLayerLastSuccess.get(cacheKey);
+      if (last) {
+        const stale = { ...last, isStale: true, reason: `Marine refresh failed; using last valid layer: ${errorMessage(error)}` };
+        marineLayerCache.set(cacheKey, { expiresAt: Date.now() + DEGRADED_WIND_FIELD_RETRY_MS, payload: stale });
+        return stale;
+      }
+      throw error;
+    }
+  );
+  marineLayerInFlight.set(cacheKey, request);
+  return request;
+}
+
+async function loadMarineLayer(bounds: WindFieldBounds): Promise<MarineLayerPayload> {
+  try {
+    return await loadOpenMeteoMarineLayer(bounds);
+  } catch (error) {
+    return loadNoaaMarineFallback(bounds, error);
+  }
+}
+
+async function loadOpenMeteoMarineLayer(bounds: WindFieldBounds): Promise<MarineLayerPayload> {
+  const samplePoints = buildMarineSampleGrid(bounds);
+  const batches = chunk(samplePoints, 96);
+  const results: Array<{ updatedAt: string; points: MarinePoint[] }> = [];
+  for (const batch of batches) {
+    const query = new URLSearchParams({
+      latitude: batch.map((point) => point.lat.toFixed(3)).join(","),
+      longitude: batch.map((point) => point.lon.toFixed(3)).join(","),
+      hourly: "ocean_current_velocity,ocean_current_direction,sea_surface_temperature",
+      forecast_hours: "1",
+      timezone: "UTC",
+      wind_speed_unit: "ms"
+    });
+    const response = await fetch(`https://marine-api.open-meteo.com/v1/marine?${query.toString()}`, {
+      cache: "no-store",
+      headers: { Accept: "application/json", "User-Agent": process.env.WEATHER_API_USER_AGENT ?? "TyphoonBossRadar/1.0 local-deployment" },
+      signal: AbortSignal.timeout(35_000)
+    });
+    if (!response.ok) throw new Error(`Open-Meteo Marine request failed: ${response.status}`);
+    const raw = await response.json() as MarineLocation | MarineLocation[];
+    const locations = Array.isArray(raw) ? raw : [raw];
+    results.push({
+      updatedAt: locations[0]?.hourly?.time?.[0] ?? new Date().toISOString(),
+      points: locations.map((location, index) => convertMarinePoint(location, batch[index])).filter((point): point is MarinePoint => Boolean(point))
+    });
+  }
+  const points = results.flatMap((result) => result.points);
+  if (points.length < 24) throw new Error(`Open-Meteo Marine returned only ${points.length} usable samples.`);
+  return {
+    source: "Open-Meteo Marine API",
+    updatedAt: results[0]?.updatedAt ?? new Date().toISOString(),
+    status: "available",
+    attribution: "Open-Meteo Marine API; MeteoFrance ocean currents and sea-surface temperature",
+    model: "MeteoFrance global ocean currents + SST",
+    unit: "m/s + °C",
+    points,
+    nativeResolutionDegrees: 0.08,
+    displayResolutionDegrees: Math.max((bounds.east - bounds.west) / 11, (bounds.north - bounds.south) / 7),
+    sampling: "viewport",
+    coverage: bounds
+  };
+}
+
+async function loadNoaaMarineFallback(bounds: WindFieldBounds, primaryError: unknown): Promise<MarineLayerPayload> {
+  const currentLonStride = Math.max(1, Math.round((bounds.east - bounds.west) / 0.25 / 35));
+  const currentLatStride = Math.max(1, Math.round((bounds.north - bounds.south) / 0.25 / 23));
+  const sstLonStride = Math.max(1, Math.round((bounds.east - bounds.west) / 0.01 / 35));
+  const sstLatStride = Math.max(1, Math.round((bounds.north - bounds.south) / 0.01 / 23));
+  const slice = (variable: string, latStride: number, lonStride: number) => encodeURIComponent(
+    `${variable}[(last)][(${bounds.south}):${latStride}:(${bounds.north})][(${bounds.west}):${lonStride}:(${bounds.east})]`
+  );
+  const currentUrl = `https://coastwatch.pfeg.noaa.gov/erddap/griddap/nesdisSSH1day.csv?${slice("ugos", currentLatStride, currentLonStride)},${slice("vgos", currentLatStride, currentLonStride)}`;
+  const sstUrl = `https://coastwatch.pfeg.noaa.gov/erddap/griddap/jplMURSST41.csv?${slice("analysed_sst", sstLatStride, sstLonStride)}`;
+  const [currentResponse, sstResponse] = await Promise.all([
+    fetch(currentUrl, { cache: "no-store", signal: AbortSignal.timeout(35_000) }),
+    fetch(sstUrl, { cache: "no-store", signal: AbortSignal.timeout(35_000) })
+  ]);
+  if (!currentResponse.ok || !sstResponse.ok) {
+    throw new Error(`Marine sources unavailable: Open-Meteo ${errorMessage(primaryError)}; NOAA ERDDAP ${currentResponse.status}/${sstResponse.status}`);
+  }
+  const currentRows = parseErddapGridCsv(await currentResponse.text());
+  const sstRows = parseErddapGridCsv(await sstResponse.text());
+  if (currentRows.length < 12 || sstRows.length < 12) throw new Error("NOAA ERDDAP returned too few marine fallback cells.");
+  const points = sstRows.map((row) => {
+    const nearestCurrent = currentRows.reduce<{ distance: number; u: number; v: number }>((best, candidate) => {
+      const distance = Math.hypot(Number(candidate.longitude) - Number(row.longitude), Number(candidate.latitude) - Number(row.latitude));
+      return distance < best.distance ? { distance, u: Number(candidate.ugos), v: Number(candidate.vgos) } : best;
+    }, { distance: Number.POSITIVE_INFINITY, u: Number.NaN, v: Number.NaN });
+    const currentAvailable = nearestCurrent.distance <= 0.5 && Number.isFinite(nearestCurrent.u) && Number.isFinite(nearestCurrent.v);
+    const temperature = Number(row.analysed_sst);
+    return {
+      lon: Number(row.longitude),
+      lat: Number(row.latitude),
+      currentU: currentAvailable ? nearestCurrent.u : 0,
+      currentV: currentAvailable ? nearestCurrent.v : 0,
+      currentSpeed: currentAvailable ? Math.hypot(nearestCurrent.u, nearestCurrent.v) : 0,
+      seaSurfaceTemperature: Number.isFinite(temperature) ? temperature : null,
+      currentAvailable
+    } satisfies MarinePoint;
+  }).filter((point) => Number.isFinite(point.lon) && Number.isFinite(point.lat));
+  const currentUpdatedAt = currentRows[0]?.time ?? new Date().toISOString();
+  return {
+    source: "NOAA CoastWatch ERDDAP fallback",
+    updatedAt: currentUpdatedAt,
+    status: "available",
+    attribution: "NOAA CoastWatch experimental altimetry geostrophic currents; NASA JPL MUR SST via NOAA ERDDAP",
+    model: "NOAA geostrophic currents + NASA JPL MUR SST",
+    unit: "m/s + °C",
+    points,
+    nativeResolutionDegrees: 0.25,
+    displayResolutionDegrees: Math.max((bounds.east - bounds.west) / 35, (bounds.north - bounds.south) / 23),
+    sampling: "viewport",
+    coverage: bounds,
+    isStale: true,
+    reason: `Open-Meteo Marine unavailable; using delayed NOAA fallback (${errorMessage(primaryError)}).`
+  };
+}
+
+function parseErddapGridCsv(csv: string): Array<Record<string, string>> {
+  const lines = csv.trim().split(/\r?\n/);
+  if (lines.length < 3) return [];
+  const headers = lines[0].split(",");
+  return lines.slice(2).map((line) => {
+    const values = line.split(",");
+    return Object.fromEntries(headers.map((header, index) => [header, values[index] ?? ""]));
+  });
+}
+
+async function loadNcepGfsWaveLayer(bounds: WindFieldBounds): Promise<GfsWaveLayerPayload> {
+  const errors: string[] = [];
+  for (const cycle of ncepCycleCandidates()) {
+    const query = new URLSearchParams({
+      file: `gfswave.t${cycle.hour}z.global.0p25.f000.grib2`,
+      lev_surface: "on",
+      var_HTSGW: "on",
+      var_DIRPW: "on",
+      var_PERPW: "on",
+      subregion: "",
+      leftlon: String(bounds.west),
+      rightlon: String(bounds.east),
+      toplat: String(bounds.north),
+      bottomlat: String(bounds.south),
+      dir: `/gfs.${cycle.date}/${cycle.hour}/wave/gridded`
+    });
+    try {
+      const response = await fetch(`${NCEP_GFS_WAVE_FILTER_URL}?${query}`, {
+        cache: "no-store",
+        headers: { Accept: "application/octet-stream", "User-Agent": process.env.WEATHER_API_USER_AGENT ?? "TyphoonBossRadar/1.0 local-deployment" },
+        signal: AbortSignal.timeout(35_000)
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.length < 16 || String.fromCharCode(...bytes.slice(0, 4)) !== "GRIB") throw new Error("response was not GRIB2");
+      const decoded = await decodeNcepGfsWave(bytes, cycle, bounds);
+      return {
+        source: NCEP_GFS_SOURCE,
+        updatedAt: decoded.updatedAt,
+        status: "available",
+        attribution: "NOAA NCEP GFS Wave 0.25 degree analysis",
+        model: "NCEP GFS Wave 0.25 degree analysis, HTSGW/DIRPW/PERPW",
+        unit: "m",
+        points: decoded.points,
+        nativeResolutionDegrees: NCEP_GFS_NATIVE_RESOLUTION_DEGREES,
+        displayResolutionDegrees: decoded.displayResolutionDegrees,
+        cycle: `${cycle.date} ${cycle.hour}Z`,
+        sampling: "viewport",
+        coverage: bounds
+      };
+    } catch (error) {
+      errors.push(`${cycle.date}${cycle.hour}: ${errorMessage(error)}`);
+    }
+  }
+  throw new Error(`NCEP GFS Wave unavailable (${errors.join(" | ")})`);
+}
+
+async function loadNcepGfsWindField(
+  sampleBounds: WindFieldBounds,
+  viewportSampling: boolean
+): Promise<WindFieldPayload> {
+  const bounds = snapNcepBounds(sampleBounds);
+  const errors: string[] = [];
+
+  for (const cycle of ncepCycleCandidates()) {
+    const query = new URLSearchParams({
+      file: `gfs.t${cycle.hour}z.pgrb2.0p25.f000`,
+      lev_10_m_above_ground: "on",
+      var_UGRD: "on",
+      var_VGRD: "on",
+      subregion: "",
+      leftlon: String(bounds.west),
+      rightlon: String(bounds.east),
+      toplat: String(bounds.north),
+      bottomlat: String(bounds.south),
+      dir: `/gfs.${cycle.date}/${cycle.hour}/atmos`
+    });
+    try {
+      const response = await fetch(`${NCEP_GFS_FILTER_URL}?${query.toString()}`, {
+        cache: "no-store",
+        headers: {
+          Accept: "application/octet-stream",
+          "User-Agent": process.env.WEATHER_API_USER_AGENT ?? "TyphoonBossRadar/1.0 local-deployment"
+        },
+        signal: AbortSignal.timeout(35_000)
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const bytes = new Uint8Array(await response.arrayBuffer());
+      if (bytes.length < 16 || String.fromCharCode(...bytes.slice(0, 4)) !== "GRIB") {
+        throw new Error("response was not GRIB2");
+      }
+      const decoded = await decodeNcepGfsWind(bytes, cycle, bounds);
+      return {
+        source: NCEP_GFS_SOURCE,
+        updatedAt: decoded.updatedAt,
+        status: "available",
+        attribution: NCEP_GFS_ATTRIBUTION,
+        model: "NCEP GFS 0.25 degree analysis, 10m U/V wind",
+        unit: "m/s",
+        points: decoded.points,
+        nativeResolutionDegrees: NCEP_GFS_NATIVE_RESOLUTION_DEGREES,
+        displayResolutionDegrees: decoded.displayResolutionDegrees,
+        cycle: `${cycle.date} ${cycle.hour}Z`,
+        sampling: viewportSampling ? "viewport" : "storm",
+        coverage: bounds
+      };
+    } catch (error) {
+      errors.push(`${cycle.date}${cycle.hour}: ${error instanceof Error ? error.message : "unknown error"}`);
+    }
+  }
+  throw new Error(`NCEP GFS unavailable (${errors.join(" | ")})`);
+}
+
+async function decodeNcepGfsWind(
+  bytes: Uint8Array,
+  cycle: { date: string; hour: string },
+  bounds: WindFieldBounds
+) {
+  await mkdir(WIND_FIELD_CACHE_DIR, { recursive: true });
+  const token = createHash("sha1")
+    .update(`${cycle.date}${cycle.hour}:${bounds.west}:${bounds.south}:${bounds.east}:${bounds.north}:${Date.now()}`)
+    .digest("hex")
+    .slice(0, 16);
+  const gribPath = join(WIND_FIELD_CACHE_DIR, `ncep-${token}.grib2`);
+  const csvPath = join(WIND_FIELD_CACHE_DIR, `ncep-${token}.csv`);
+  try {
+    await writeFile(gribPath, bytes);
+    await execFileAsync(WGRIB2_PATH, [gribPath, "-csv", csvPath], {
+      cwd: join(process.cwd(), ".runtime", "tools", "wgrib2"),
+      windowsHide: true,
+      timeout: 45_000,
+      maxBuffer: 2 * 1024 * 1024
+    });
+    return parseNcepWindCsv(await readFile(csvPath, "utf8"));
+  } finally {
+    await Promise.all([
+      rm(gribPath, { force: true }).catch(() => undefined),
+      rm(csvPath, { force: true }).catch(() => undefined)
+    ]);
+  }
+}
+
+async function decodeNcepGfsScalar(
+  bytes: Uint8Array,
+  cycle: { date: string; hour: string },
+  bounds: WindFieldBounds,
+  variable: string,
+  convert: (value: number) => number
+) {
+  await mkdir(WIND_FIELD_CACHE_DIR, { recursive: true });
+  const token = createHash("sha1")
+    .update(`scalar:${variable}:${cycle.date}${cycle.hour}:${bounds.west}:${bounds.south}:${bounds.east}:${bounds.north}:${Date.now()}`)
+    .digest("hex")
+    .slice(0, 16);
+  const gribPath = join(WIND_FIELD_CACHE_DIR, `ncep-${token}.grib2`);
+  const csvPath = join(WIND_FIELD_CACHE_DIR, `ncep-${token}.csv`);
+  try {
+    await writeFile(gribPath, bytes);
+    await execFileAsync(WGRIB2_PATH, [gribPath, "-csv", csvPath], {
+      cwd: join(process.cwd(), ".runtime", "tools", "wgrib2"),
+      windowsHide: true,
+      timeout: 45_000,
+      maxBuffer: 4 * 1024 * 1024
+    });
+    return parseNcepScalarCsv(await readFile(csvPath, "utf8"), variable, convert);
+  } finally {
+    await Promise.all([
+      rm(gribPath, { force: true }).catch(() => undefined),
+      rm(csvPath, { force: true }).catch(() => undefined)
+    ]);
+  }
+}
+
+async function decodeNcepGfsWave(
+  bytes: Uint8Array,
+  cycle: { date: string; hour: string },
+  bounds: WindFieldBounds
+) {
+  await mkdir(WIND_FIELD_CACHE_DIR, { recursive: true });
+  const token = createHash("sha1")
+    .update(`wave:${cycle.date}${cycle.hour}:${bounds.west}:${bounds.south}:${bounds.east}:${bounds.north}:${Date.now()}`)
+    .digest("hex")
+    .slice(0, 16);
+  const gribPath = join(WIND_FIELD_CACHE_DIR, `ncep-${token}.grib2`);
+  const csvPath = join(WIND_FIELD_CACHE_DIR, `ncep-${token}.csv`);
+  try {
+    await writeFile(gribPath, bytes);
+    await execFileAsync(WGRIB2_PATH, [gribPath, "-csv", csvPath], {
+      cwd: join(process.cwd(), ".runtime", "tools", "wgrib2"),
+      windowsHide: true,
+      timeout: 45_000,
+      maxBuffer: 6 * 1024 * 1024
+    });
+    return parseNcepWaveCsv(await readFile(csvPath, "utf8"));
+  } finally {
+    await Promise.all([rm(gribPath, { force: true }).catch(() => undefined), rm(csvPath, { force: true }).catch(() => undefined)]);
+  }
+}
+
+function parseNcepWaveCsv(csv: string) {
+  const grid = new Map<string, GfsWavePoint>();
+  let updatedAt = "";
+  for (const line of csv.split(/\r?\n/)) {
+    if (!line) continue;
+    const fields = line.split(",");
+    if (fields.length < 7) continue;
+    const validTime = fields[1].replaceAll('"', "");
+    const variable = fields[2].replaceAll('"', "");
+    if (variable !== "HTSGW" && variable !== "DIRPW" && variable !== "PERPW") continue;
+    const lon = Number(fields[4]);
+    const lat = Number(fields[5]);
+    const value = Number(fields[6]);
+    if (!Number.isFinite(lon) || !Number.isFinite(lat) || !Number.isFinite(value)) continue;
+    if (!updatedAt && validTime) updatedAt = `${validTime.replace(" ", "T")}Z`;
+    const key = windSampleKey(lon, lat);
+    const point = grid.get(key) ?? { lon, lat, heightM: Number.NaN, directionDeg: Number.NaN };
+    if (variable === "HTSGW") point.heightM = value;
+    if (variable === "DIRPW") point.directionDeg = value;
+    if (variable === "PERPW") point.periodS = value;
+    grid.set(key, point);
+  }
+  const complete = [...grid.values()].filter((point) => Number.isFinite(point.heightM) && Number.isFinite(point.directionDeg));
+  if (complete.length < 80) throw new Error(`wgrib2 decoded only ${complete.length} complete wave cells`);
+  const stride = Math.max(1, Math.ceil(complete.length / NCEP_GFS_WAVE_MAX_DISPLAY_POINTS));
+  return {
+    updatedAt: updatedAt || new Date().toISOString(),
+    displayResolutionDegrees: NCEP_GFS_NATIVE_RESOLUTION_DEGREES * stride,
+    points: complete.filter((_, index) => index % stride === 0)
+  };
+}
+
+function parseNcepScalarCsv(csv: string, variable: string, convert: (value: number) => number) {
+  const rawPoints: GfsScalarPoint[] = [];
+  let updatedAt = "";
+  for (const line of csv.split(/\r?\n/)) {
+    if (!line) continue;
+    const fields = line.split(",");
+    if (fields.length < 7) continue;
+    const validTime = fields[1].replaceAll('"', "");
+    const rowVariable = fields[2].replaceAll('"', "");
+    if (rowVariable !== variable) continue;
+    const lon = Number(fields[4]);
+    const lat = Number(fields[5]);
+    const rawValue = Number(fields[6]);
+    if (!Number.isFinite(lon) || !Number.isFinite(lat) || !Number.isFinite(rawValue)) continue;
+    if (!updatedAt && validTime) updatedAt = `${validTime.replace(" ", "T")}Z`;
+    rawPoints.push({ lon, lat, value: convert(rawValue) });
+  }
+  if (rawPoints.length < 100) throw new Error(`wgrib2 decoded only ${rawPoints.length} ${variable} cells`);
+  const stride = Math.max(1, Math.ceil(Math.sqrt(rawPoints.length / NCEP_GFS_MAX_DISPLAY_POINTS)));
+  const points = rawPoints.filter((_, index) => index % stride === 0);
+  return {
+    updatedAt: updatedAt || new Date().toISOString(),
+    displayResolutionDegrees: NCEP_GFS_NATIVE_RESOLUTION_DEGREES * stride,
+    points
+  };
+}
+
+function parseNcepWindCsv(csv: string) {
+  const grid = new Map<string, { lon: number; lat: number; u?: number; v?: number }>();
+  let updatedAt = "";
+  for (const line of csv.split(/\r?\n/)) {
+    if (!line) continue;
+    const fields = line.split(",");
+    if (fields.length < 7) continue;
+    const validTime = fields[1].replaceAll('"', "");
+    const variable = fields[2].replaceAll('"', "");
+    const lon = Number(fields[4]);
+    const lat = Number(fields[5]);
+    const value = Number(fields[6]);
+    if (!Number.isFinite(lon) || !Number.isFinite(lat) || !Number.isFinite(value)) continue;
+    if (variable !== "UGRD" && variable !== "VGRD") continue;
+    if (!updatedAt && validTime) updatedAt = `${validTime.replace(" ", "T")}Z`;
+    const key = windSampleKey(lon, lat);
+    const point = grid.get(key) ?? { lon, lat };
+    if (variable === "UGRD") point.u = value;
+    if (variable === "VGRD") point.v = value;
+    grid.set(key, point);
+  }
+
+  const complete = [...grid.values()].filter(
+    (point): point is { lon: number; lat: number; u: number; v: number } => Number.isFinite(point.u) && Number.isFinite(point.v)
+  );
+  if (complete.length < 100) throw new Error(`wgrib2 decoded only ${complete.length} complete U/V cells`);
+  const longitudes = [...new Set(complete.map((point) => point.lon))].sort((left, right) => left - right);
+  const latitudes = [...new Set(complete.map((point) => point.lat))].sort((left, right) => left - right);
+  const stride = Math.max(1, Math.ceil(Math.sqrt(complete.length / NCEP_GFS_MAX_DISPLAY_POINTS)));
+  const indexed = new Map(complete.map((point) => [windSampleKey(point.lon, point.lat), point]));
+  const points: WindFieldPoint[] = [];
+  for (let latIndex = 0; latIndex < latitudes.length; latIndex += stride) {
+    for (let lonIndex = 0; lonIndex < longitudes.length; lonIndex += stride) {
+      const point = indexed.get(windSampleKey(longitudes[lonIndex], latitudes[latIndex]));
+      if (!point) continue;
+      const speed = Math.hypot(point.u, point.v);
+      points.push({ ...point, speed, direction: (Math.atan2(-point.u, -point.v) * 180) / Math.PI });
+    }
+  }
+  if (points.length < 100) throw new Error(`NCEP display grid retained only ${points.length} cells`);
+  return {
+    updatedAt: updatedAt || new Date().toISOString(),
+    displayResolutionDegrees: NCEP_GFS_NATIVE_RESOLUTION_DEGREES * stride,
+    points
+  };
+}
+
+function ncepCycleCandidates(now = new Date()) {
+  const delayed = new Date(now.getTime() - 4.5 * 60 * 60 * 1000);
+  delayed.setUTCMinutes(0, 0, 0);
+  delayed.setUTCHours(Math.floor(delayed.getUTCHours() / 6) * 6);
+  return Array.from({ length: 4 }, (_, index) => {
+    const cycle = new Date(delayed.getTime() - index * 6 * 60 * 60 * 1000);
+    return {
+      date: `${cycle.getUTCFullYear()}${String(cycle.getUTCMonth() + 1).padStart(2, "0")}${String(cycle.getUTCDate()).padStart(2, "0")}`,
+      hour: String(cycle.getUTCHours()).padStart(2, "0")
+    };
+  });
+}
+
+function snapNcepBounds(bounds: WindFieldBounds): WindFieldBounds {
+  return {
+    west: clamp(Math.floor(bounds.west / 0.25) * 0.25, 0, 359.75),
+    east: clamp(Math.ceil(bounds.east / 0.25) * 0.25, 0.25, 359.75),
+    south: clamp(Math.floor(bounds.south / 0.25) * 0.25, -90, 89.75),
+    north: clamp(Math.ceil(bounds.north / 0.25) * 0.25, -89.75, 90)
+  };
+}
+
+function windSampleKey(lon: number, lat: number) {
+  return `${lon.toFixed(2)}:${lat.toFixed(2)}`;
+}
+
 function unavailableWindField(
-  viewportBounds: WindFieldBounds | null,
+  sampling: NonNullable<WindFieldPayload["sampling"]>,
   sampleBounds: WindFieldBounds,
   reason: string
 ): WindFieldPayload {
@@ -391,17 +1277,18 @@ function unavailableWindField(
       status: "unavailable",
       attribution: OPEN_METEO_ATTRIBUTION,
       reason,
-      model: "Open-Meteo best match, 10m wind",
+      model: "NCEP GFS global via Open-Meteo, 10m wind",
       unit: "m/s",
       points: [],
-      sampling: viewportBounds ? "viewport" : "storm",
+      sampling,
       coverage: sampleBounds
     };
 }
 
 async function loadMetNorwayWindField(
   samplePoints: Array<{ lon: number; lat: number }>,
-  sampleBounds: WindFieldBounds
+  sampleBounds: WindFieldBounds,
+  sampling: NonNullable<WindFieldPayload["sampling"]>
 ): Promise<WindFieldPayload> {
   const results = await mapWithConcurrency(samplePoints, 4, async (point) => {
     const query = new URLSearchParams({
@@ -450,7 +1337,7 @@ async function loadMetNorwayWindField(
     model: "MET Norway global location forecast, 10m wind",
     unit: "m/s",
     points: samples.map((sample) => sample.point),
-    sampling: "viewport",
+    sampling,
     coverage: sampleBounds
   };
 }
@@ -533,8 +1420,11 @@ function isNationwideWindBounds(bounds: WindFieldBounds | null | undefined) {
   return Boolean(bounds && bounds.east - bounds.west >= 50 && bounds.north - bounds.south >= 30);
 }
 
-function shouldPersistWindField(bounds: WindFieldBounds | null) {
-  return bounds === null || isNationwideWindBounds(bounds);
+function shouldPersistWindField(
+  bounds: WindFieldBounds | null,
+  sampling: NonNullable<WindFieldPayload["sampling"]>
+) {
+  return sampling === "storm" || isNationwideWindBounds(bounds);
 }
 
 function staleWindField(payload: WindFieldPayload, reason: string): WindFieldPayload {
@@ -562,7 +1452,7 @@ async function readPersistedWindField(cacheKey: string): Promise<WindFieldPayloa
     const savedAt = Date.parse(raw.savedAt ?? "");
     if (raw.version !== 1 || !raw.payload || raw.payload.status !== "available" || raw.payload.points.length < 42) return null;
     if (!Number.isFinite(savedAt) || Date.now() - savedAt > PERSISTED_WIND_FIELD_MAX_AGE_MS) return null;
-    return raw.payload;
+    return stripWindFieldContext(raw.payload);
   } catch {
     return null;
   }
@@ -674,29 +1564,7 @@ async function loadGlobalSatelliteFrames() {
 }
 
 function chooseSynchronizedFramePair(regionalFrames: SatelliteFrame[], globalFrames: SatelliteFrame[]) {
-  const now = Date.now() + 5 * 60 * 1000;
-  const regional = regionalFrames.filter((frame) => new Date(frame.capturedAt).getTime() <= now);
-  const global = globalFrames.filter((frame) => new Date(frame.capturedAt).getTime() <= now);
-  let best: { regional: SatelliteFrame; global: SatelliteFrame; freshness: number; skew: number } | null = null;
-
-  for (const regionalFrame of regional) {
-    const regionalAt = new Date(regionalFrame.capturedAt).getTime();
-    for (const globalFrame of global) {
-      const globalAt = new Date(globalFrame.capturedAt).getTime();
-      const skew = Math.abs(regionalAt - globalAt);
-      if (skew > SATELLITE_REFRESH_INTERVAL_MS) continue;
-      const freshness = Math.min(regionalAt, globalAt);
-      if (!best || freshness > best.freshness || (freshness === best.freshness && skew < best.skew)) {
-        best = { regional: regionalFrame, global: globalFrame, freshness, skew };
-      }
-    }
-  }
-
-  if (best) return best;
-  return {
-    regional: [...regionalFrames].sort(compareFrameNewestFirst)[0],
-    global: [...globalFrames].sort(compareFrameNewestFirst)[0]
-  };
+  return selectSynchronizedSatellitePair(regionalFrames, globalFrames);
 }
 
 function uniqueFrames(frames: SatelliteFrame[]) {
@@ -764,17 +1632,18 @@ async function prepareRegionalCloudOverlay(bytes: Uint8Array) {
   const metadata = await sharp(Buffer.from(bytes)).metadata();
   const width = metadata.width ?? 1120;
   const height = metadata.height ?? 640;
-  const cropHeight = Math.max(1, Math.min(height, Math.round(height * 0.944)));
-  return renderCloudMask(bytes, { left: 0, top: 0, width, height: cropHeight }, 88, 205);
+  // Preserve every source row. Cropping the southern edge while retaining the
+  // original geographic bounds stretched the cloud field and displaced it
+  // relative to the track and wind layers.
+  return renderCloudMask(bytes, { left: 0, top: 0, width, height }, 88, 205);
 }
 
 async function prepareGlobalCloudOverlay(bytes: Uint8Array) {
   const metadata = await sharp(Buffer.from(bytes)).metadata();
   const width = metadata.width ?? 835;
   const height = metadata.height ?? 488;
-  const top = Math.max(0, Math.round(height * 0.154));
-  const bottom = Math.min(height, Math.round(height * 0.868));
-  return renderCloudMask(bytes, { left: 0, top, width, height: Math.max(1, bottom - top) }, 76, 175);
+  const extract = globalMercatorLatitudeCrop(width, height, GLOBAL_SATELLITE_BOUNDS.north, GLOBAL_SATELLITE_BOUNDS.south);
+  return renderCloudMask(bytes, extract, 76, 175);
 }
 
 async function renderCloudMask(
@@ -818,14 +1687,16 @@ async function renderCloudMask(
     .toBuffer();
 }
 
-function impactFeature(storm: Storm, level: "r7" | "r10" | "r12", radiusKm: number) {
-  if (!Number.isFinite(radiusKm) || radiusKm <= 0) return null;
-  const feature = makeCircle(storm.position.lon, storm.position.lat, radiusKm, 160) as GeoJSON.Feature;
+function impactFeature(storm: Storm, level: "r7" | "r10" | "r12") {
+  const radius = storm.windRadiiKm.quadrants[level];
+  const feature = makeQuadrantWindPolygon(storm.position, radius, 160) as GeoJSON.Feature | null;
+  if (!feature) return null;
   feature.properties = {
     stormId: storm.id,
     stormName: storm.nameZh,
     radiusLevel: level,
-    radiusKm,
+    radiusKm: radius.max,
+    quadrants: { ne: radius.ne, se: radius.se, sw: radius.sw, nw: radius.nw },
     updatedAt: storm.updatedAt
   };
   return feature;
@@ -875,6 +1746,23 @@ function buildWindSampleGrid(bounds: WindFieldBounds) {
   return points;
 }
 
+function buildMarineSampleGrid(bounds: WindFieldBounds) {
+  // Keep a viewport refresh to one multi-location upstream request. The public
+  // endpoint counts dense coordinate lists toward its free-use rate limit;
+  // client-side interpolation supplies the display density.
+  const columns = 12;
+  const rows = 8;
+  const points: Array<{ lon: number; lat: number }> = [];
+  for (let row = 0; row < rows; row += 1) {
+    const lat = bounds.north - ((bounds.north - bounds.south) * row) / (rows - 1);
+    for (let column = 0; column < columns; column += 1) {
+      const lon = bounds.west + ((bounds.east - bounds.west) * column) / (columns - 1);
+      points.push({ lon, lat });
+    }
+  }
+  return points;
+}
+
 function normalizeWindFieldBounds(bounds: WindFieldBounds): WindFieldBounds {
   const west = clamp(Math.min(bounds.west, bounds.east), -180, 180);
   const east = clamp(Math.max(bounds.west, bounds.east), -180, 180);
@@ -911,6 +1799,27 @@ function convertWindPoint(location: OpenMeteoLocation): WindFieldPoint | null {
     v: -windSpeed * Math.cos(radians),
     speed: windSpeed,
     direction: direction as number
+  };
+}
+
+function convertMarinePoint(location: MarineLocation, requestedPoint?: { lon: number; lat: number }): MarinePoint | null {
+  const velocity = location.hourly?.ocean_current_velocity?.[0];
+  const direction = location.hourly?.ocean_current_direction?.[0];
+  const temperature = location.hourly?.sea_surface_temperature?.[0];
+  const lon = requestedPoint?.lon ?? location.longitude;
+  const lat = requestedPoint?.lat ?? location.latitude;
+  if (!Number.isFinite(lon) || !Number.isFinite(lat)) return null;
+  const currentAvailable = Number.isFinite(velocity) && Number.isFinite(direction);
+  const speed = currentAvailable ? Math.max(0, velocity as number) : 0;
+  const radians = currentAvailable ? ((direction as number) * Math.PI) / 180 : 0;
+  return {
+    lon,
+    lat,
+    currentU: currentAvailable ? speed * Math.sin(radians) : 0,
+    currentV: currentAvailable ? speed * Math.cos(radians) : 0,
+    currentSpeed: speed,
+    seaSurfaceTemperature: Number.isFinite(temperature) ? temperature as number : null,
+    currentAvailable
   };
 }
 

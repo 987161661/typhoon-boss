@@ -1,0 +1,40 @@
+{
+  "measuredAt": "2026-07-15T06:05:00.000Z",
+  "machine": "same Windows host",
+  "browser": "Codex in-app browser",
+  "viewport": { "width": 1280, "height": 720 },
+  "protocol": "Warm each /live endpoint, then perform three reloads in the same tab. First-interactive is the later of data-ready=true and wind-particle-canvas attachment. Wind metrics are sampled after eight seconds.",
+  "baseline": {
+    "commit": "a6e9478222d03aa281d0fe1a44caf0d03944c5ed",
+    "url": "http://127.0.0.1:3040/live",
+    "interactiveMs": [731, 680, 702],
+    "medianInteractiveMs": 702,
+    "medianAverageFrameMs": 16.7,
+    "medianAverageRenderMs": 3.4,
+    "medianP95RenderMs": 3.6,
+    "medianActiveParticleCount": 615,
+    "windSource": "Open-Meteo Forecast API"
+  },
+  "candidate": {
+    "commit": "5453de9a9efe64cdb65ab079c8c5410bfcf9a0cf",
+    "url": "http://127.0.0.1:3038/live",
+    "interactiveMs": [783, 577, 684],
+    "medianInteractiveMs": 684,
+    "medianAverageFrameMs": 16.7,
+    "medianAverageRenderMs": 1.9,
+    "medianP95RenderMs": 2.1,
+    "medianActiveParticleCount": 538,
+    "windSource": "NOAA/NCEP NOMADS Grib Filter"
+  },
+  "comparison": {
+    "interactiveChangePct": -2.56,
+    "averageRenderChangePct": -44.12,
+    "p95RenderChangePct": -41.67,
+    "frameIntervalChangePct": 0,
+    "passesNotLowerThanBaseline": true
+  },
+  "limitations": [
+    "This is a warm-chain same-machine comparison, not a cold-cache laboratory benchmark.",
+    "The candidate renders the direct NCEP grid while the historical baseline fell back to Open-Meteo; both are the actual live behavior of their respective commits."
+  ]
+}

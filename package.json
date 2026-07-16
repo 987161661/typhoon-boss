@@ -8,9 +8,17 @@
     "start": "next start",
     "live:with-host": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start_live_with_linglan.ps1",
     "agent:run": "node scripts/run_typhoon_evolution_agent.mjs",
+    "cities:rank:refresh": "tsx scripts/refresh_national_city_rank.ts",
+    "cities:warnings:scan": "tsx scripts/scan_national_city_warnings.ts",
+    "warnings:china:refresh": "tsx scripts/refresh_china_weather_warnings.ts",
+    "products:china:refresh": "tsx scripts/refresh_china_weather_products.ts",
+    "visuals:china:refresh": "tsx scripts/refresh_china_weather_visuals.ts",
+    "setup:wgrib2": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/install_wgrib2.ps1",
     "clean:local": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/clean_local_artifacts.ps1",
-    "lint": "next lint",
-    "typecheck": "tsc --noEmit --incremental false"
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit --incremental false",
+    "test": "tsx --test tests/**/*.test.ts",
+    "verify": "npm run typecheck && npm run lint && npm run test && npm run build"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
@@ -21,12 +29,17 @@
     "sharp": "^0.34.5"
   },
   "devDependencies": {
+    "@eslint/eslintrc": "^3.3.1",
     "@types/geojson": "^7946.0.14",
     "@types/node": "^22.10.2",
     "@types/react": "^19.0.1",
     "@types/react-dom": "^19.0.2",
     "eslint": "^9.17.0",
     "eslint-config-next": "^15.1.0",
+    "tsx": "^4.20.0",
     "typescript": "^5.7.2"
+  },
+  "overrides": {
+    "postcss": "^8.5.10"
   }
 }

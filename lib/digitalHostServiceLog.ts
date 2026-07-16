@@ -1,4 +1,4 @@
-import { appendFile, mkdir, readFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, stat } from "node:fs/promises";
 import path from "node:path";
 
 const LOG_PATH = path.join(process.cwd(), "runtime", "logs", "digital-host-service.jsonl");
@@ -13,7 +13,6 @@ export type DigitalHostServiceLogEvent = {
   status?: number;
   error?: string;
   textLength?: number;
-  textPreview?: string;
 };
 
 function cleanText(value: string, limit: number) {
@@ -22,10 +21,7 @@ function cleanText(value: string, limit: number) {
 
 export function chatTextMetadata(text: string) {
   return {
-    textLength: text.length,
-    // A short preview is useful when correlating a report, while keeping the
-    // service log from becoming a second full conversation archive.
-    textPreview: cleanText(text, 48)
+    textLength: text.length
   };
 }
 
@@ -33,13 +29,14 @@ export async function appendDigitalHostServiceLog(event: DigitalHostServiceLogEv
   const record = {
     at: event.at ?? Date.now(),
     ...event,
-    reasons: event.reasons?.slice(0, 8),
-    error: event.error ? cleanText(event.error, 300) : undefined,
-    textPreview: event.textPreview ? cleanText(event.textPreview, 48) : undefined
+    reasons: event.reasons?.slice(0, 8).map((reason) => cleanText(reason, 160)),
+    error: event.error ? cleanText(event.error, 300) : undefined
   };
   const line = `${JSON.stringify(record)}\n`;
   const task = writeQueue.then(async () => {
     await mkdir(path.dirname(LOG_PATH), { recursive: true });
+    const size = await stat(LOG_PATH).then((value) => value.size).catch(() => 0);
+    if (size > 5 * 1024 * 1024) await rename(LOG_PATH, `${LOG_PATH}.1`).catch(() => undefined);
     await appendFile(LOG_PATH, line, "utf8");
   });
   writeQueue = task.catch(() => undefined);
@@ -55,7 +52,9 @@ export async function readDigitalHostServiceLog(limit: number) {
       .slice(-limit)
       .flatMap((line) => {
         try {
-          return [JSON.parse(line) as DigitalHostServiceLogEvent];
+          const parsed = JSON.parse(line) as DigitalHostServiceLogEvent & { textPreview?: unknown };
+          delete parsed.textPreview;
+          return [parsed];
         } catch {
           return [];
         }

@@ -1,0 +1,107 @@
+.acquisition {
+  --acquire-x: 50vw;
+  --acquire-y: 42vh;
+  position: fixed;
+  z-index: 2300;
+  top: var(--acquire-y);
+  left: var(--acquire-x);
+  display: flex;
+  width: min(360px, calc(100vw - 32px));
+  min-height: 88px;
+  align-items: center;
+  gap: 13px;
+  padding: 14px 17px;
+  overflow: hidden;
+  border: 1px solid rgb(255 184 66 / 56%);
+  border-left: 3px solid #ff543d;
+  color: #fff2d8;
+  background: linear-gradient(112deg, rgb(26 10 11 / 96%), rgb(6 25 31 / 96%));
+  box-shadow: 0 16px 44px rgb(0 0 0 / 58%), 0 0 26px rgb(255 75 56 / 18%);
+  transform: translate(52px, -50%);
+  clip-path: polygon(0 0, calc(100% - 16px) 0, 100% 16px, 100% 100%, 10px 100%, 0 calc(100% - 10px));
+  animation: acquireIn 480ms cubic-bezier(.16,.9,.24,1) both;
+}
+
+.acquisition[data-anchored="false"] {
+  transform: translate(-50%, -50%);
+}
+
+.acquisition[data-error="true"] {
+  border-color: rgb(255 108 75 / 82%);
+  background: rgb(42 10 12 / 96%);
+}
+
+.acquisition svg {
+  width: 24px;
+  flex: 0 0 auto;
+  color: #42ddeb;
+  animation: spin 900ms linear infinite;
+}
+
+.acquisition > div:last-child {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.acquisition span {
+  color: #42ddeb;
+  font: 700 9px/1 Consolas, monospace;
+  letter-spacing: .14em;
+}
+
+.acquisition strong {
+  overflow: hidden;
+  font: 800 25px/1 "Bahnschrift SemiCondensed", "Microsoft YaHei UI", sans-serif;
+  letter-spacing: .08em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.acquisition b {
+  color: #d8c0a4;
+  font: 600 11px/1.4 "Microsoft YaHei UI", sans-serif;
+}
+
+.acquireLine {
+  position: absolute;
+  top: 0;
+  left: -35%;
+  width: 35%;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #ffb84a, #42ddeb, transparent);
+  box-shadow: 0 0 10px #42ddeb;
+  animation: scan 1.2s ease-in-out infinite;
+}
+
+@keyframes acquireIn {
+  from { opacity: 0; clip-path: inset(46% 0 46% 0); }
+  to { opacity: 1; }
+}
+
+@keyframes scan {
+  to { left: 100%; }
+}
+
+@keyframes spin {
+  to { transform: rotate(1turn); }
+}
+
+@media (max-width: 760px) {
+  .acquisition,
+  .acquisition[data-anchored="true"] {
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .acquisition,
+  .acquisition *,
+  .acquisition *::before,
+  .acquisition *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
