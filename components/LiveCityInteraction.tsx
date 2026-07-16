@@ -11,13 +11,21 @@ import {
 } from "@/lib/cityPanelsPresentation";
 import { acceptanceScenarioFromLocation, withAcceptanceScenario } from "@/lib/acceptanceScenario";
 import { CityPanelGroup } from "./CityPanelGroup";
+import { CityLiveBroadcastGroup } from "./CityLiveBroadcastGroup";
+import {
+  playLiveCityBroadcastCue,
+  type LiveCityBroadcastEffects
+} from "@/lib/liveCityBroadcastAudio";
 import styles from "./LiveCityInteraction.module.css";
 
 const FLASH_DURATION_MS = 1_000;
 // Battle opens first; the factual deck starts one second later and gets time
 // to complete its calibration sweep before the copy begins typing.
 const PANEL_DEPLOY_DURATION_MS = 3_180;
+const BROADCAST_FLASH_DURATION_MS = 550;
+const BROADCAST_PANEL_DEPLOY_DURATION_MS = 2_450;
 const CARD_DURATION_MS = 30_000;
+const DEFAULT_BROADCAST_EFFECTS: LiveCityBroadcastEffects = { enabled: false, volume: "standard" };
 // City panels are the live interaction stage, not a small HUD widget. Keep a
 // narrow viewport gutter and let the layout resolver avoid the city core;
 // broad global insets previously crushed both panels at 720p/768p.
@@ -49,12 +57,16 @@ type ArchiveClaimResponse = {
 export function LiveCityInteraction({
   interaction,
   anchor,
+  presentationMode = "full",
+  broadcastEffects = DEFAULT_BROADCAST_EFFECTS,
   onAttentionChange,
   onBriefingReady,
   onComplete
 }: {
   interaction: CityInteractionRequest | null;
   anchor: CityAttentionAnchor | null;
+  presentationMode?: "full" | "broadcast";
+  broadcastEffects?: LiveCityBroadcastEffects;
   onAttentionChange: (attention: CityAttention | null) => void;
   onBriefingReady?: (request: CityInteractionRequest, briefing: CityBriefing) => void;
   onComplete: (id: string) => void;
@@ -112,6 +124,12 @@ export function LiveCityInteraction({
     let closeTimer: number | null = null;
     let attentionStartedAt = 0;
     let attention: Omit<CityAttention, "phase"> | null = null;
+    const flashDuration = presentationMode === "broadcast"
+      ? BROADCAST_FLASH_DURATION_MS
+      : FLASH_DURATION_MS;
+    const deployDuration = presentationMode === "broadcast"
+      ? BROADCAST_PANEL_DEPLOY_DURATION_MS
+      : PANEL_DEPLOY_DURATION_MS;
     const acceptanceScenario = acceptanceScenarioFromLocation();
     const cityBriefingUrl = withAcceptanceScenario(`/api/city-briefing?city=${encodeURIComponent(cityQuery)}`, acceptanceScenario);
 
@@ -152,9 +170,15 @@ export function LiveCityInteraction({
         startAttention({ id: request.id, city: briefing.city.name, longitude: briefing.city.longitude, latitude: briefing.city.latitude });
         const attentionBase = attention ?? { id: request.id, city: briefing.city.name, longitude: briefing.city.longitude, latitude: briefing.city.latitude };
         onBriefingReady?.(request, briefing);
+        if (
+          presentationMode === "broadcast" &&
+          !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        ) {
+          playLiveCityBroadcastCue("lock", broadcastEffects);
+        }
         setPresentation({ state: "flash", request, briefing });
         onAttentionChange({ ...attentionBase, phase: "flash" });
-        const decodeDelay = Math.max(160, FLASH_DURATION_MS - (Date.now() - attentionStartedAt));
+        const decodeDelay = Math.max(160, flashDuration - (Date.now() - attentionStartedAt));
         phaseTimer = window.setTimeout(() => {
           if (cancelled) return;
           setPresentation({ state: "deploy", request, briefing });
@@ -162,10 +186,10 @@ export function LiveCityInteraction({
         }, decodeDelay);
         deployTimer = window.setTimeout(() => {
           if (!cancelled) setPresentation({ state: "card", request, briefing });
-        }, decodeDelay + PANEL_DEPLOY_DURATION_MS);
+        }, decodeDelay + deployDuration);
         closeTimer = window.setTimeout(() => {
           if (!cancelled) onComplete(request.id);
-        }, FLASH_DURATION_MS + CARD_DURATION_MS);
+        }, flashDuration + CARD_DURATION_MS);
       })
       .catch((error) => {
         if (cancelled || controller.signal.aborted) return;
@@ -180,7 +204,7 @@ export function LiveCityInteraction({
       if (deployTimer !== null) window.clearTimeout(deployTimer);
       if (closeTimer !== null) window.clearTimeout(closeTimer);
     };
-  }, [cityQuery, interactionId, onAttentionChange, onBriefingReady, onComplete]);
+  }, [broadcastEffects, cityQuery, interactionId, onAttentionChange, onBriefingReady, onComplete, presentationMode]);
 
   const briefing = presentation.state === "flash" || presentation.state === "deploy" || presentation.state === "card"
     ? presentation.briefing
@@ -246,6 +270,18 @@ export function LiveCityInteraction({
   if (presentation.state === "flash") return <CityAcquisitionStatus city={presentation.briefing.city.name} detail="双相链路校准中" anchor={anchor} />;
 
   if (!panelsModel || !briefing) return null;
+  if (presentationMode === "broadcast") {
+    return (
+      <CityLiveBroadcastGroup
+        phase={presentation.state}
+        anchor={anchor ? { x: anchor.x, y: anchor.y } : null}
+        briefing={briefing}
+        model={panelsModel}
+        effects={broadcastEffects}
+        onClose={() => onComplete(presentation.request.id)}
+      />
+    );
+  }
   return (
     <CityPanelGroup
       phase={presentation.state}

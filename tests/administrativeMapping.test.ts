@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   canEnterCitySituation,
   createAdministrativeHierarchy,
+  displayAdministrativeLocationName,
   parseAdministrativeHierarchyCsv,
   resolveAdministrativeCityIdentity,
   resolveAdministrativeCityName,
@@ -61,6 +62,21 @@ test("a county-level city mention resolves through the authoritative location ro
   assert.equal(resolution.cityCode, "445200");
   assert.equal(resolution.countyCode, "445281");
   assert.equal(resolution.cityAttribution, "deterministic");
+  assert.deepEqual(
+    { province: resolution.provinceName, city: resolution.cityName, county: resolution.locationName },
+    { province: "广东省", city: "揭阳市", county: "普宁" }
+  );
+});
+
+test("county display labels restore the administrative suffix from the exact AD code", () => {
+  const hierarchy = createAdministrativeHierarchy([
+    { locationId: "101280501", locationName: "惠州", provinceName: "广东省", cityName: "惠州市", adCode: "441300" },
+    { locationId: "101280505", locationName: "惠阳", provinceName: "广东省", cityName: "惠州市", adCode: "441303" },
+    { locationId: "101281901", locationName: "揭阳", provinceName: "广东省", cityName: "揭阳市", adCode: "445200" },
+    { locationId: "101281903", locationName: "普宁", provinceName: "广东省", cityName: "揭阳市", adCode: "445281" }
+  ], { source: "fixture", fetchedAt: "2026-07-16T00:00:00.000Z" });
+  assert.equal(displayAdministrativeLocationName(resolveAdministrativeLocation("101280505", hierarchy)), "惠阳区");
+  assert.equal(displayAdministrativeLocationName(resolveAdministrativeLocation("101281903", hierarchy)), "普宁市");
 });
 
 test("an explicit city suffix distinguishes a county-level city from its same-base county", () => {

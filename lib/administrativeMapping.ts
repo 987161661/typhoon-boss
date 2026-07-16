@@ -19,6 +19,10 @@ export interface AdministrativeHierarchy {
 
 export interface AdministrativeResolution {
   locationId: string;
+  /** Exact authoritative labels for the resolved location hierarchy. */
+  provinceName: string | null;
+  cityName: string | null;
+  locationName: string | null;
   /** Official six-digit administrative-code namespace. */
   provinceCode: string | null;
   /** Official six-digit administrative-code namespace. */
@@ -27,7 +31,6 @@ export interface AdministrativeResolution {
   countyCode: string | null;
   /** Provider location id for the unique Adm2 root, when one exists. */
   cityLocationId: string | null;
-  cityName: string | null;
   cityAttribution: EventGeography["cityAttribution"];
   reason: string;
 }
@@ -110,11 +113,13 @@ export function resolveAdministrativeLocation(
 
   return {
     locationId,
+    provinceName: exact.provinceName,
+    cityName: exact.cityName,
+    locationName: exact.locationName,
     provinceCode,
     cityCode,
     countyCode: exact.adCode === cityCode ? null : exact.adCode,
     cityLocationId: cityLocationIds.length === 1 ? cityLocationIds[0] : exact.adCode === cityCode ? exact.locationId : null,
-    cityName: exact.cityName,
     cityAttribution: "deterministic",
     reason: "由权威列表精确行及唯一 Adm2 行政根映射"
   };
@@ -231,6 +236,22 @@ export function canEnterCitySituation(resolution: AdministrativeResolution) {
   return resolution.cityAttribution === "deterministic" && resolution.cityCode !== null;
 }
 
+/**
+ * The QWeather location list often omits the final county-level administrative
+ * suffix (for example, 惠阳 for 惠阳区). Restore only the suffix encoded by the
+ * official six-digit administrative-code convention; preserve labels that
+ * already carry one.
+ */
+export function displayAdministrativeLocationName(resolution: AdministrativeResolution) {
+  const name = resolution.locationName;
+  if (!name || !resolution.countyCode || /(?:区|县|市|旗|自治县|自治旗)$/.test(name)) return name;
+  const localCode = Number(resolution.countyCode.slice(-2));
+  if (!Number.isInteger(localCode)) return name;
+  if (localCode <= 20) return `${name}区`;
+  if (localCode >= 81) return `${name}市`;
+  return `${name}县`;
+}
+
 function administrativeGroupKey(row: AdministrativeHierarchyRow) {
   return `${row.provinceName}\u0000${row.cityName}`;
 }
@@ -283,11 +304,13 @@ function unique(values: readonly string[]) {
 function unresolved(locationId: string, reason: string, provinceCode: string | null = null): AdministrativeResolution {
   return {
     locationId,
+    provinceName: null,
+    cityName: null,
+    locationName: null,
     provinceCode,
     cityCode: null,
     countyCode: null,
     cityLocationId: null,
-    cityName: null,
     cityAttribution: "ambiguous",
     reason
   };

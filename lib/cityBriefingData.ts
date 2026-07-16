@@ -7,6 +7,7 @@ import { buildCitySituation, type CityObservedAnomaly, type CitySituation } from
 import { DailySnapshotCache, beijingDayKey, type SnapshotClock } from "@/lib/dailySnapshotCache";
 import { getAdministrativeHierarchy } from "@/lib/administrativeHierarchyService";
 import {
+  displayAdministrativeLocationName,
   resolveAdministrativeCityIdentity,
   resolveAdministrativeLocation,
   resolveAdministrativeLocationName
@@ -80,6 +81,8 @@ export interface CityBriefing {
     latitude: number;
     longitude: number;
     timezone: string;
+    /** Authoritative province-prefecture-county path when the exact location is resolved. */
+    administrativePath?: { province: string; city: string; county: string | null } | null;
     locationId?: string | null;
     cityCode?: string | null;
     cityAttribution?: "deterministic" | "ambiguous";
@@ -320,7 +323,14 @@ async function loadCityBriefingFacts(cityQuery: string): Promise<Omit<CityBriefi
     ...city,
     locationId: city.locationId ?? qWeather.locationId ?? administrative?.cityLocationId ?? null,
     cityCode: administrative?.cityCode ?? null,
-    cityAttribution: administrative?.cityAttribution === "deterministic" ? "deterministic" : "ambiguous"
+    cityAttribution: administrative?.cityAttribution === "deterministic" ? "deterministic" : "ambiguous",
+    administrativePath: administrative?.cityAttribution === "deterministic" && administrative.provinceName && administrative.cityName
+      ? {
+          province: administrative.provinceName,
+          city: administrative.cityName,
+          county: administrative.countyCode ? displayAdministrativeLocationName(administrative) : null
+        }
+      : null
   };
 
   const current = qWeather.current ?? openMeteo?.current ?? emptyCurrent();
@@ -615,7 +625,14 @@ async function resolveAdministrativeMentionLocation(
     latitude,
     longitude,
     timezone: location.tz?.trim() || "Asia/Shanghai",
-    locationId: resolution.locationId
+    locationId: resolution.locationId,
+    administrativePath: resolution.provinceName && resolution.cityName
+      ? {
+          province: resolution.provinceName,
+          city: resolution.cityName,
+          county: resolution.countyCode ? displayAdministrativeLocationName(resolution) : null
+        }
+      : null
   };
 }
 

@@ -14,6 +14,7 @@ import {
   type MutableRefObject,
   type PointerEvent as ReactPointerEvent
 } from "react";
+import { createPortal } from "react-dom";
 import maplibregl, { type ImageSource, type Map as MapLibreMap } from "maplibre-gl";
 import { AlertTriangle, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Database, Palette, RadioTower, Satellite, Settings2, Shield, Wind } from "lucide-react";
 import Link from "next/link";
@@ -35,6 +36,7 @@ import {
   type StableWindSeed,
 } from "@/lib/windParticleSeeding";
 import { computeWindFlowPolicy, trimWindTrailToPixelLength, type WindFlowPolicy } from "@/lib/windFlowPolicy";
+import { liveCityBroadcastMapOffset } from "@/lib/liveCityBroadcastLayout";
 import type { BossProfile } from "@/lib/bossEngine/types";
 import { useRadarSnapshot } from "./useRadarSnapshot";
 import type {
@@ -77,7 +79,12 @@ import nationalRailStyles from "./NationalSituationRail.module.css";
 import { useNationalSituation, type NationalSituationState } from "./useNationalSituation";
 import { HudPanel, StatusPill } from "./HudPrimitives";
 import { BossSkillSlotPanel, IntelPanel } from "./IntelPanel";
-import type { CityAttention, CityAttentionAnchor } from "@/lib/liveCityInteraction";
+import { LiveCityInteraction } from "./LiveCityInteraction";
+import { LiveCityTargetLock } from "./LiveCityTargetLock";
+import { RadarChatDock } from "./RadarChatDock";
+import { useLiveCityInteractionQueue } from "./useLiveCityInteractionQueue";
+import { buildCityReportEngagementReply, createLiveCityEventId, type CityAttention, type CityAttentionAnchor, type CityInteractionRequest } from "@/lib/liveCityInteraction";
+import type { CityBriefing } from "@/lib/cityBriefingData";
 import {
   buildLiveBroadcastModel,
   LiveAudiencePanel,
@@ -241,12 +248,14 @@ export function TyphoonMap({
   view = "standard",
   liveDeck = "briefing",
   cityAttention = null,
+  cityAttentionLayout = "center",
   onCityAttentionAnchor,
   onSceneReady
 }: {
   view?: RadarView;
   liveDeck?: LiveDeckView;
   cityAttention?: CityAttention | null;
+  cityAttentionLayout?: "center" | "broadcast-corridor";
   onCityAttentionAnchor?: (anchor: CityAttentionAnchor | null) => void;
   onSceneReady?: () => void;
 }) {
@@ -283,6 +292,9 @@ export function TyphoonMap({
   const [nationalRadarVisible, setNationalRadarVisible] = useState(false);
   const [impactArea, setImpactArea] = useState<ImpactAreaPayload | null>(null);
   const [watchRegions, setWatchRegions] = useState<ProvinceAlertPoint[]>([]);
+  const [mainCityAttention, setMainCityAttention] = useState<CityAttention | null>(null);
+  const [mainCityAttentionAnchor, setMainCityAttentionAnchor] = useState<CityAttentionAnchor | null>(null);
+  const [cityOverlayHost, setCityOverlayHost] = useState<HTMLElement | null>(null);
   useEffect(() => {
     if (view === "live" || typeof window === "undefined") return;
     const requestedTheme = new URLSearchParams(window.location.search).get("theme");
@@ -342,6 +354,45 @@ export function TyphoonMap({
   const storm = isLiveView && nationalMapState.mode === "national"
     ? storms[0] ?? null
     : selectedStormForMap(nationalMapState, storms);
+  const mainCityInteractions = useLiveCityInteractionQueue({
+    highestOfficialWarningLevel: null,
+    focusedStormId: storm?.id ?? null
+  });
+  const activeCityAttention = cityAttention ?? mainCityAttention;
+  useEffect(() => {
+    if (!isLiveView) setCityOverlayHost(document.body);
+  }, [isLiveView]);
+  const dispatchMainHostChat = useCallback((id: string, text: string, directReply?: string) => {
+    void fetch("/api/digital-host/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ requestId: id, text, directReply, viewerId: "radar-operator", viewerName: "雷达操作台" })
+    }).catch(() => undefined);
+  }, []);
+  const submitMainChat = useCallback((text: string) => {
+    const id = createLiveCityEventId("main-radar-chat");
+    const handledAsCity = mainCityInteractions.submitComment({
+      type: "aituber:live-comment",
+      version: 1,
+      id,
+      text,
+      viewerId: "radar-operator",
+      viewerName: "雷达操作台",
+      platform: "radar-chat",
+      receivedAt: Date.now()
+    });
+    if (handledAsCity) return "city";
+    dispatchMainHostChat(id, text);
+    return "host";
+  }, [dispatchMainHostChat, mainCityInteractions]);
+  const handleMainCityBriefingReady = useCallback((request: CityInteractionRequest, briefing: CityBriefing) => {
+    const directReply = buildCityReportEngagementReply(request, briefing.city.name);
+    if (directReply) dispatchMainHostChat(`city-engagement:${request.id}`, directReply, directReply);
+  }, [dispatchMainHostChat]);
+  const publishCityAttentionAnchor = useCallback((anchor: CityAttentionAnchor | null) => {
+    if (!isLiveView) setMainCityAttentionAnchor(anchor);
+    onCityAttentionAnchor?.(anchor);
+  }, [isLiveView, onCityAttentionAnchor]);
   // Live decks are storm-specific.  When the upstream feed has no active
   // storm, the broadcast becomes a map-first environmental monitoring view.
   const showLiveStandbyEnvironment = isLiveView && !storm;
@@ -760,12 +811,12 @@ export function TyphoonMap({
   }, [isLiveView, mapReady]);
 
   useEffect(() => {
-    cityAttentionRef.current = cityAttention;
+    cityAttentionRef.current = activeCityAttention;
     const map = mapRef.current;
     if (!map || !mapReady) return;
 
-    if (!cityAttention) {
-      onCityAttentionAnchor?.(null);
+    if (!activeCityAttention) {
+      publishCityAttentionAnchor(null);
       cityAttentionMarkerRef.current?.remove();
       cityAttentionMarkerRef.current = null;
       cityAttentionElementRef.current = null;
@@ -776,11 +827,11 @@ export function TyphoonMap({
     }
 
     const syncAttentionAnchor = () => {
-      const point = map.project([cityAttention.longitude, cityAttention.latitude]);
+      const point = map.project([activeCityAttention.longitude, activeCityAttention.latitude]);
       const rect = map.getCanvas().getBoundingClientRect();
       const x = rect.left + point.x;
       const y = rect.top + point.y;
-      onCityAttentionAnchor?.({
+      publishCityAttentionAnchor({
         x,
         y,
         horizontal: x > window.innerWidth * 0.58 ? "left" : "right",
@@ -790,8 +841,8 @@ export function TyphoonMap({
     map.on("move", syncAttentionAnchor);
     map.on("resize", syncAttentionAnchor);
 
-    const isNewTarget = cityAttentionMarkerRef.current?.getLngLat().lng !== cityAttention.longitude ||
-      cityAttentionMarkerRef.current?.getLngLat().lat !== cityAttention.latitude;
+    const isNewTarget = cityAttentionMarkerRef.current?.getLngLat().lng !== activeCityAttention.longitude ||
+      cityAttentionMarkerRef.current?.getLngLat().lat !== activeCityAttention.latitude;
     if (isNewTarget) {
       if (!cityCameraSnapshotRef.current) {
         const center = map.getCenter();
@@ -809,11 +860,20 @@ export function TyphoonMap({
       cityAttentionElementRef.current = element;
       cityAttentionMarkerRef.current?.remove();
       cityAttentionMarkerRef.current = new maplibregl.Marker({ element, anchor: "center" })
-        .setLngLat([cityAttention.longitude, cityAttention.latitude])
+        .setLngLat([activeCityAttention.longitude, activeCityAttention.latitude])
         .addTo(map);
       map.stop();
+      const canvas = map.getCanvas();
+      const canvasRect = canvas.getBoundingClientRect();
+      const attentionOffset = cityAttentionLayout === "broadcast-corridor"
+        ? liveCityBroadcastMapOffset(
+          { width: window.innerWidth, height: window.innerHeight },
+          { x: canvasRect.left, y: canvasRect.top, width: canvasRect.width, height: canvasRect.height }
+        )
+        : [0, 0] as [number, number];
       map.easeTo({
-        center: [cityAttention.longitude, cityAttention.latitude],
+        center: [activeCityAttention.longitude, activeCityAttention.latitude],
+        offset: attentionOffset,
         zoom: Math.max(map.getZoom(), 5.6),
         duration: 720,
         essential: true
@@ -821,15 +881,15 @@ export function TyphoonMap({
     }
     const element = cityAttentionElementRef.current;
     if (element) {
-      element.dataset.phase = cityAttention.phase;
-      element.dataset.city = cityAttention.city;
+      element.dataset.phase = activeCityAttention.phase;
+      element.dataset.city = activeCityAttention.city;
     }
     syncAttentionAnchor();
     return () => {
       map.off("move", syncAttentionAnchor);
       map.off("resize", syncAttentionAnchor);
     };
-  }, [cityAttention, mapReady, onCityAttentionAnchor]);
+  }, [activeCityAttention, cityAttentionLayout, mapReady, publishCityAttentionAnchor]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1144,9 +1204,23 @@ export function TyphoonMap({
         {!isLiveView && theme === "archive-command" ? <MapLegendPanel /> : null}
         {!isLiveView && theme === "archive-command" ? <DossierStormIndex storms={storms} activeIndex={activeIndex} onSelect={selectStorm} /> : null}
         {!isLiveView && theme === "archive-command" ? <ImpactLegend /> : null}
-        {!isLiveView && theme === "night-radar" ? <BottomAlertBar storm={storm} bossProfile={bossProfile} alerts={provinceAlerts} dataError={dataError} sourceLabel={sourceLabel} lastTrackedStorm={snapshot?.lastTrackedStorm ?? null} /> : null}
+        {!isLiveView && theme === "night-radar" ? <BottomAlertBar storm={storm} bossProfile={bossProfile} dataError={dataError} sourceLabel={sourceLabel} lastTrackedStorm={snapshot?.lastTrackedStorm ?? null} onSendChat={submitMainChat} /> : null}
         {!isLiveView ? <DefenseDrawer defense={selectedDefense} onClose={() => setSelectedDefense(null)} /> : null}
       </section>
+
+      {!isLiveView && cityOverlayHost ? createPortal(
+        <div className="live-city-overlay">
+          <LiveCityInteraction
+            interaction={mainCityInteractions.active}
+            anchor={mainCityAttentionAnchor}
+            onAttentionChange={setMainCityAttention}
+            onBriefingReady={handleMainCityBriefingReady}
+            onComplete={mainCityInteractions.completeActive}
+          />
+          <LiveCityTargetLock attention={mainCityAttention} anchor={mainCityAttentionAnchor} />
+        </div>,
+        cityOverlayHost
+      ) : null}
 
       {isLiveView ? (
         <div
@@ -2577,20 +2651,31 @@ function LegendLine({ color, label, detail }: { color: string; label: string; de
 function BottomAlertBar({
   storm,
   bossProfile,
-  alerts,
   dataError,
   sourceLabel,
-  lastTrackedStorm
+  lastTrackedStorm,
+  onSendChat
 }: {
   storm: Storm | null;
   bossProfile?: BossProfile | null;
-  alerts: ReturnType<typeof buildProvinceAlerts>;
   dataError: string | null;
   sourceLabel: string;
   lastTrackedStorm: { nameZh: string; nameEn: string; lastObservedAt: string; status: "active" | "exited-live-track" } | null;
+  onSendChat: (text: string) => "city" | "host";
 }) {
   const events = bossProfile?.events.slice(0, 3) ?? [];
   const isClosure = !storm && lastTrackedStorm?.status === "exited-live-track";
+  const fallbackEvents = storm
+    ? [
+        { title: "实时目标", detail: `${storm.nameZh} · ${storm.stage}`, note: `更新 ${formatClock(storm.updatedAt)}` },
+        { title: "核心强度", detail: `${storm.maxWind || "暂无"} m/s · ${storm.minPressure || "暂无"} hPa`, note: `威胁评级：${storm.rating}` },
+        { title: "路径动态", detail: `${storm.moveDirection} ${storm.moveSpeed || "暂无"} km/h`, note: `坐标 ${storm.position.lat.toFixed(1)}°N / ${storm.position.lon.toFixed(1)}°E` }
+      ]
+    : [
+        { title: "目标扫描", detail: "当前未发现活动台风", note: "雷达保持待机监听" },
+        { title: "路径链路", detail: sourceLabel, note: "等待上游发布新目标" },
+        { title: "战况状态", detail: "无进行中的 BOSS 战", note: "不展示省份防务数据" }
+      ];
   const message = dataError
     ? "数据链路异常，请以官方预警为准。雷达将在下一轮刷新时重试。"
     : isClosure
@@ -2607,7 +2692,7 @@ function BottomAlertBar({
         {isClosure ? <RadioTower size={40} /> : <Shield size={40} />}
         <div>
           <b>{isClosure ? "本轮台风收束" : "BOSS 战况追踪"}</b>
-          <span>{isClosure ? "最后实况归档 / 实时监听" : "战斗履历 / 省份防线"}</span>
+          <span>{isClosure ? "最后实况归档 / 实时监听" : "战斗履历 / 实时目标态势"}</span>
         </div>
       </div>
       <div className="boss-event-strip">
@@ -2631,11 +2716,11 @@ function BottomAlertBar({
                 <small><ScrollWhenOverflow>{item.note}</ScrollWhenOverflow></small>
               </div>
             ))
-            : alerts.slice(0, 3).map((item) => (
-              <div className={`boss-event-card level-${item.level}`} key={item.name}>
-                <b>{item.name}</b>
-                <p>{item.label}</p>
-                <small>省份防线 / 巡航态势</small>
+            : fallbackEvents.map((item) => (
+              <div className="boss-event-card evidence-visualHint" key={item.title}>
+                <b>{item.title}</b>
+                <p><ScrollWhenOverflow>{item.detail}</ScrollWhenOverflow></p>
+                <small><ScrollWhenOverflow>{item.note}</ScrollWhenOverflow></small>
               </div>
             ))}
       </div>
@@ -2652,6 +2737,7 @@ function BottomAlertBar({
           历史图鉴
         </Link>
       </div>
+      <RadarChatDock className="main-chat-dock" onSendChat={onSendChat} />
     </footer>
   );
 }

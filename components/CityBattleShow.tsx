@@ -25,12 +25,11 @@ import type { BattleArchive, CityPanelsModel } from "@/lib/cityPanelsPresentatio
 import type { LayoutRect } from "@/lib/cityPanelLayout";
 import {
   buildCityBattleShowModel,
-  revealDelayFor,
-  splitRevealText,
   type CityBattleShowPhase,
   type CityBattleTelemetryDeck,
   type CityBattleTelemetryMetric
 } from "@/lib/cityBattleShowModel";
+import { CityTypewriterText } from "./CityTypewriterText";
 import styles from "./CityBattleShow.module.css";
 
 export interface CityBattleShowProps {
@@ -178,38 +177,23 @@ export function TypewriterText({
   reducedMotion: boolean;
   role: "battle-summary" | "archive-fragment";
 }) {
-  const [visible, setVisible] = useState(reducedMotion ? text : "");
   const audioContext = useRef<AudioContext | null>(null);
-
-  useEffect(() => {
-    if (reducedMotion) {
-      setVisible(text);
-      return;
-    }
-    if (!active) {
-      setVisible("");
-      return;
-    }
-    const units = splitRevealText(text);
-    let position = 0;
-    let timer: number | null = null;
-    setVisible("");
-    const typeNext = () => {
-      position += 1;
-      const character = units[position - 1] ?? "";
-      setVisible(units.slice(0, position).join(""));
-      if (sound) playTypewriterTick(audioContext);
-      if (position < units.length) timer = window.setTimeout(typeNext, revealDelayFor(character, speed));
-    };
-    timer = window.setTimeout(typeNext, 220);
-    return () => { if (timer !== null) window.clearTimeout(timer); };
-  }, [active, reducedMotion, sound, speed, text]);
 
   useEffect(() => () => {
     if (audioContext.current) void audioContext.current.close().catch(() => undefined);
   }, []);
 
-  return <p className={styles.typewriter} data-role={role}>{visible}<i aria-hidden="true" /></p>;
+  return <CityTypewriterText
+    text={text}
+    active={active}
+    speed={speed}
+    reducedMotion={reducedMotion}
+    role={role}
+    className={styles.typewriter}
+    onCharacter={() => {
+      if (sound) playTypewriterTick(audioContext);
+    }}
+  />;
 }
 
 export function TelemetryDeck({ deck }: { deck: CityBattleTelemetryDeck }) {

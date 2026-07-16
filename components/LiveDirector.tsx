@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { TyphoonMap } from "./TyphoonMap";
 import { DigitalHostWindow, type HostChatRequest } from "./DigitalHostWindow";
@@ -24,6 +24,7 @@ import {
   normalizeLiveControlSettings,
   type LiveControlSettings
 } from "@/lib/liveControlSettings";
+import { primeLiveCityBroadcastAudio } from "@/lib/liveCityBroadcastAudio";
 
 type DirectorScene = "briefing" | "analysis";
 
@@ -46,6 +47,10 @@ export function LiveDirector() {
   const transitionTimerRef = useRef<number | null>(null);
   const cityEngagementIdsRef = useRef(new Set<string>());
   const ready = loaded.briefing || loaded.analysis;
+  const broadcastEffects = useMemo(() => ({
+    enabled: controlSettings.cityReportEffectsEnabled,
+    volume: controlSettings.cityReportEffectsVolume
+  }), [controlSettings.cityReportEffectsEnabled, controlSettings.cityReportEffectsVolume]);
   const nationalSituation = useNationalSituation();
   const cityInteractions = useLiveCityInteractionQueue({
     highestOfficialWarningLevel: nationalSituation.snapshot?.warnings.highestLevel ?? null,
@@ -55,6 +60,16 @@ export function LiveDirector() {
 
   useEffect(() => {
     setCityOverlayHost(document.body);
+  }, []);
+
+  useEffect(() => {
+    const prime = () => primeLiveCityBroadcastAudio();
+    window.addEventListener("pointerdown", prime, { once: true });
+    window.addEventListener("keydown", prime, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", prime);
+      window.removeEventListener("keydown", prime);
+    };
   }, []);
 
   const handleLiveEvent = useCallback((event: HostLiveEvent) => {
@@ -234,6 +249,7 @@ export function LiveDirector() {
       data-active-scene={activeScene}
       data-ready={ready ? "true" : "false"}
       data-switching={switching ? "true" : "false"}
+      data-city-broadcast-active={cityAttention ? "true" : "false"}
       data-camera-intent={cityInteractions.lensIntent.kind}
       data-camera-storm-id={cityInteractions.lensIntent.kind === "typhoon" ? cityInteractions.lensIntent.stormId : undefined}
     >
@@ -245,6 +261,7 @@ export function LiveDirector() {
           view="live"
           liveDeck={activeScene}
           cityAttention={cityAttention}
+          cityAttentionLayout="broadcast-corridor"
           onCityAttentionAnchor={setCityAttentionAnchor}
           onSceneReady={() => markLoaded(activeScene)}
         />
@@ -263,6 +280,8 @@ export function LiveDirector() {
           <LiveCityInteraction
             interaction={cityInteractions.active}
             anchor={cityAttentionAnchor}
+            presentationMode="broadcast"
+            broadcastEffects={broadcastEffects}
             onAttentionChange={handleCityAttentionChange}
             onBriefingReady={handleCityBriefingReady}
             onComplete={cityInteractions.completeActive}

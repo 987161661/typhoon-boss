@@ -12,11 +12,12 @@ import {
   PanelLeftOpen,
   RadioTower,
   Save,
-  Send,
   Settings2,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Volume2
 } from "lucide-react";
 import type { LiveControlSettings } from "@/lib/liveControlSettings";
+import { RadarChatDock } from "./RadarChatDock";
 
 const DEFAULT_HOST_URL = "http://127.0.0.1:5173";
 
@@ -37,9 +38,6 @@ export function LiveOperatorControls({
   settingsStatus: SettingsStatus;
   onSaveSettings: (patch: Partial<LiveControlSettings>) => Promise<void>;
 }) {
-  const [message, setMessage] = useState("");
-  const [lastSent, setLastSent] = useState("");
-  const [lastDispatch, setLastDispatch] = useState<"city" | "host" | null>(null);
   const [drawerPinned, setDrawerPinned] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [draft, setDraft] = useState(settings);
@@ -48,15 +46,6 @@ export function LiveOperatorControls({
 
   useEffect(() => setDraft(settings), [settings]);
 
-  const submit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const text = message.trim();
-    if (!text) return;
-    setLastDispatch(onSendChat(text));
-    setLastSent(text);
-    setMessage("");
-  };
-
   const saveSettings = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     await onSaveSettings({
@@ -64,7 +53,9 @@ export function LiveOperatorControls({
       briefingDurationSeconds: draft.briefingDurationSeconds,
       analysisDurationSeconds: draft.analysisDurationSeconds,
       evolutionAgentEnabled: draft.evolutionAgentEnabled,
-      evolutionAgentIntervalMinutes: draft.evolutionAgentIntervalMinutes
+      evolutionAgentIntervalMinutes: draft.evolutionAgentIntervalMinutes,
+      cityReportEffectsEnabled: draft.cityReportEffectsEnabled,
+      cityReportEffectsVolume: draft.cityReportEffectsVolume
     });
   };
 
@@ -198,6 +189,45 @@ export function LiveOperatorControls({
             </fieldset>
 
             <fieldset>
+              <legend>城市战况演播</legend>
+              <label className="live-setting-switch">
+                <span>
+                  <b>战况演出音效</b>
+                  <small>锁定、机械入场、排名盖章和逐字反馈</small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={draft.cityReportEffectsEnabled}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      cityReportEffectsEnabled: event.target.checked
+                    }))
+                  }
+                />
+                <i aria-hidden="true" />
+              </label>
+              <label className="live-setting-frequency">
+                <span><Volume2 aria-hidden="true" /> 战况音量</span>
+                <select
+                  value={draft.cityReportEffectsVolume}
+                  disabled={!draft.cityReportEffectsEnabled}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      cityReportEffectsVolume: event.target.value as LiveControlSettings["cityReportEffectsVolume"]
+                    }))
+                  }
+                >
+                  <option value="low">低</option>
+                  <option value="standard">标准</option>
+                  <option value="high">高</option>
+                </select>
+                <small>只影响直播战况演出，不影响数字人语音</small>
+              </label>
+            </fieldset>
+
+            <fieldset>
               <legend>实时文档整理智能体</legend>
               <label className="live-setting-switch">
                 <span>
@@ -263,32 +293,7 @@ export function LiveOperatorControls({
         </aside>
       ) : null}
 
-      <form className="live-chat-dock" onSubmit={submit} aria-label="与凌岚聊天">
-        <div className="live-chat-ident">
-          <span>DIRECT LINK</span>
-          <strong>和凌岚说话</strong>
-        </div>
-        <label htmlFor="live-linglan-chat">输入消息；@城市触发城市战况卡</label>
-        <input
-          id="live-linglan-chat"
-          value={message}
-          onChange={(event) => setMessage(event.target.value)}
-          maxLength={500}
-          autoComplete="off"
-          placeholder="输入问题，或 @杭州 查看城市战况"
-        />
-        <button type="submit" disabled={!message.trim()}>
-          <Send aria-hidden="true" />
-          发送
-        </button>
-        <span className="live-chat-status" role="status">
-          {lastSent
-            ? lastDispatch === "city"
-              ? "已触发城市战况卡"
-              : "已送入凌岚对话队列"
-            : "输入 @城市触发战况卡"}
-        </span>
-      </form>
+      <RadarChatDock onSendChat={onSendChat} />
     </>
   );
 }

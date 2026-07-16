@@ -102,6 +102,18 @@ test("available warning feed with no record is none-reported without claiming sa
   assert.equal(model.info.trendMetrics.length, 4);
 });
 
+test("a county target displays its authoritative prefecture path instead of collapsing to province and county", () => {
+  const model = build(sample({
+    city: {
+      ...sample().city,
+      name: "惠阳",
+      province: "广东省",
+      administrativePath: { province: "广东省", city: "惠州市", county: "惠阳区" }
+    }
+  }));
+  assert.equal(model.shared.cityLabel, "广东省 · 惠州市 · 惠阳区");
+});
+
 test("missing or failed warning source is unavailable rather than no-warning", () => {
   const model = build(sample({
     sources: [{

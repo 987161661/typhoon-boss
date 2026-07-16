@@ -226,7 +226,10 @@ function warningPriority(level: string | null) {
 }
 
 function buildCityLabel(briefing: CityBriefing) {
-  const { name, province, country } = briefing.city;
+  const { name, province, country, administrativePath } = briefing.city;
+  if (administrativePath) {
+    return [...new Set([administrativePath.province, administrativePath.city, administrativePath.county].filter(Boolean))].join(" · ");
+  }
   if (province && province !== name) return `${province} · ${name}`;
   if (province || name) return province || name;
   return country || "未知城市";

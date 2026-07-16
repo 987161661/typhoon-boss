@@ -10162,6 +10162,21 @@ a:focus-visible {
   height: 16px;
 }
 
+/* A live city report owns both side stages. Keep the map and its city lock
+   fully legible while the normal operator chrome quietly clears the towers. */
+.live-director[data-city-broadcast-active="true"] .digital-host-window,
+.live-director[data-city-broadcast-active="true"] .live-command-drawer,
+.live-director[data-city-broadcast-active="true"] .live-chat-dock,
+.live-director[data-city-broadcast-active="true"] .live-route-legend,
+.live-director[data-city-broadcast-active="true"] .live-forecast-overlay {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    opacity 160ms ease,
+    visibility 0ms step-end 160ms;
+}
+
 .live-command-sensor span {
   color: rgba(236, 251, 255, 0.72);
   font: 800 9px/1 "Bahnschrift", sans-serif;
@@ -10409,6 +10424,19 @@ a:focus-visible {
 .live-chat-dock > button svg {
   width: 16px;
   height: 16px;
+}
+
+.main-chat-dock {
+  position: absolute;
+  z-index: 2;
+  right: 12px;
+  bottom: calc(100% + 8px);
+  width: min(440px, calc(100vw - 28px));
+}
+
+.main-chat-dock .live-chat-ident,
+.main-chat-dock .live-chat-status {
+  display: none;
 }
 
 .live-chat-status {

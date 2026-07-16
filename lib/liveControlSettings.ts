@@ -5,8 +5,12 @@ export type LiveControlSettings = {
   analysisDurationSeconds: number;
   evolutionAgentEnabled: boolean;
   evolutionAgentIntervalMinutes: number;
+  cityReportEffectsEnabled: boolean;
+  cityReportEffectsVolume: LiveCityReportEffectsVolume;
   updatedAt?: string;
 };
+
+export type LiveCityReportEffectsVolume = "low" | "standard" | "high";
 
 export const DEFAULT_LIVE_CONTROL_SETTINGS: LiveControlSettings = {
   version: 1,
@@ -16,7 +20,9 @@ export const DEFAULT_LIVE_CONTROL_SETTINGS: LiveControlSettings = {
   // Generating an evolution report can write runtime state and invoke the
   // configured document model. It must be explicitly enabled by an operator.
   evolutionAgentEnabled: false,
-  evolutionAgentIntervalMinutes: 30
+  evolutionAgentIntervalMinutes: 30,
+  cityReportEffectsEnabled: true,
+  cityReportEffectsVolume: "standard"
 };
 
 function boundedNumber(value: unknown, fallback: number, minimum: number, maximum: number) {
@@ -58,6 +64,17 @@ export function normalizeLiveControlSettings(
       5,
       360
     ),
+    cityReportEffectsEnabled:
+      typeof value?.cityReportEffectsEnabled === "boolean"
+        ? value.cityReportEffectsEnabled
+        : current.cityReportEffectsEnabled,
+    cityReportEffectsVolume: isEffectsVolume(value?.cityReportEffectsVolume)
+      ? value.cityReportEffectsVolume
+      : current.cityReportEffectsVolume,
     updatedAt: typeof value?.updatedAt === "string" ? value.updatedAt : current.updatedAt
   };
+}
+
+function isEffectsVolume(value: unknown): value is LiveCityReportEffectsVolume {
+  return value === "low" || value === "standard" || value === "high";
 }
