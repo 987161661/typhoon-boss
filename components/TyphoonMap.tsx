@@ -1159,6 +1159,38 @@ export function TyphoonMap({
             className={showLiveStandbyEnvironment ? nationalRailStyles.standardHud : nationalRailStyles.compactHud}
             liveStandby={showLiveStandbyEnvironment}
           />
+          {showLiveStandbyEnvironment ? (
+            <div className={nationalRailStyles.environmentInRail}>
+              <EnvironmentLayerPanel
+                layers={environmentLayers}
+                satellite={satelliteLayer}
+                windField={activeWindField}
+                detailWindField={compatibleCoreWindField}
+                impactArea={impactArea}
+                officialWindRadiusFeatureCount={officialWindRadiusFeatureCount}
+                gfsScalarLayer={gfsScalarLayer}
+                gfsScalarPayload={viewportGfsLayer}
+                cwaRadar={cwaRadarLayer}
+                cwaRadarVisible={cwaRadarVisible}
+                gfsWave={viewportGfsWave}
+                gfsWaveVisible={gfsWaveVisible}
+                marineLayer={viewportMarineLayer}
+                ecmwfTracks={ecmwfTrackLayer}
+                ecmwfTracksVisible={ecmwfTracksVisible}
+                ecmwfMemberCount={matchedEcmwfTracks.ensemble?.members.length ?? 0}
+                observations={regionalObservations}
+                observationsVisible={observationsVisible}
+                windRenderMode={windRenderMode}
+                onToggle={toggleEnvironmentLayer}
+                onGfsScalarLayerChange={setGfsScalarLayer}
+                onCwaRadarToggle={() => setCwaRadarVisible((current) => !current)}
+                onGfsWaveToggle={() => setGfsWaveVisible((current) => !current)}
+                onEcmwfTracksToggle={() => setEcmwfTracksVisible((current) => !current)}
+                onObservationsToggle={() => setObservationsVisible((current) => !current)}
+                onWindRenderModeChange={setWindRenderMode}
+              />
+            </div>
+          ) : null}
           {!showLiveStandbyEnvironment && liveDeck === "briefing" ? (
             <LiveAudiencePanel
               model={liveModel}

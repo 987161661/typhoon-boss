@@ -54,6 +54,10 @@ function hash(content: string | Buffer) {
   return createHash("sha256").update(content).digest("hex");
 }
 
+function canonicalSvg(content: string) {
+  return content.replace(/\r\n?/g, "\n");
+}
+
 test("Weather Boss manifest freezes generated vector and bitmap outputs", () => {
   assert.equal(manifest.status, "partially-generated");
   assert.equal(manifest.generatedAssetsPresent, true);
@@ -99,7 +103,7 @@ test("every generated SVG matches dimensions, viewBox, text policy, and sha256",
     assert.equal(content.replace(/<[^>]+>/g, "").trim(), "");
     assert.match(content, /fill="none"/);
     assert.match(content, /aria-hidden="true"/);
-    assert.equal(hash(content), asset.sha256);
+    assert.equal(hash(canonicalSvg(content)), asset.sha256);
   }
 });
 

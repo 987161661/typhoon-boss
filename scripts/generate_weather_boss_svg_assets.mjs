@@ -431,7 +431,14 @@ function createSpecs(manifest) {
     if (!entry) throw new Error(`No renderer registered for SVG manifest asset: ${asset.id}`);
     const content = entry.render.length >= 2 ? entry.render(asset, colors) : entry.render(asset);
     return { asset, content, composition: entry.composition, derivedFrom: null };
-  });
+  }).map((spec) => ({ ...spec, content: canonicalSvgLineEndings(spec.content) }));
+}
+
+// SVG bytes are part of the reproducibility contract. Template literals inherit
+// the source file's checkout line endings, so normalize before hashing/writing
+// to keep Windows worktrees and Linux CI byte-identical.
+function canonicalSvgLineEndings(content) {
+  return content.replace(/\r\n?/g, "\n");
 }
 
 function sha256(content) {
@@ -457,7 +464,7 @@ async function checkOutputs(manifest, specs) {
     const outputPath = resolve(ASSET_DIR, spec.asset.filename);
     let actual;
     try {
-      actual = await readFile(outputPath, "utf8");
+      actual = canonicalSvgLineEndings(await readFile(outputPath, "utf8"));
     } catch {
       failures.push(`${spec.asset.filename}: generated file is missing`);
       continue;
