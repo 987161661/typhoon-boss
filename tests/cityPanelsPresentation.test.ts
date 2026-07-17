@@ -44,7 +44,8 @@ function sample(overrides: Partial<CityBriefing> = {}): CityBriefing {
       precipitationMm: 0,
       windSpeedMps: 2,
       windGustMps: null,
-      weatherCode: 1
+      weatherCode: 100,
+      weatherText: "晴"
     },
     nextSixHours: {
       sourceId: "qweather-hourly",
@@ -97,9 +98,11 @@ test("available warning feed with no record is none-reported without claiming sa
   assert.match(model.info.warning.title, /未报告有效官方预警/);
   assert.doesNotMatch(`${model.battle.summary}${model.info.warning.description}`, /安全|无风险/);
   assert.equal(model.battle.title, "短时休战");
-  assert.equal(model.info.currentMetrics.length, 6);
+  assert.equal(model.info.currentMetrics.length, 7);
   assert.equal(model.info.nowcastMetrics.length, 2);
   assert.equal(model.info.trendMetrics.length, 4);
+  assert.equal(model.info.currentMetrics.find((metric) => metric.id === "weather-condition")?.value, "晴");
+  assert.equal(model.info.nowcastMetrics.find((metric) => metric.id === "rain-next-2h")?.evidence, "model");
 });
 
 test("a county target displays its authoritative prefecture path instead of collapsing to province and county", () => {
@@ -187,7 +190,28 @@ test("metric formatting preserves a real zero and labels null as unavailable", (
   const precipitation = model.info.currentMetrics.find((metric) => metric.id === "precipitation-now");
   const gust = model.info.currentMetrics.find((metric) => metric.id === "wind-gust");
   assert.deepEqual({ value: precipitation?.value, unit: precipitation?.unit }, { value: "0", unit: "mm" });
+  assert.equal(precipitation?.label, "代表点降水量");
   assert.deepEqual({ value: gust?.value, unit: gust?.unit }, { value: "暂无资料", unit: undefined });
+});
+
+test("a nonzero precipitation amount cannot override an explicit sunny representative point", () => {
+  const model = build(sample({
+    current: { ...sample().current, weatherText: "晴", weatherCode: 100, precipitationMm: 10 },
+    risks: [{ kind: "rain", level: "moderate", label: "降雨", summary: "未来可能降雨", evidenceLevel: "model", sourceIds: ["qweather-minutely"] }],
+    narrative: { ...sample().narrative, primaryKind: "rain", template: "rain" }
+  }));
+  assert.equal(model.battle.title, "雨云候场");
+  assert.doesNotMatch(model.battle.summary, /雨幕正在|代表点有雨/);
+});
+
+test("model-only convection stays a forecast signal instead of claiming a current takeover", () => {
+  const model = build(sample({
+    risks: [{ kind: "convection", level: "high", label: "对流条件", summary: "模式提示偏高", evidenceLevel: "model", sourceIds: ["open-meteo"] }],
+    narrative: { ...sample().narrative, primaryKind: "convection", template: "convection" }
+  }));
+  assert.equal(model.battle.title, "雷云候场");
+  assert.match(model.battle.summary, /环境预报信号/);
+  assert.match(model.battle.summary, /不代表当前雷雨已经发生/);
 });
 
 test("playful copy is deterministic and battle lists remain capped", () => {

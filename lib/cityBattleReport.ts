@@ -1,4 +1,5 @@
 import type { CityBriefing, CityBriefingNarrative } from "@/lib/cityBriefingData";
+import { currentWeatherText, isCurrentPrecipitation } from "@/lib/cityWeatherSemantics";
 
 type Briefing = Omit<CityBriefing, "narrative">;
 type Stage = CityBriefingNarrative["stage"];
@@ -14,9 +15,14 @@ export function buildCityBattleReport(briefing: Briefing, stage: Stage, variant 
   const apparent = briefing.current.apparentTemperatureC ?? briefing.current.temperatureC ?? 0;
   const rainSoon = (briefing.minutelyRain.precipitationNextTwoHoursMm ?? 0) >= 1;
   const rainLater = (briefing.nextSixHours.precipitationMm ?? 0) >= 3 || (briefing.nextSixHours.maxPrecipitationProbabilityPct ?? 0) >= 55;
-  const wetNow = (briefing.current.precipitationMm ?? 0) >= 0.5;
+  const wetNow = isCurrentPrecipitation(briefing.current);
   const windy = (briefing.nextSixHours.maxWindGustMps ?? 0) >= 9;
-  if (wetNow) return compose("雨幕进行中", key, rainOpen, rainTurn, rainClose);
+  if (wetNow) {
+    const condition = currentWeatherText(briefing.current) ?? "有降水";
+    const amount = briefing.current.precipitationMm;
+    const amountText = amount === null ? "" : `，降水量读数 ${formatNumber(amount)} mm`;
+    return `【代表点${condition}】${city}城市代表点在 ${briefing.current.observedAt ?? "最近更新时间"} 记录为${condition}${amountText}；这是代表点近实时资料，不代表全城同步降雨。`;
+  }
   if (apparent >= 33 && (rainSoon || rainLater)) return compose("闷热待雨", key, hotOpen, rainWaitTurn, rainWaitClose);
   if (apparent >= 33) return compose("高温值守", key, hotOpen, hotTurn, hotClose);
   if (rainSoon || rainLater) return compose("雨云候场", key, rainWaitOpen, rainWaitTurn, rainWaitClose);
@@ -29,6 +35,7 @@ function compose(label: string, key: string, open: readonly string[], turn: read
 }
 function pick(items: readonly string[], key: string) { return items[hash(key) % items.length]; }
 function hash(value: string) { let result = 2166136261; for (let i = 0; i < value.length; i += 1) { result ^= value.charCodeAt(i); result = Math.imul(result, 16777619); } return result >>> 0; }
+function formatNumber(value: number) { return Number.isInteger(value) ? String(value) : value.toFixed(1).replace(/\.0$/, ""); }
 
 const hotOpen = ["空气像刚合上的锅盖，城市被闷得很有参与感。", "太阳今天不打卡，它直接坐镇现场。", "热感把街道调成了低速模式，连影子都懒得离岗。"] as const;
 const hotTurn = ["空调获得加班许可，午后出门请给自己预留一条阴影路线。", "今天适合把补水当作日程，不适合把正午当作散步邀请。", "外出可以，别把自己当成可重复加热的便当。"] as const;
@@ -36,9 +43,6 @@ const hotClose = ["城市在发烫，节奏可以慢一点。", "防晒和水，
 const rainWaitOpen = ["云层今天在门口徘徊，像一封还没按下发送的消息。", "天空看着克制，雨云却没有离开会场。", "天气正在修改剧本，下一幕可能比开场更湿。"] as const;
 const rainWaitTurn = ["伞先别退休，通勤路线也给自己留一点弹性。", "出门和回家未必属于同一套天气，包里留把伞更省心。", "雨不一定抢戏，但很擅长挑你觉得没事的时候登场。"] as const;
 const rainWaitClose = ["今天的关键不是硬扛，是留一个转身的余地。", "先把伞带上，剩下的交给云层自己纠结。", "鞋面不必参加天气的即兴演出。"] as const;
-const rainOpen = ["雨幕正在场，城市进入湿地镜头。", "今天的天空没有铺垫，直接把剧情倒在路面上。", "雨云已占领前台，干燥感暂时退出群聊。"] as const;
-const rainTurn = ["非必要的绕路比硬闯更像成熟剧情。", "低洼与临水路线今天不适合争夺存在感。", "把脚步放慢一点，给路面和自己都留出判断时间。"] as const;
-const rainClose = ["这轮先求稳，不和天气比气势。", "雨伞负责挡雨，路线负责避险。", "今天的主角不是速度，是安全到家。"] as const;
 const windOpen = ["风场开始巡逻，街边招牌和发型都在接受压力测试。", "空气今天有了推力，直线行走变成协商项目。", "风正在给城市做免费通风，手里的伞未必同意。"] as const;
 const windTurn = ["高处物品和临时搭建物今天值得多看一眼。", "沿街走可以，别和伞展开拔河比赛。", "帽子若想离家出走，请先把它劝住。"] as const;
 const windClose = ["把重心放低，城市就没那么爱开玩笑。", "今天适合稳一点，不适合轻一点。", "风会过去，别让东西先飞走。"] as const;

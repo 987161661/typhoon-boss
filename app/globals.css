@@ -9880,6 +9880,7 @@ a:focus-visible {
   position: absolute;
   z-index: 3;
   inset: 32px 0 34px;
+  pointer-events: none;
   border-block: 1px solid rgba(0, 216, 255, 0.2);
   background: linear-gradient(180deg, transparent 48%, rgba(0, 216, 255, 0.08) 50%, transparent 52%);
   background-size: 100% 8px;

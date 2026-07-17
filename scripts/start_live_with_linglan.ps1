@@ -28,7 +28,14 @@ function Test-TyphoonLiveAssets {
     if ($page.StatusCode -ne 200 -or $page.Content -notmatch 'live-director') {
       return $false
     }
-    $assetMatches = [regex]::Matches($page.Content, '(?:href|src)="([^"?#]+(?:\.css|app/live/page\.js|app-pages-internals\.js)[^"#]*)"')
+    # Validate every Next.js script and stylesheet referenced by the rendered
+    # document. Checking only the route entry chunk misses stale shared chunks:
+    # a long-running server can keep returning an old manifest after `.next`
+    # has been rebuilt, which leaves the page at Next's client-side error screen.
+    $assetMatches = [regex]::Matches(
+      $page.Content,
+      '(?:href|src)="([^"?#]*\/_next\/static\/[^"?#]+\.(?:css|js)(?:\?[^"#]*)?)"'
+    )
     $assets = @($assetMatches | ForEach-Object { $_.Groups[1].Value } | Select-Object -Unique)
     if ($assets.Count -lt 2) {
       return $false

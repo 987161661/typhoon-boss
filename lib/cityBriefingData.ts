@@ -14,6 +14,7 @@ import {
 } from "@/lib/administrativeMapping";
 import { NATIONAL_SOURCE_IDS } from "@/lib/nationalWeather";
 import type { NationalSituationSnapshot, SourceHealth } from "@/lib/nationalWeatherTypes";
+import { currentWeatherText } from "@/lib/cityWeatherSemantics";
 
 /**
  * City-scale evidence bundle for the live-room city card.
@@ -101,6 +102,7 @@ export interface CityBriefing {
     windSpeedMps: number | null;
     windGustMps: number | null;
     weatherCode: number | null;
+    weatherText?: string | null;
   };
   nextSixHours: {
     sourceId: "open-meteo" | "qweather-hourly" | null;
@@ -252,6 +254,7 @@ const NATIONAL_CITY_WARNING_SNAPSHOT_PATH = resolve(process.cwd(), ".runtime/qwe
 const NATIONAL_CITY_ROSTER_VERSION = 2;
 // 全国底榜由每日 03:15 的计划任务刷新；留出任务延迟余量，直播期间不应在上午失效。
 const CITY_COMPARISON_TTL_MS = 26 * 60 * 60 * 1_000;
+const CITY_FACT_TTL_MS = 5 * 60 * 1_000;
 type CityComparisonSnapshot = { fetchedAt: string; values: Array<NonNullable<CityBriefing["current"]>> } | null;
 export function createCityComparisonSnapshotCache(
   loader: (dayKey: string) => Promise<CityComparisonSnapshot> = readNationalCitySnapshot,
@@ -260,25 +263,38 @@ export function createCityComparisonSnapshotCache(
   return new DailySnapshotCache(loader, clock, beijingDayKey, (snapshot) => snapshot !== null);
 }
 const cityComparisonSnapshots = createCityComparisonSnapshotCache();
-const dailyCityFacts = new Map<string, Omit<CityBriefing, "narrative">>();
-const dailyCityFactsLoading = new Map<string, Promise<Omit<CityBriefing, "narrative">>>();
 const dailyCityNarrationTurns = new Map<string, number>();
+
+export function createCityFactsCache<T>(
+  loader: (query: string) => Promise<T>,
+  ttlMs = CITY_FACT_TTL_MS,
+  now: () => number = Date.now
+) {
+  const values = new Map<string, { expiresAt: number; value: T }>();
+  const loading = new Map<string, Promise<T>>();
+  return {
+    async get(query: string) {
+      const key = query.trim().toLowerCase();
+      const cached = values.get(key);
+      if (cached && cached.expiresAt > now()) return cached.value;
+      let pending = loading.get(key);
+      if (!pending) {
+        pending = loader(query).then((value) => {
+          values.set(key, { expiresAt: now() + ttlMs, value });
+          return value;
+        }).finally(() => loading.delete(key));
+        loading.set(key, pending);
+      }
+      return pending;
+    }
+  };
+}
+
+const cityFacts = createCityFactsCache(loadCityBriefingFacts);
 
 export async function getCityBriefing(cityQuery: string): Promise<CityBriefing> {
   const dailyKey = `${beijingDayKey(new Date())}|${cityQuery.trim().toLowerCase()}`;
-  const cached = dailyCityFacts.get(dailyKey);
-  if (cached) return presentDailyCityBriefing(cached, dailyKey);
-  let loading = dailyCityFactsLoading.get(dailyKey);
-  if (!loading) {
-    loading = loadCityBriefingFacts(cityQuery).then((briefing) => {
-      dailyCityFacts.set(dailyKey, briefing);
-      return briefing;
-    }).finally(() => {
-      dailyCityFactsLoading.delete(dailyKey);
-    });
-    dailyCityFactsLoading.set(dailyKey, loading);
-  }
-  return presentDailyCityBriefing(await loading, dailyKey);
+  return presentDailyCityBriefing(await cityFacts.get(cityQuery), dailyKey);
 }
 
 async function loadCityBriefingFacts(cityQuery: string): Promise<Omit<CityBriefing, "narrative">> {
@@ -443,6 +459,7 @@ function toObservedAnomaly(risk: CityRisk): CityObservedAnomaly[] {
 
 function compactOrdinaryWeather(briefing: Omit<CityBriefing, "narrative">) {
   const values = [
+    currentWeatherText(briefing.current),
     briefing.current.temperatureC === null ? null : `${numberText(briefing.current.temperatureC, "°C")}`,
     briefing.current.relativeHumidityPct === null ? null : `湿度${numberText(briefing.current.relativeHumidityPct, "%")}`,
     briefing.current.windSpeedMps === null ? null : `风速${numberText(briefing.current.windSpeedMps, "m/s")}`
@@ -512,7 +529,10 @@ function buildSituationSummary(briefing: Omit<CityBriefing, "narrative">, warnin
   parts.push(`【${stageLabel}】`);
   if (warning) parts.push(`${warning.title}已发布。`);
   const feels = current.apparentTemperatureC !== null ? `、体感${numberText(current.apparentTemperatureC, "°C")}` : "";
-  const rainNow = current.precipitationMm && current.precipitationMm > 0 ? `，近一小时降水${numberText(current.precipitationMm, "mm")}` : "";
+  const weatherNow = currentWeatherText(current);
+  const rainNow = current.precipitationMm && current.precipitationMm > 0
+    ? `，代表点降水量${numberText(current.precipitationMm, "mm")}${weatherNow ? `（${weatherNow}）` : ""}`
+    : weatherNow ? `，代表点天气${weatherNow}` : "";
   parts.push(`现在${numberText(current.temperatureC, "°C")}${feels}${rainNow}。`);
   if (briefing.minutelyRain.available && briefing.minutelyRain.precipitationNextTwoHoursMm !== null) parts.push(`未来两小时约${numberText(briefing.minutelyRain.precipitationNextTwoHoursMm, "mm")}。`);
   const forecast = `未来六小时约${numberText(next.precipitationMm, "mm")}，小时峰值${numberText(next.maxHourlyPrecipitationMm, "mm")}、降水概率最高${numberText(next.maxPrecipitationProbabilityPct, "%")}、阵风${numberText(next.maxWindGustMps, "m/s")}。`;
@@ -1036,7 +1056,7 @@ function qWeatherSources(
   updatedAt: string | null
 ): CityBriefingSource[] {
   return [
-    { id: "qweather-now", label: "和风天气近实时天气", evidenceLevel: status.now === "available" ? "observed" : "unavailable", updatedAt, status: status.now, limitation: "近实时数据可能有 5-20 分钟延迟，不是气象部门的即时站点电文。" },
+    { id: "qweather-now", label: "和风天气城市代表点近实时天气", evidenceLevel: status.now === "available" ? "observed" : "unavailable", updatedAt, status: status.now, limitation: "城市代表点近实时资料可能有 5-20 分钟延迟，不代表整座城市每个位置。" },
     { id: "qweather-hourly", label: "和风天气逐小时预报", evidenceLevel: status.hourly === "available" ? "model" : "unavailable", updatedAt, status: status.hourly, limitation: "预报数据，不等同于实况或官方预警。" },
     { id: "qweather-minutely", label: "和风天气分钟级降水", evidenceLevel: status.minutely === "available" ? "model" : "unavailable", updatedAt, status: status.minutely, limitation: "未来 2 小时降水预报。" },
     { id: "qweather-warning", label: "和风天气官方预警", evidenceLevel: status.warning === "available" ? "confirmed" : "unavailable", updatedAt, status: status.warning, limitation: "转发属地政府部门预警；无预警不等于无风险。" }
@@ -1062,7 +1082,8 @@ function summarizeQWeatherNow(payload: QWeatherPayload | null): CityBriefing["cu
   return {
     sourceId: "qweather-now", evidenceLevel: "observed", observedAt: now.obsTime ?? payload?.updateTime ?? null,
     temperatureC: numberValue(now.temp), apparentTemperatureC: numberValue(now.feelsLike), relativeHumidityPct: numberValue(now.humidity),
-    precipitationMm: numberValue(now.precip), windSpeedMps: kmhToMps(now.windSpeed), windGustMps: null, weatherCode: null
+    precipitationMm: numberValue(now.precip), windSpeedMps: kmhToMps(now.windSpeed), windGustMps: null,
+    weatherCode: numberValue(now.icon), weatherText: stringValue(now.text)
   };
 }
 
@@ -1172,7 +1193,7 @@ function heatSummary(level: CityRiskLevel, current: CityBriefing["current"]) {
   return "当前体感温度未见突出高温风险。";
 }
 
-function emptyCurrent(): CityBriefing["current"] { return { sourceId: null, evidenceLevel: "unavailable", observedAt: null, temperatureC: null, apparentTemperatureC: null, relativeHumidityPct: null, precipitationMm: null, windSpeedMps: null, windGustMps: null, weatherCode: null }; }
+function emptyCurrent(): CityBriefing["current"] { return { sourceId: null, evidenceLevel: "unavailable", observedAt: null, temperatureC: null, apparentTemperatureC: null, relativeHumidityPct: null, precipitationMm: null, windSpeedMps: null, windGustMps: null, weatherCode: null, weatherText: null }; }
 function emptySixHours(): CityBriefing["nextSixHours"] { return { sourceId: null, startsAt: null, endsAt: null, precipitationMm: null, maxHourlyPrecipitationMm: null, maxPrecipitationProbabilityPct: null, maxWindGustMps: null, maxCapeJkg: null }; }
 function emptyMinutelyRain(): CityBriefing["minutelyRain"] { return { available: false, updatedAt: null, summary: null, maxFiveMinutePrecipitationMm: null, precipitationNextTwoHoursMm: null }; }
 function requestInit(timeout: number): RequestInit { return { cache: "no-store", headers: { Accept: "application/json", "User-Agent": process.env.WEATHER_API_USER_AGENT ?? "TyphoonBossRadar/1.0" }, signal: AbortSignal.timeout(timeout) }; }

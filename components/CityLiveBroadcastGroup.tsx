@@ -307,7 +307,14 @@ function RankDeck({ ranks }: { ranks: CityBattleRankIntel[] }) {
         key={rank.id}
       >
         <span>{rank.label}</span>
-        <strong>#{rank.position}·{rank.value}</strong>
+        <div
+          className={styles.rankReading}
+          aria-label={`${rank.label} ${rank.value}，全国排名第 ${rank.position}`}
+        >
+          <strong className={styles.rankValue}>{rank.value}</strong>
+          <span className={styles.rankLead}>全国排名第</span>
+          <b className={styles.rankPosition}>{rank.position}</b>
+        </div>
       </section>
     ))}
   </div>;

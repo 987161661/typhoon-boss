@@ -123,7 +123,11 @@ function belongsToCity(event: NationalWeatherEvent, target: CitySituationTarget)
   // provider location ids may collide with stale caller context and must not
   // override a different resolved cityCode.
   if (event.geography.cityCode !== target.cityCode) return false;
-  if (!target.locationIds?.length || event.geography.countyCode === null) return true;
+  // A city-root query must not promote a county-only warning into a whole-city
+  // current condition. County warnings require an exact county target; true
+  // city-level warnings (countyCode === null) may still match the city root.
+  if (event.geography.countyCode === null) return true;
+  if (!target.locationIds?.length) return false;
   const targetIds = new Set(target.locationIds);
   return event.geography.locationIds.some((locationId) => targetIds.has(locationId));
 }

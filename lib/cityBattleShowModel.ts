@@ -103,7 +103,7 @@ export function buildRankIntel(briefing: CityBriefing): CityBattleRankIntel[] {
     rankCandidate("apparent-temperature", "体感热度", current.apparentTemperatureC ?? current.temperatureC, "°C", comparison.apparentTemperatureRank, comparison.scope),
     rankCandidate("humidity", "空气含水", current.relativeHumidityPct, "%", comparison.relativeHumidityRank, comparison.scope),
     rankCandidate("wind", "近地风场", current.windSpeedMps, " m/s", comparison.windSpeedRank, comparison.scope),
-    rankCandidate("precipitation", "当前雨势", current.precipitationMm, " mm", comparison.precipitationRank, comparison.scope)
+    rankCandidate("precipitation", "代表点降水", current.precipitationMm, " mm", comparison.precipitationRank, comparison.scope)
   ];
   const meaningfulCandidates = candidates
     .filter((candidate): candidate is CityBattleRankCandidate => candidate !== null)

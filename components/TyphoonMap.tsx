@@ -83,7 +83,7 @@ import { LiveCityInteraction } from "./LiveCityInteraction";
 import { LiveCityTargetLock } from "./LiveCityTargetLock";
 import { RadarChatDock } from "./RadarChatDock";
 import { useLiveCityInteractionQueue } from "./useLiveCityInteractionQueue";
-import { buildCityReportEngagementPrompt, buildCityReportEngagementReply, createLiveCityEventId, type CityAttention, type CityAttentionAnchor, type CityInteractionRequest } from "@/lib/liveCityInteraction";
+import { buildCityReportEngagementPrompt, createLiveCityEventId, type CityAttention, type CityAttentionAnchor, type CityInteractionRequest } from "@/lib/liveCityInteraction";
 import type { CityBriefing } from "@/lib/cityBriefingData";
 import {
   buildLiveBroadcastModel,
@@ -386,9 +386,8 @@ export function TyphoonMap({
     return "host";
   }, [dispatchMainHostChat, mainCityInteractions]);
   const handleMainCityBriefingReady = useCallback((request: CityInteractionRequest, briefing: CityBriefing) => {
-    const eventPrompt = buildCityReportEngagementPrompt(request, briefing.city.name);
-    const directReply = buildCityReportEngagementReply(request, briefing.city.name);
-    if (eventPrompt && directReply) dispatchMainHostChat(`city-engagement:${request.id}`, eventPrompt, directReply);
+    const eventPrompt = buildCityReportEngagementPrompt(request, briefing);
+    if (eventPrompt) dispatchMainHostChat(`city-engagement:${request.id}`, eventPrompt);
   }, [dispatchMainHostChat]);
   const publishCityAttentionAnchor = useCallback((anchor: CityAttentionAnchor | null) => {
     if (!isLiveView) setMainCityAttentionAnchor(anchor);

@@ -35,13 +35,14 @@ export interface LiveCityBroadcastModel {
 }
 
 const HAZARD_METRIC_PRIORITY: Record<Exclude<CityHazardKind, "warning" | "calm">, string[]> = {
-  rain: ["rain-next-2h", "precipitation-now", "rain-next-6h", "rain-probability", "rain-5m-peak", "humidity"],
+  rain: ["weather-condition", "rain-next-2h", "precipitation-now", "rain-next-6h", "rain-probability", "rain-5m-peak", "humidity"],
   wind: ["wind-gust", "gust-next-6h", "wind-speed", "cape-next-6h", "temperature", "humidity"],
   convection: ["cape-next-6h", "gust-next-6h", "rain-next-2h", "rain-probability", "wind-gust", "humidity"],
   heat: ["apparent-temperature", "temperature", "humidity", "wind-speed", "rain-probability", "rain-next-2h"]
 };
 
 const GENERIC_METRIC_PRIORITY = [
+  "weather-condition",
   "apparent-temperature",
   "rain-next-2h",
   "gust-next-6h",

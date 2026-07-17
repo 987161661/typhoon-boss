@@ -5,6 +5,7 @@ import type {
   CityRiskLevel
 } from "@/lib/cityBriefingData";
 import { buildCitySignalBoard, type CitySignalSeverity } from "@/lib/citySignalBoard";
+import { currentWeatherText, isCurrentPrecipitation } from "@/lib/cityWeatherSemantics";
 
 export type WarningFeedState = "active" | "none-reported" | "unavailable";
 export type PanelEvidence = "official" | "observed" | "model" | "unavailable";
@@ -320,9 +321,13 @@ function inferHazardFromWarning(title: string): PanelRiskId | "warning" {
 
 function buildBattleTitle(briefing: CityBriefing, primaryKind: ReturnType<typeof getPrimaryKind>) {
   if (primaryKind === "unavailable") return "信号迷雾";
-  if (primaryKind === "rain") return (briefing.current.precipitationMm ?? 0) > 0 ? "雨幕攻城" : "雨云候场";
+  if (primaryKind === "rain") {
+    return isCurrentPrecipitation(briefing.current)
+      ? `代表点${currentWeatherText(briefing.current) ?? "有雨"}`
+      : "雨云候场";
+  }
   if (primaryKind === "wind") return "风场越界";
-  if (primaryKind === "convection") return "雷云接管";
+  if (primaryKind === "convection") return "雷云候场";
   if (primaryKind === "heat") return "赤昼占领";
   if (primaryKind === "warning") return "边界事件";
   return "短时休战";
@@ -333,9 +338,15 @@ function buildBattleSummary(briefing: CityBriefing, primaryKind: ReturnType<type
   const rain = numberValue(briefing.minutelyRain.precipitationNextTwoHoursMm ?? briefing.nextSixHours.precipitationMm);
   const wind = numberValue(briefing.nextSixHours.maxWindGustMps ?? briefing.current.windGustMps ?? briefing.current.windSpeedMps);
   if (primaryKind === "heat") return `城市热压正在占领白昼时段，体感读数 ${apparent}℃；阴影与补水点成为本局稀缺资源。`;
-  if (primaryKind === "rain") return `雨幕正在改写城市路线，近程雨量读数 ${rain} mm；低洼路径获得额外地形惩罚。`;
+  if (primaryKind === "rain") {
+    const condition = currentWeatherText(briefing.current);
+    if (isCurrentPrecipitation(briefing.current)) {
+      return `城市代表点天气为${condition ?? "有雨"}，降水量读数 ${numberValue(briefing.current.precipitationMm)} mm；代表点资料不代表全城同步降雨。`;
+    }
+    return `未来两小时临近预报雨量 ${rain} mm；这是预报信号，不代表当前正在下雨。`;
+  }
   if (primaryKind === "wind") return `风场取得临时行动权，峰值读数 ${wind} m/s；轻物件与伞具进入易位移状态。`;
-  if (primaryKind === "convection") return "高空能量槽正在蓄积，城市上方的临时剧本仍可能改写。";
+  if (primaryKind === "convection") return "未来六小时模式提示对流条件偏高；这是环境预报信号，不代表当前雷雨已经发生。";
   if (primaryKind === "unavailable") return "观测链路出现缺页，本局只标记未知区域，不把空白伪装成平静。";
   if (primaryKind === "warning") return "城市边界事件已进入高亮状态；本面板只翻译游戏状态，事实请查看右侧情报链路。";
   return "城市暂处低噪声回合，常规行动可以继续，但天气系统从不签永久停战书。";
@@ -505,17 +516,18 @@ function archiveStatusText(status: CityArchiveStatus) {
 function buildCurrentMetrics(briefing: CityBriefing): PanelMetric[] {
   const evidence = evidenceOf(briefing.current.evidenceLevel);
   return [
+    textMetric("weather-condition", "代表点天气", currentWeatherText(briefing.current), evidence),
     metric("temperature", "气温", briefing.current.temperatureC, "℃", evidence),
     metric("apparent-temperature", "体感", briefing.current.apparentTemperatureC, "℃", evidence),
     metric("humidity", "湿度", briefing.current.relativeHumidityPct, "%", evidence),
-    metric("precipitation-now", "当前降水", briefing.current.precipitationMm, "mm", evidence),
+    metric("precipitation-now", "代表点降水量", briefing.current.precipitationMm, "mm", evidence),
     metric("wind-speed", "风速", briefing.current.windSpeedMps, "m/s", evidence),
     metric("wind-gust", "阵风", briefing.current.windGustMps, "m/s", evidence)
   ];
 }
 
 function buildNowcastMetrics(briefing: CityBriefing): PanelMetric[] {
-  const evidence: PanelEvidence = briefing.minutelyRain.available ? "observed" : "unavailable";
+  const evidence: PanelEvidence = briefing.minutelyRain.available ? "model" : "unavailable";
   return [
     metric("rain-next-2h", "未来2小时雨量", briefing.minutelyRain.precipitationNextTwoHoursMm, "mm", evidence, briefing.minutelyRain.summary ?? undefined),
     metric("rain-5m-peak", "5分钟峰值", briefing.minutelyRain.maxFiveMinutePrecipitationMm, "mm", evidence)
@@ -584,6 +596,10 @@ function sourceLimitation(source: CityBriefingSource) {
 function metric(id: string, label: string, rawValue: number | null, unit: string, evidence: PanelEvidence, detail?: string): PanelMetric {
   if (rawValue === null) return { id, label, value: "暂无资料", evidence, detail };
   return { id, label, value: numberValue(rawValue), unit, evidence, detail };
+}
+
+function textMetric(id: string, label: string, value: string | null, evidence: PanelEvidence): PanelMetric {
+  return { id, label, value: value ?? "暂无资料", evidence: value ? evidence : "unavailable" };
 }
 
 function numberValue(value: number | null | undefined) {

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildCityReportEngagementPrompt,
-  buildCityReportEngagementReply,
   extractChinaCityMention,
   isHostLiveComment,
   isHostViewerRelationEvent,
@@ -10,41 +9,74 @@ import {
   viewerIdentityKey
 } from "../lib/liveCityInteraction";
 
+const ordinaryBriefing = {
+  city: { name: "上海" },
+  current: {
+    temperatureC: 36,
+    apparentTemperatureC: 42,
+    relativeHumidityPct: 78,
+    precipitationMm: 0,
+    windSpeedMps: 2.1,
+    weatherText: "晴"
+  },
+  comparison: {
+    scope: "全国城市",
+    apparentTemperatureRank: { position: 2, total: 300 }
+  },
+  officialWarnings: [],
+  situation: { mode: "ordinary" as const, anomalies: [] }
+};
+
 test("successful city reports create a viewer-specific result event without a CTA trigger", () => {
   const prompt = buildCityReportEngagementPrompt({
     cityQuery: "伊宁市",
     viewerName: "小雨",
     followEvidence: "unknown"
-  }, "伊宁");
+  }, { ...ordinaryBriefing, city: { name: "伊宁" } });
 
   assert.ok(prompt);
   assert.match(prompt, /<city_report_engagement>/);
   assert.match(prompt, /@小雨/);
-  assert.match(prompt, /已展开城市：伊宁/);
-  assert.match(prompt, /不授权索取关注、点赞、礼物或其他支持/);
-  assert.match(prompt, /不能由本事件触发/);
-  assert.doesNotMatch(prompt, /自然邀请对方关注主播/);
-  assert.doesNotMatch(prompt, /关注依据/);
-  assert.match(prompt, /不要复述天气、风力、预警或战报数据/);
+  assert.match(prompt, /查询城市：伊宁/);
+  assert.match(prompt, /气温36℃/);
+  assert.match(prompt, /体感温度第2\/300/);
+  assert.match(prompt, /幽默毒舌/);
+  assert.match(prompt, /你们人类/);
+  assert.match(prompt, /不索取关注点赞礼物/);
+  assert.match(prompt, /不要说“战报已经展开”/);
   assert.ok(prompt.length <= 500, "avatar bridge rejects prompts longer than 500 characters");
 });
 
-test("city engagement has a neutral deterministic acknowledgement for legacy playback", () => {
-  assert.equal(
-    buildCityReportEngagementReply({
-      cityQuery: "伊犁",
-      viewerName: "小雨",
-      followEvidence: "unknown"
-    }, "伊犁"),
-    "@小雨，伊犁的战报已经展开了。之后想看哪个城市，继续 @ 我就行。"
-  );
-  const observedReply = buildCityReportEngagementReply({
-      cityQuery: "伊犁",
-      viewerName: null,
-      followEvidence: "observed"
-    }, "伊犁") ?? "";
-  assert.doesNotMatch(observedReply, /关注|点赞|礼物|支持/);
-  assert.match(observedReply, /伊犁的战报已经展开/);
+test("official warnings stay lively without disaster jokes", () => {
+  const prompt = buildCityReportEngagementPrompt({ cityQuery: "上海", viewerName: "阿海", followEvidence: "unknown" }, {
+    ...ordinaryBriefing,
+    officialWarnings: [{ title: "高温橙色预警", severity: "orange" }],
+    situation: { mode: "official-warning", anomalies: [] }
+  }) ?? "";
+  assert.match(prompt, /官方预警：高温橙色预警/);
+  assert.match(prompt, /有趣但不玩灾害梗/);
+  assert.match(prompt, /不夸大成已发生灾害/);
+  assert.doesNotMatch(prompt, /普通天气：幽默毒舌/);
+});
+
+test("only explicitly confirmed disasters switch the host to serious safety-first speech", () => {
+  const prompt = buildCityReportEngagementPrompt({ cityQuery: "某地", viewerName: "小雨", followEvidence: "unknown" }, {
+    ...ordinaryBriefing,
+    city: { name: "某地" },
+    situation: { mode: "observed-anomaly", anomalies: [{ severity: "severe", factSummary: "体感温度达到40℃" }] },
+    confirmedDisaster: { factSummary: "城区已确认发生内涝并正在救援" }
+  }) ?? "";
+  assert.match(prompt, /已确认灾害实况：城区已确认发生内涝并正在救援/);
+  assert.match(prompt, /严肃、清晰、安全优先，不调侃/);
+});
+
+test("a severe weather anomaly alone is not mislabeled as an occurring disaster", () => {
+  const prompt = buildCityReportEngagementPrompt({ cityQuery: "上海", viewerName: "阿海", followEvidence: "unknown" }, {
+    ...ordinaryBriefing,
+    situation: { mode: "observed-anomaly", anomalies: [{ severity: "severe", factSummary: "体感温度达到40℃" }] }
+  }) ?? "";
+  assert.match(prompt, /普通天气：幽默毒舌/);
+  assert.doesNotMatch(prompt, /已确认灾害实况|严肃、清晰/);
 });
 
 test("city engagement ignores follow evidence and requires a real viewer name", () => {
@@ -52,7 +84,7 @@ test("city engagement ignores follow evidence and requires a real viewer name", 
     cityQuery: "上海",
     viewerName: "@阿海",
     followEvidence: "observed"
-  }, "上海");
+  }, ordinaryBriefing);
 
   assert.ok(prompt);
   assert.match(prompt, /@阿海/);
@@ -62,7 +94,7 @@ test("city engagement ignores follow evidence and requires a real viewer name", 
     cityQuery: "上海",
     viewerName: null,
     followEvidence: "unknown"
-  }, "上海"), null);
+  }, ordinaryBriefing), null);
 });
 
 test("city interaction only accepts a bounded Chinese @city mention", () => {

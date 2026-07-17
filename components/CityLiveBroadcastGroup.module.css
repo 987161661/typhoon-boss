@@ -376,8 +376,48 @@
 .rankDeck[data-count="1"] { grid-template-columns: 1fr; }
 .rankDeck[data-count="0"] { grid-template-columns: 1fr; }
 .rankCard { border-top-color: var(--broadcast-amber); }
-.rankCard strong { color: #fff0c8; }
-.rankCard p { margin: 2px 0 0; color: #d7c5ad; line-height: 1.12; overflow-wrap: anywhere; }
+.rankReading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "value lead"
+    "value position";
+  align-items: center;
+  gap: 2px 4px;
+  min-width: 0;
+  margin-top: 2px;
+}
+.rankValue {
+  grid-area: value;
+  align-self: center;
+  min-width: 0;
+  color: #fff0c8;
+  font-weight: 900;
+  line-height: 1.05;
+  white-space: nowrap;
+}
+.rankLead {
+  grid-area: lead;
+  align-self: center;
+  justify-self: end;
+  padding: 2px 3px;
+  border: 1px solid rgb(255 195 89 / 68%);
+  color: #2b1703;
+  background: var(--broadcast-amber);
+  box-shadow: 0 0 12px rgb(255 195 89 / 25%);
+  font-size: clamp(10px, .65vw, 13px) !important;
+  font-weight: 950;
+  line-height: 1;
+  white-space: nowrap;
+}
+.rankPosition {
+  grid-area: position;
+  justify-self: end;
+  color: #fff7e8;
+  font: 950 clamp(30px, 2.1vw, 42px)/.78 "Bahnschrift", "Microsoft YaHei UI", sans-serif !important;
+  text-shadow: 0 0 16px rgb(255 195 89 / 42%);
+  white-space: nowrap;
+}
 .rankEmpty { display: grid; align-content: center; border-top-color: #8b756c; }
 
 .actions {
@@ -587,6 +627,9 @@
   .verdictCopy h3 { font-size: 27px; line-height: 1; }
   .typewriter { min-height: 0; line-height: 1.1; }
   .battlePanel .metricHero b { font-size: 31px; }
+  .rankReading { gap: 1px 3px; }
+  .rankLead { padding: 1px 3px; font-size: 11px !important; }
+  .rankPosition { font-size: 30px !important; }
   .battlePanel .archiveLocked p,
   .battlePanel .archiveLocked small { display: none; }
   .metricHero,

@@ -78,6 +78,25 @@ test("heat-led city with an incoming rain signal uses the combined state", () =>
   assert.match(result.summary, /伞|雨/);
 });
 
+test("QWeather rain is narrated as a representative-point condition, not a whole-city fact", () => {
+  const result = buildCityPresentation(briefing({
+    current: {
+      ...briefing().current,
+      sourceId: "qweather-now",
+      evidenceLevel: "observed",
+      precipitationMm: 10,
+      weatherCode: 305,
+      weatherText: "小雨"
+    },
+    risks: [
+      { kind: "rain", level: "moderate", label: "rain", summary: "", evidenceLevel: "model", sourceIds: ["qweather-minutely"] }
+    ]
+  }));
+  assert.match(result.summary, /代表点小雨/);
+  assert.match(result.summary, /不代表全城同步降雨/);
+  assert.doesNotMatch(result.summary, /雨幕进行中|雨云已占领/);
+});
+
 test("live-room mention accepts country and province-city forms", () => {
   assert.deepEqual(parseCityMention("@广东省广州市"), { raw: "广东省广州市", province: "广东", cityQuery: "广州市" });
   assert.deepEqual(parseCityMention("@中国北京"), { raw: "北京", province: "北京", cityQuery: "北京" });

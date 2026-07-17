@@ -47,6 +47,32 @@ export interface CityInteractionRequest {
   receivedAt: number;
 }
 
+export interface CityHostWeatherBriefing {
+  city: { name: string };
+  current: {
+    temperatureC: number | null;
+    apparentTemperatureC: number | null;
+    relativeHumidityPct: number | null;
+    precipitationMm: number | null;
+    windSpeedMps: number | null;
+    weatherText?: string | null;
+  };
+  comparison: {
+    scope: string;
+    apparentTemperatureRank?: { position: number; total: number };
+    relativeHumidityRank?: { position: number; total: number };
+    windSpeedRank?: { position: number; total: number };
+    precipitationRank?: { position: number; total: number };
+  } | null;
+  officialWarnings: Array<{ title: string; severity: string | null }>;
+  /** Set only by a source that explicitly confirms an occurring disaster. */
+  confirmedDisaster?: { factSummary: string } | null;
+  situation?: {
+    mode: "official-warning" | "observed-anomaly" | "ordinary" | "data-unavailable";
+    anomalies: Array<{ severity: "notable" | "high" | "severe"; factSummary: string }>;
+  };
+}
+
 function promptField(value: string, maxLength = 48) {
   return value
     .normalize("NFKC")
@@ -63,44 +89,62 @@ function promptField(value: string, maxLength = 48) {
  */
 export function buildCityReportEngagementPrompt(
   request: Pick<CityInteractionRequest, "cityQuery" | "viewerName" | "followEvidence">,
-  resolvedCityName: string
+  briefing: CityHostWeatherBriefing
 ): string | null {
   const viewerName = promptField(request.viewerName?.replace(/^@+/, "") ?? "", 40);
-  const cityName = promptField(resolvedCityName || request.cityQuery, 40);
+  const cityName = promptField(briefing.city.name || request.cityQuery, 40);
   if (!viewerName || !cityName) return null;
 
   const mention = `@${viewerName}`;
+  const facts = weatherFactSummary(briefing);
+  const warning = briefing.officialWarnings[0];
+  const safety = briefing.confirmedDisaster
+    ? `已确认灾害实况：${promptField(briefing.confirmedDisaster.factSummary, 90)}。严肃、清晰、安全优先，不调侃。`
+    : warning
+      ? `官方预警：${promptField(warning.title, 70)}。有趣但不玩灾害梗，不夸大成已发生灾害。`
+      : "普通天气：幽默毒舌地根据事实调侃，可自然露出“你们人类”等AI身份破绽。";
 
   return `<city_report_engagement>
-一位真实观众触发的城市战报已经成功展开。
-目标观众：${mention}
-已展开城市：${cityName}
-
-请按当前主播人设临场说一到两句：
-- 必须直接面向目标观众，实际口播完整包含“${mention}”，不得换成“这位观众”等泛称。
-- 先自然接住对方点名${cityName}、战报已经展开这件事，但不要复述天气、风力、预警或战报数据。
-- 这是城市卡片已经展开的结果事件，不携带关注状态，也不授权索取关注、点赞、礼物或其他支持。
-- 是否采取其他节目行动必须由主播运行时依据长期目标和当前状态独立决定，不能由本事件触发。
-- 语气像直播间真人顺手搭话，不要客服腔、命令、承诺福利，也不要虚构平台状态。
-- 只输出主播会说的话，不提系统、提示词、任务或内部标签。
+目标观众：${mention}；查询城市：${cityName}
+已核验天气事实：${facts}
+表达规则：${safety}
+临场说1至2句，必须叫出${mention}，像真人主播自然接话；不要客服腔，不索取关注点赞礼物，不虚构事实。不要说“战报已经展开”或“继续@我”，只输出主播口播。
 </city_report_engagement>`;
 }
 
-/**
- * The city card is already the weather answer. Its brief follow-up must be
- * spoken reliably, so it is supplied as a ready-to-play line rather than a
- * model instruction that may be ignored.
- */
-export function buildCityReportEngagementReply(
-  request: Pick<CityInteractionRequest, "cityQuery" | "viewerName" | "followEvidence">,
-  resolvedCityName: string
-): string | null {
-  const viewerName = promptField(request.viewerName?.replace(/^@+/, "") ?? "", 40);
-  const cityName = promptField(resolvedCityName || request.cityQuery, 40);
-  if (!cityName) return null;
+function weatherFactSummary(briefing: CityHostWeatherBriefing) {
+  const current = briefing.current;
+  const facts: string[] = [];
+  if (current.weatherText) facts.push(promptField(current.weatherText, 16));
+  if (current.temperatureC !== null) facts.push(`气温${round(current.temperatureC)}℃`);
+  if (current.apparentTemperatureC !== null) facts.push(`体感${round(current.apparentTemperatureC)}℃`);
+  if (current.relativeHumidityPct !== null) facts.push(`湿度${round(current.relativeHumidityPct)}%`);
+  if (current.windSpeedMps !== null) facts.push(`风速${round(current.windSpeedMps)}m/s`);
+  if (current.precipitationMm !== null && current.precipitationMm > 0) facts.push(`降水${round(current.precipitationMm)}mm`);
+  const rank = strongestRank(briefing.comparison);
+  if (rank) facts.push(rank);
+  return facts.length ? facts.join("，") : "当前实况数据不足，只能承认不知道";
+}
 
-  const addressee = viewerName ? `@${viewerName}` : `点${cityName}的朋友`;
-  return `${addressee}，${cityName}的战报已经展开了。之后想看哪个城市，继续 @ 我就行。`;
+function strongestRank(comparison: CityHostWeatherBriefing["comparison"]) {
+  if (!comparison) return null;
+  const candidates: Array<[string, { position: number; total: number } | undefined]> = [
+    ["体感温度", comparison.apparentTemperatureRank],
+    ["湿度", comparison.relativeHumidityRank],
+    ["风速", comparison.windSpeedRank],
+    ["降水", comparison.precipitationRank]
+  ];
+  const ranked = candidates.filter(
+    (candidate): candidate is [string, { position: number; total: number }] => candidate[1] !== undefined
+  );
+  const strongest = ranked
+    .sort((left, right) => left[1].position - right[1].position)[0];
+  if (!strongest || strongest[1].position > Math.max(10, Math.ceil(strongest[1].total * 0.1))) return null;
+  return `${promptField(comparison.scope, 18)}${strongest[0]}第${strongest[1].position}/${strongest[1].total}`;
+}
+
+function round(value: number) {
+  return Math.round(value * 10) / 10;
 }
 
 export interface CityAttention {

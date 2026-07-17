@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import test from "node:test";
 import {
   applyNationalCitySituation,
+  createCityFactsCache,
   createCityComparisonSnapshotCache,
   type CityBriefing
 } from "../lib/cityBriefingData";
@@ -78,6 +79,26 @@ test("the production adapter retries after the independent rank task makes its f
   assert.equal(loads, 2);
 });
 
+test("city facts use a short TTL and deduplicate concurrent refreshes", async () => {
+  let now = 1_000;
+  let loads = 0;
+  const cache = createCityFactsCache(async (query) => {
+    loads += 1;
+    await Promise.resolve();
+    return `${query}:${loads}`;
+  }, 300_000, () => now);
+
+  const [first, duplicate] = await Promise.all([cache.get("惠州"), cache.get("惠州")]);
+  assert.equal(first, "惠州:1");
+  assert.equal(duplicate, first);
+  assert.equal(loads, 1);
+  now += 299_999;
+  assert.equal(await cache.get("惠州"), first);
+  now += 2;
+  assert.equal(await cache.get("惠州"), "惠州:2");
+  assert.equal(loads, 2);
+});
+
 test("React queue and director are thin adapters over the pure scheduling and lens core", async () => {
   const queue = await readFile(resolve(process.cwd(), "components/useLiveCityInteractionQueue.ts"), "utf8");
   const director = await readFile(resolve(process.cwd(), "components/LiveDirector.tsx"), "utf8");
@@ -119,7 +140,7 @@ function warning(id: string, cityCode: string | null, attribution: "deterministi
     dataTime: "2026-07-15T07:00:00Z",
     updatedAt: "2026-07-15T07:05:00Z",
     expiresAt: null,
-    geography: { scope: "county", locationIds: ["101270803"], provinceCode: "510000", cityCode, countyCode: "511622", names: ["武胜县"], centroid: null, cityAttribution: attribution },
+    geography: { scope: "city", locationIds: ["101270800"], provinceCode: "510000", cityCode, countyCode: null, names: ["广安市"], centroid: null, cityAttribution: attribution },
     sourceIds: ["china-weather-national-warnings"],
     factSummary: "广安市属地发布暴雨橙色预警。",
     limitations: ["以属地最新发布为准。"]

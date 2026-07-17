@@ -16,12 +16,12 @@ function event(overrides: Partial<NationalWeatherEvent> = {}): NationalWeatherEv
     updatedAt: "2026-07-15T08:01:00Z",
     expiresAt: null,
     geography: {
-      scope: "county",
-      locationIds: ["101270803"],
+      scope: "city",
+      locationIds: ["101270800"],
       provinceCode: "510000",
       cityCode: "511600",
-      countyCode: "511622",
-      names: ["武胜县"],
+      countyCode: null,
+      names: ["广安市"],
       centroid: null,
       cityAttribution: "deterministic"
     },
@@ -75,6 +75,28 @@ test("ambiguous or differently attributed warnings never enter the city card", (
   );
   assert.equal(result.mode, "observed-anomaly");
   assert.deepEqual(result.officialWarnings, []);
+});
+
+test("a city-root query does not promote a county-only warning to the whole city", () => {
+  const countyOnly = event({
+    id: "county-only",
+    geography: {
+      ...event().geography,
+      scope: "county",
+      locationIds: ["101280304"],
+      cityCode: "441300",
+      countyCode: "441323",
+      names: ["惠东县"]
+    }
+  });
+  const cityResult = buildCitySituation(snapshot([countyOnly]), { name: "惠州", cityCode: "441300" }, []);
+  const countyResult = buildCitySituation(
+    snapshot([countyOnly]),
+    { name: "惠东", cityCode: "441300", locationIds: ["101280304"] },
+    []
+  );
+  assert.deepEqual(cityResult.officialWarnings, []);
+  assert.equal(countyResult.primaryWarning?.id, "county-only");
 });
 
 test("an exact county-level target rejects a sibling county but still inherits city-wide warnings", () => {
