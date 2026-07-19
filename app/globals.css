@@ -7446,6 +7446,230 @@ a:focus-visible {
   color: var(--live-signal);
 }
 
+.live-typhoon-outlook {
+  position: absolute;
+  z-index: 13;
+  top: 116px;
+  right: 282px;
+  left: 16px;
+  height: 176px;
+  display: grid;
+  grid-template-columns: clamp(280px, 25%, 350px) minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) 58px;
+  align-items: stretch;
+  color: #ecfbff;
+  border: 1px solid rgba(255, 59, 50, 0.72);
+  border-top: 3px solid var(--live-signal);
+  background: rgba(3, 10, 14, 0.94);
+  box-shadow: 0 16px 34px rgba(0, 0, 0, 0.46), inset 0 -1px rgba(0, 216, 255, 0.18);
+  clip-path: polygon(0 0, calc(100% - 15px) 0, 100% 15px, 100% 100%, 0 100%);
+  pointer-events: none;
+}
+
+.live-typhoon-outlook::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0.24;
+  background: repeating-linear-gradient(0deg, transparent 0 4px, rgba(0, 216, 255, 0.07) 5px);
+  pointer-events: none;
+}
+
+.live-typhoon-outlook-heading,
+.live-typhoon-outlook-time {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 22px;
+  border-right: 1px solid rgba(0, 216, 255, 0.2);
+}
+
+.live-typhoon-outlook-heading svg {
+  flex: none;
+  width: 54px;
+  height: 54px;
+  color: var(--live-signal);
+  filter: drop-shadow(0 0 8px rgba(255, 59, 50, 0.7));
+}
+
+.live-typhoon-outlook-heading span,
+.live-typhoon-outlook-time {
+  display: grid;
+  align-content: center;
+}
+
+.live-typhoon-outlook-heading small {
+  display: none;
+}
+
+.live-typhoon-outlook-heading strong {
+  margin-top: 0;
+  font: 1000 clamp(42px, 2.7vw, 56px)/1 "Microsoft YaHei UI", sans-serif;
+  white-space: nowrap;
+}
+
+.live-typhoon-outlook-heading {
+  grid-column: 1;
+  grid-row: 1;
+  align-items: center;
+  padding-bottom: 6px;
+}
+
+.live-typhoon-outlook-time {
+  grid-column: 1;
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  align-self: end;
+  gap: 9px;
+  padding: 8px 18px 10px;
+  color: rgba(236, 251, 255, 0.7);
+  border-top: 1px solid rgba(255, 176, 0, 0.34);
+  font: 900 clamp(18px, 1.15vw, 24px)/1 "Microsoft YaHei UI", sans-serif;
+}
+
+.live-typhoon-outlook-time svg {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  color: #ffb000;
+}
+
+.live-typhoon-outlook-time time {
+  color: #ffcf5a;
+  font: 1000 clamp(22px, 1.4vw, 30px)/1 "Bahnschrift", Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.live-typhoon-outlook-rail {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  grid-column: 2;
+  grid-row: 1 / 3;
+  border-right: 1px solid rgba(0, 216, 255, 0.2);
+  mask-image: linear-gradient(90deg, transparent, #000 22px, #000 calc(100% - 22px), transparent);
+}
+
+.live-typhoon-outlook-track {
+  display: flex;
+  width: max-content;
+  animation: liveOutlookTicker 68s linear infinite;
+  will-change: transform;
+}
+
+.live-typhoon-outlook-track span {
+  flex: none;
+  padding-right: 180px;
+  color: #ff3434;
+  font: italic 1000 clamp(68px, 5.35vw, 112px)/0.96 "Microsoft YaHei UI", "SimHei", sans-serif;
+  letter-spacing: 0.005em;
+  white-space: nowrap;
+  -webkit-text-stroke: 0.7px rgba(255, 130, 130, 0.82);
+  text-shadow: 0 0 18px rgba(255, 42, 42, 0.45), 2px 2px 0 rgba(75, 0, 0, 0.82);
+}
+
+.live-typhoon-outlook > b {
+  display: none;
+}
+
+@media (max-width: 1500px) {
+  .live-typhoon-outlook {
+    right: 250px;
+    grid-template-columns: 250px minmax(0, 1fr);
+  }
+
+  .live-typhoon-outlook-heading {
+    gap: 10px;
+    padding: 14px;
+  }
+
+  .live-typhoon-outlook-time span {
+    display: none;
+  }
+}
+
+.live-typhoon-outlook.is-pending {
+  border-color: rgba(255, 176, 0, 0.62);
+}
+
+.typhoon-outlook-map-marker {
+  position: relative;
+  z-index: 8;
+  display: grid;
+  justify-items: center;
+  min-width: 176px;
+  color: #fff;
+  filter: drop-shadow(0 5px 9px rgba(0, 0, 0, 0.72));
+  pointer-events: none;
+}
+
+.typhoon-outlook-map-marker > i {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 38px;
+  height: 38px;
+  color: #fff;
+  background: #ef2f2f;
+  border: 2px solid rgba(255, 255, 255, 0.94);
+  border-radius: 50%;
+  box-shadow: 0 0 0 5px rgba(239, 47, 47, 0.18), 0 0 24px rgba(239, 47, 47, 0.8);
+  font: 1000 27px/1 "Arial Black", sans-serif;
+  animation: outlookMarkerPulse 1.8s ease-in-out infinite;
+}
+
+.typhoon-outlook-map-marker > i::after {
+  content: "";
+  position: absolute;
+  bottom: -8px;
+  left: 50%;
+  border-width: 9px 7px 0;
+  border-style: solid;
+  border-color: #ef2f2f transparent transparent;
+  transform: translateX(-50%);
+}
+
+.typhoon-outlook-map-marker > span {
+  display: grid;
+  gap: 3px;
+  margin-top: 8px;
+  padding: 6px 9px;
+  color: #fff;
+  background: rgba(22, 3, 4, 0.9);
+  border: 1px solid rgba(255, 59, 50, 0.78);
+  font: 900 12px/1 "Microsoft YaHei UI", sans-serif;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.typhoon-outlook-map-marker small {
+  color: rgba(255, 255, 255, 0.64);
+  font: 700 9px/1.1 "Bahnschrift", Consolas, monospace;
+}
+
+@keyframes liveOutlookTicker {
+  to { transform: translateX(-50%); }
+}
+
+@keyframes outlookMarkerPulse {
+  50% { box-shadow: 0 0 0 11px rgba(239, 47, 47, 0.05), 0 0 32px rgba(239, 47, 47, 0.96); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-typhoon-outlook-track,
+  .typhoon-outlook-map-marker > i {
+    animation: none;
+  }
+}
+
 .live-forecast-overlay {
   position: absolute;
   z-index: 11;

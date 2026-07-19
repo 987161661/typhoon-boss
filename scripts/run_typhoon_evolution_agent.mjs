@@ -9,6 +9,13 @@ import {
   validateLegacyTyphoonNarrative,
   validateNationalSituationBroadcast
 } from "../lib/agent/nationalSituationBroadcast.mjs";
+import {
+  buildTropicalDisturbanceOutlook,
+  CPC_WEEK2_TC_KML_URL,
+  CPC_WEEK3_TC_KML_URL,
+  JTWC_WESTERN_PACIFIC_ADVISORY_URL,
+  renderTropicalDisturbanceReport
+} from "../lib/agent/tropicalDisturbanceOutlook.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const runtimeDir = path.join(root, ".runtime");
@@ -75,6 +82,9 @@ async function main() {
   const nationalPrompt = buildNationalSituationBroadcastPrompt(nationalSnapshot, { now: now.toISOString() });
   const trackSnapshot = await readJson(path.join(runtimeDir, "track-snapshot.json"), null);
   const changeSet = buildChangeSet(previousState.snapshotByStormId, facts.storms);
+  const disturbanceOutlook = facts.storms.length === 0
+    ? await collectTropicalDisturbanceOutlook(now)
+    : null;
   const lifecycleEvents = reconcileLifecycleEvents(
     previousState.lifecycleEvents,
     previousState.snapshotByStormId,
@@ -84,11 +94,16 @@ async function main() {
   );
   let analysis;
   let analysisMode = "MiniMax M3 智能汇总";
-  try {
-    analysis = await requestAnalysis(apiKey, facts, changeSet, previousState.lastAnalysis ?? null);
-  } catch (error) {
-    analysis = buildDeterministicAnalysis(facts, changeSet);
-    analysisMode = `规则化保底汇总（MiniMax 本轮异常：${error instanceof Error ? error.message : "未知错误"}）`;
+  if (disturbanceOutlook) {
+    analysis = renderTropicalDisturbanceReport(disturbanceOutlook);
+    analysisMode = "JTWC 近时扰动 + NOAA CPC 延伸期概率规则化研判";
+  } else {
+    try {
+      analysis = await requestAnalysis(apiKey, facts, changeSet, previousState.lastAnalysis ?? null);
+    } catch (error) {
+      analysis = buildDeterministicAnalysis(facts, changeSet);
+      analysisMode = `规则化保底汇总（MiniMax 本轮异常：${error instanceof Error ? error.message : "未知错误"}）`;
+    }
   }
   let nationalBroadcast;
   let nationalBroadcastMode = "MiniMax M3 结构化全国态势播报";
@@ -100,14 +115,15 @@ async function main() {
   }
   const history = buildHistory(previousState.history, facts, changeSet, analysis, now);
   const nextState = {
-    version: 4,
+    version: 5,
     updatedAt: now.toISOString(),
     snapshotByStormId: Object.fromEntries(facts.storms.map((storm) => [storm.id, compactSnapshot(storm)])),
     cityWind,
     history,
     lifecycleEvents,
     lastAnalysis: analysis,
-    lastNationalBroadcast: nationalBroadcast
+    lastNationalBroadcast: nationalBroadcast,
+    lastDisturbanceOutlook: disturbanceOutlook
   };
 
   await mkdir(runtimeDir, { recursive: true });
@@ -152,6 +168,19 @@ async function collectTyphoonFacts(now) {
     sourceUrl: `${apiBase}/TyphoonList/${year}`,
     storms: storms.filter(Boolean)
   };
+}
+
+async function collectTropicalDisturbanceOutlook(now) {
+  const [jtwc, week2, week3] = await Promise.allSettled([
+    fetchText(JTWC_WESTERN_PACIFIC_ADVISORY_URL, "JTWC 西北太平洋扰动公报"),
+    fetchText(CPC_WEEK2_TC_KML_URL, "NOAA CPC 第2周热带气旋生成概率"),
+    fetchText(CPC_WEEK3_TC_KML_URL, "NOAA CPC 第3周热带气旋生成概率")
+  ]);
+  return buildTropicalDisturbanceOutlook({
+    jtwcAdvisory: jtwc.status === "fulfilled" ? jtwc.value : null,
+    cpcWeek2Kml: week2.status === "fulfilled" ? week2.value : null,
+    cpcWeek3Kml: week3.status === "fulfilled" ? week3.value : null
+  }, { now });
 }
 
 async function collectCityWind(previousCityWind, now) {
@@ -526,9 +555,7 @@ function renderReport(
 - 输出模式：${nationalBroadcastMode}
 ${renderNationalBroadcast(nationalBroadcast)}
 
-## 最新演进判断
-
-${analysis}
+${facts.storms.length ? `## 最新演进判断\n\n${analysis}` : analysis}
 
 ## \u53f0\u98ce\u751f\u547d\u5468\u671f\u8f6c\u573a\u4e8b\u5b9e
 
@@ -557,6 +584,8 @@ ${historyRows}
 ## 口径与限制
 
 - 本文的路径、风速、气压和风圈均来自公开路径接口；M3 只负责基于这些事实进行汇总，不替代官方预警。
+- 无活动台风时，近时胚胎位置与定性等级来自 JTWC 西北太平洋显著天气公报；第2周和第3周数值概率来自 NOAA CPC 热带气旋生成概率 KML。
+- JTWC LOW/MEDIUM/HIGH 不会被擅自换算成百分比；CPC 20/40/60% 是区域周期概率，不是单个胚胎的定点概率。
 - 城市风力来自 MET Norway Locationforecast 2.0 全球预报的代表坐标 10 米风场；这是模式数据，不可替代当地气象台站实况与预警。
 - 城市风场获取失败时保留最后有效值并标注“延迟保护”，不会把旧数据伪装成最新时次。
 - 当上游未发布新实况点时，本文会保留最新状态并明确标注“无新增实况”，不会伪造连续变化。
@@ -641,6 +670,15 @@ async function fetchJson(url) {
   return response.json();
 }
 
+async function fetchText(url, label) {
+  const response = await fetch(url, {
+    headers: { Accept: "text/plain, application/vnd.google-earth.kml+xml, application/xml", "Cache-Control": "no-cache", "User-Agent": "TyphoonBossRadarEvolutionAgent/2.0" },
+    cache: "no-store"
+  });
+  if (!response.ok) throw new Error(`${label}获取失败：${response.status} ${url}`);
+  return response.text();
+}
+
 function loadEnvFile(filePath) {
   try {
     const contents = requireText(filePath);
@@ -676,7 +714,7 @@ async function writeAtomicText(filePath, value) {
 }
 
 function emptyState() {
-  return { version: 2, snapshotByStormId: {}, cityWind: null, history: [], lastAnalysis: null };
+  return { version: 5, snapshotByStormId: {}, cityWind: null, history: [], lastAnalysis: null, lastDisturbanceOutlook: null };
 }
 
 main().catch((error) => {

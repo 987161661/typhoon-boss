@@ -26,6 +26,7 @@ type SettingsStatus = "loading" | "saved" | "saving" | "error";
 export function LiveOperatorControls({
   hostVisible,
   onToggleHost,
+  onToggleTyphoonOutlook,
   onSendChat,
   settings,
   settingsStatus,
@@ -33,6 +34,7 @@ export function LiveOperatorControls({
 }: {
   hostVisible: boolean;
   onToggleHost: () => void;
+  onToggleTyphoonOutlook: () => void;
   onSendChat: (text: string) => "city" | "host";
   settings: LiveControlSettings;
   settingsStatus: SettingsStatus;
@@ -54,6 +56,7 @@ export function LiveOperatorControls({
       analysisDurationSeconds: draft.analysisDurationSeconds,
       evolutionAgentEnabled: draft.evolutionAgentEnabled,
       evolutionAgentIntervalMinutes: draft.evolutionAgentIntervalMinutes,
+      typhoonOutlookVisible: draft.typhoonOutlookVisible,
       cityReportEffectsEnabled: draft.cityReportEffectsEnabled,
       cityReportEffectsVolume: draft.cityReportEffectsVolume
     });
@@ -89,6 +92,11 @@ export function LiveOperatorControls({
               {hostVisible ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
               <span>{hostVisible ? "关闭数字人窗口" : "打开数字人窗口"}</span>
               <b>{hostVisible ? "ON" : "OFF"}</b>
+            </button>
+            <button type="button" onClick={onToggleTyphoonOutlook} aria-pressed={settings.typhoonOutlookVisible}>
+              {settings.typhoonOutlookVisible ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+              <span>{settings.typhoonOutlookVisible ? "关闭台风预报窗" : "打开台风预报窗"}</span>
+              <b>{settings.typhoonOutlookVisible ? "ON" : "OFF"}</b>
             </button>
             <Link href="/dex">
               <BookOpen aria-hidden="true" />
@@ -186,6 +194,27 @@ export function LiveOperatorControls({
                   <small>秒</small>
                 </label>
               </div>
+            </fieldset>
+
+            <fieldset>
+              <legend>台风预报窗</legend>
+              <label className="live-setting-switch">
+                <span>
+                  <b>显示台风预报窗</b>
+                  <small>同步显示滚动字幕与概率区域中心标记</small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={draft.typhoonOutlookVisible}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      typhoonOutlookVisible: event.target.checked
+                    }))
+                  }
+                />
+                <i aria-hidden="true" />
+              </label>
             </fieldset>
 
             <fieldset>

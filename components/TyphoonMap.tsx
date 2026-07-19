@@ -94,6 +94,8 @@ import {
   LiveTopBar,
   type LiveDeckView
 } from "./LiveBroadcastView";
+import { LiveTyphoonOutlookTicker } from "./LiveTyphoonOutlookTicker";
+import { useTyphoonEvolutionOutlook } from "./useTyphoonEvolutionOutlook";
 
 const MAP_STYLE = {
   version: 8,
@@ -247,6 +249,7 @@ const DEFAULT_ENVIRONMENT_LAYERS: EnvironmentLayerToggles = {
 export function TyphoonMap({
   view = "standard",
   liveDeck = "briefing",
+  typhoonOutlookVisible = false,
   cityAttention = null,
   cityAttentionLayout = "center",
   onCityAttentionAnchor,
@@ -254,12 +257,14 @@ export function TyphoonMap({
 }: {
   view?: RadarView;
   liveDeck?: LiveDeckView;
+  typhoonOutlookVisible?: boolean;
   cityAttention?: CityAttention | null;
   cityAttentionLayout?: "center" | "broadcast-corridor";
   onCityAttentionAnchor?: (anchor: CityAttentionAnchor | null) => void;
   onSceneReady?: () => void;
 }) {
   const isLiveView = view === "live";
+  const typhoonOutlook = useTyphoonEvolutionOutlook(isLiveView && typhoonOutlookVisible);
   const secondsToSwitch = 0;
   const liveDeckCycle = 0;
   const [storms, setStorms] = useState<Storm[]>([]);
@@ -334,6 +339,7 @@ export function TyphoonMap({
   const forecastCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const markerRef = useRef<maplibregl.Marker | null>(null);
   const gfsCenterMarkerRefs = useRef<Map<string, maplibregl.Marker>>(new Map());
+  const typhoonOutlookMarkerRefs = useRef<Map<string, maplibregl.Marker>>(new Map());
   const fleetMarkerRefs = useRef<Map<string, maplibregl.Marker>>(new Map());
   const cityAttentionMarkerRef = useRef<maplibregl.Marker | null>(null);
   const cityAttentionElementRef = useRef<HTMLDivElement | null>(null);
@@ -924,6 +930,29 @@ export function TyphoonMap({
   }, [gfsAnalysisCenterMarkers, mapReady]);
 
   useEffect(() => {
+    const markers = typhoonOutlookMarkerRefs.current;
+    for (const marker of markers.values()) marker.remove();
+    markers.clear();
+    const map = mapRef.current;
+    if (!mapReady || !map || !isLiveView || !typhoonOutlookVisible) return;
+    for (const model of typhoonOutlook.markers) {
+      const element = document.createElement("div");
+      element.className = "typhoon-outlook-map-marker";
+      element.setAttribute("role", "img");
+      element.setAttribute("aria-label", `${model.label}，${model.detail}`);
+      element.innerHTML = `<i aria-hidden="true">!</i><span>${model.label}<small>${model.detail}</small></span>`;
+      const marker = new maplibregl.Marker({ element, anchor: "bottom" })
+        .setLngLat([model.longitude, model.latitude])
+        .addTo(map);
+      markers.set(model.id, marker);
+    }
+    return () => {
+      for (const marker of markers.values()) marker.remove();
+      markers.clear();
+    };
+  }, [isLiveView, mapReady, typhoonOutlook.markers, typhoonOutlookVisible]);
+
+  useEffect(() => {
     const map = mapRef.current;
     if (!map || !mapReady) return;
     syncRegionalSatelliteLayer(map, satelliteLayer, environmentLayers.satellite);
@@ -1109,6 +1138,7 @@ export function TyphoonMap({
               secondsToSwitch={secondsToSwitch}
               cycle={liveDeckCycle}
             />
+            {typhoonOutlookVisible ? <LiveTyphoonOutlookTicker model={typhoonOutlook.view} /> : null}
             {liveDeck === "analysis" ? <LiveForecastOverlay model={liveModel} /> : null}
           </>
         ) : (

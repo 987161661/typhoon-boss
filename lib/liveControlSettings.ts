@@ -5,6 +5,7 @@ export type LiveControlSettings = {
   analysisDurationSeconds: number;
   evolutionAgentEnabled: boolean;
   evolutionAgentIntervalMinutes: number;
+  typhoonOutlookVisible: boolean;
   cityReportEffectsEnabled: boolean;
   cityReportEffectsVolume: LiveCityReportEffectsVolume;
   updatedAt?: string;
@@ -21,6 +22,7 @@ export const DEFAULT_LIVE_CONTROL_SETTINGS: LiveControlSettings = {
   // configured document model. It must be explicitly enabled by an operator.
   evolutionAgentEnabled: false,
   evolutionAgentIntervalMinutes: 30,
+  typhoonOutlookVisible: true,
   cityReportEffectsEnabled: true,
   cityReportEffectsVolume: "standard"
 };
@@ -64,6 +66,10 @@ export function normalizeLiveControlSettings(
       5,
       360
     ),
+    typhoonOutlookVisible:
+      typeof value?.typhoonOutlookVisible === "boolean"
+        ? value.typhoonOutlookVisible
+        : current.typhoonOutlookVisible,
     cityReportEffectsEnabled:
       typeof value?.cityReportEffectsEnabled === "boolean"
         ? value.cityReportEffectsEnabled

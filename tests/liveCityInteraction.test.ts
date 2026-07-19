@@ -106,6 +106,21 @@ test("city interaction only accepts a bounded Chinese @city mention", () => {
   assert.equal(extractChinaCityMention("@杭州今天会不会下雨"), null);
 });
 
+test("city mention normalization accepts natural full-width and inline questions", () => {
+  assert.equal(extractChinaCityMention("\uff20\u56db\u5e73"), "\u56db\u5e73");
+  assert.equal(extractChinaCityMention("@ \u56db\u5e73"), "\u56db\u5e73");
+  assert.equal(
+    extractChinaCityMention("@\u56db\u5e73\u5929\u6c14\u600e\u4e48\u6837"),
+    "\u56db\u5e73",
+  );
+  assert.equal(
+    extractChinaCityMention(
+      "\u8bf7\u770b@\u5e7f\u4e1c\u7701\u5e7f\u5dde\u5e02\u6218\u51b5",
+    ),
+    "\u5e7f\u4e1c\u7701\u5e7f\u5dde\u5e02",
+  );
+});
+
 test("city mentions retain administrative context for live-room resolution", () => {
   assert.equal(extractChinaCityMention("@吉林市"), "吉林市");
   assert.equal(extractChinaCityMention("@广东省广州市"), "广东省广州市");

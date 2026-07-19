@@ -53,6 +53,40 @@ function Test-TyphoonLiveAssets {
   }
 }
 
+function Wait-TyphoonHealth {
+  param(
+    [string]$BaseUrl,
+    [int]$TimeoutSeconds = 45,
+    [int]$RequestTimeoutSeconds = 6
+  )
+
+  $healthUrl = "$BaseUrl/api/health"
+  $stopwatch = [Diagnostics.Stopwatch]::StartNew()
+  $lastFailure = 'no response received'
+
+  # A cold Next.js dev server compiles API routes on their first request. That
+  # compile can outlive one HTTP request timeout while continuing successfully
+  # in the server, so retry within one bounded startup budget instead of turning
+  # the first timeout into a false launcher failure.
+  while ($stopwatch.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
+    try {
+      $health = Invoke-RestMethod -Uri $healthUrl -TimeoutSec $RequestTimeoutSeconds
+      if ($health.status -eq 'ok') {
+        return $health
+      }
+      $lastFailure = "status=$($health.status); storms=$($health.track.stormCount)"
+    } catch {
+      $lastFailure = $_.Exception.Message
+    }
+
+    if ($stopwatch.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
+      Start-Sleep -Milliseconds 500
+    }
+  }
+
+  throw "Typhoon data connection did not become ready within $TimeoutSeconds seconds. Last result: $lastFailure"
+}
+
 if (-not $NoLinglan) {
   if (-not $linglanLauncher) {
     throw "Linglan runtime launcher was not found. Expected one of: $linglanControlRoomLauncher; $linglanLegacyLauncher"
@@ -113,10 +147,7 @@ if (-not $liveReady) {
   throw "Typhoon live page did not become ready: $liveUrl"
 }
 
-$health = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/api/health" -TimeoutSec 8
-if ($health.status -ne 'ok') {
-  throw "Typhoon data connection is not ready. status=$($health.status); storms=$($health.track.stormCount)"
-}
+$health = Wait-TyphoonHealth -BaseUrl "http://127.0.0.1:$Port"
 
 # The one-click live workflow is an operational session: enable the evolution
 # agent explicitly after the web API is healthy. A manual Next start remains

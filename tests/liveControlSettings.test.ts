@@ -16,6 +16,11 @@ test("old live settings receive safe city-report effect defaults without a migra
   });
   assert.equal(normalized.cityReportEffectsEnabled, true);
   assert.equal(normalized.cityReportEffectsVolume, "standard");
+  assert.equal(normalized.typhoonOutlookVisible, true);
+});
+
+test("typhoon outlook broadcast visibility persists through normalization", () => {
+  assert.equal(normalizeLiveControlSettings({ typhoonOutlookVisible: false }).typhoonOutlookVisible, false);
 });
 
 test("city-report sound switch and three volume levels normalize predictably", () => {

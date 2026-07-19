@@ -179,7 +179,11 @@ const MAX_COMMENT_LENGTH = 500;
 // such as @中国北京 or @广东省广州市. Keep administrative suffixes: “市”
 // distinguishes a city from a same-name village in the resolver.
 const MAX_CITY_LENGTH = 16;
-const CHINESE_CITY_MENTION = /@([\u3400-\u9fff]{2,16})(?=$|[\s,，。！？!？、:：;；#])/;
+const CITY_MENTION_INTENT =
+  "天气|战况|气象|下雨|降雨|温度|几度|冷不冷|热不热";
+const CHINESE_CITY_MENTION = new RegExp(
+  `@\\s*([\\u3400-\\u9fff]{2,16}?)(?=$|[\\s,，。！？!？、:：;；#]|(?:${CITY_MENTION_INTENT}))`,
+);
 
 export function isHostLiveComment(value: unknown): value is HostLiveComment {
   if (!value || typeof value !== "object") return false;
@@ -223,7 +227,7 @@ export function isHostViewerRelationEvent(value: unknown): value is HostViewerRe
 }
 
 export function extractChinaCityMention(text: string): string | null {
-  const match = text.trim().match(CHINESE_CITY_MENTION);
+  const match = text.trim().normalize("NFKC").match(CHINESE_CITY_MENTION);
   if (!match) return null;
   const city = match[1].trim();
   // Without punctuation Chinese chat text has no word boundary. Long mentions

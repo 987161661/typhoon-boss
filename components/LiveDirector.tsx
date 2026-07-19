@@ -259,6 +259,7 @@ export function LiveDirector() {
         <TyphoonMap
           view="live"
           liveDeck={activeScene}
+          typhoonOutlookVisible={controlSettings.typhoonOutlookVisible}
           cityAttention={cityAttention}
           cityAttentionLayout="broadcast-corridor"
           onCityAttentionAnchor={setCityAttentionAnchor}
@@ -292,6 +293,9 @@ export function LiveDirector() {
       <LiveOperatorControls
         hostVisible={hostVisible}
         onToggleHost={() => setHostVisible((current) => !current)}
+        onToggleTyphoonOutlook={() => {
+          void saveControlSettings({ typhoonOutlookVisible: !controlSettings.typhoonOutlookVisible });
+        }}
         onSendChat={handleRadarChat}
         settings={controlSettings}
         settingsStatus={settingsStatus}
