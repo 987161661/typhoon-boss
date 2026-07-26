@@ -33,7 +33,12 @@ export function useViewportWindField({
 
     const load = async () => {
       const requiredBounds = requiredBoundsForMap?.(map);
-      if (requiredBounds && windCoverageContains(fieldRef.current?.coverage, requiredBounds)) return;
+      if (
+        requiredBounds
+        && fieldRef.current?.status === "available"
+        && !fieldRef.current.isStale
+        && windCoverageContains(fieldRef.current.coverage, requiredBounds)
+      ) return;
       if (requiredBounds && windCoverageContains(requestedCoverage, requiredBounds)) return;
 
       const bounds = boundsForMap(map);

@@ -10840,8 +10840,8 @@ a:focus-visible {
 }
 
 /* A live city report owns both side stages. Keep the map and its city lock
-   fully legible while the normal operator chrome quietly clears the towers. */
-.live-director[data-city-broadcast-active="true"] .digital-host-window,
+   fully legible while operator controls clear the stage. The digital-host
+   iframe must remain visible: Chromium freezes its speech runtime otherwise. */
 .live-director[data-city-broadcast-active="true"] .live-command-drawer,
 .live-director[data-city-broadcast-active="true"] .live-chat-dock,
 .live-director[data-city-broadcast-active="true"] .live-route-legend,

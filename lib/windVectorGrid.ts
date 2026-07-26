@@ -1,5 +1,9 @@
 import type { WindFieldPayload, WindFieldPoint } from "@/lib/types";
 
+export function normalizeWindDirection(direction: number) {
+  return ((direction % 360) + 360) % 360;
+}
+
 export interface WindVectorSample {
   u: number;
   v: number;
@@ -192,7 +196,14 @@ function bilinearWindVector(index: WindVectorIndex, lon: number, lat: number): W
     northeast[field] * tx * ty;
   const u = blend("u");
   const v = blend("v");
-  return { lon, lat, u, v, speed: Math.hypot(u, v), direction: (Math.atan2(-u, -v) * 180) / Math.PI };
+  return {
+    lon,
+    lat,
+    u,
+    v,
+    speed: Math.hypot(u, v),
+    direction: normalizeWindDirection((Math.atan2(-u, -v) * 180) / Math.PI)
+  };
 }
 
 function containsIndexPoint(index: WindVectorIndex, lon: number, lat: number) {

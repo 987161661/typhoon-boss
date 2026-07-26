@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import sharp from "sharp";
+import { writeFileAtomic } from "@/lib/atomicFile";
 import { retainNewestWindField } from "@/lib/radarDataContinuity";
 import { makeQuadrantWindPolygon } from "@/lib/meteorology";
 import {
@@ -13,6 +14,8 @@ import {
 } from "@/lib/satelliteGeoreference";
 import { getCurrentStorms } from "@/lib/realTyphoonData";
 import { findCyclonicVorticityCenter, resolveWindAnalysisReference } from "@/lib/windFieldDiagnostics";
+import { isWindFieldSourceStale, isWindFieldSourceUsable } from "@/lib/windFieldFreshness";
+import { normalizeWindDirection } from "@/lib/windVectorGrid";
 import type {
   ImpactAreaPayload,
   RadarMosaicLayerPayload,
@@ -67,6 +70,7 @@ const PERSISTED_WIND_FIELD_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const OPEN_METEO_RATE_LIMIT_COOLDOWN_MS = 10 * 60 * 1000;
 const OPEN_METEO_REQUEST_SPACING_MS = 900;
 const WIND_FIELD_CACHE_DIR = join(process.cwd(), ".runtime", "wind-field");
+const LATEST_DIRECT_WIND_FIELD_PATH = join(WIND_FIELD_CACHE_DIR, "latest-direct-gfs.json");
 const SATELLITE_IMAGE_CACHE_DIR = join(process.cwd(), ".runtime", "satellite-images");
 // NOAA imagery occasionally takes several seconds to start transferring even
 // when the product is healthy. Keep this outside the core radar request path,
@@ -424,13 +428,10 @@ async function fetchRemoteBytes(remoteUrl: string, allowBinaryImage = false) {
 }
 
 async function persistLastGoodSatelliteImage(sourceKey: string, bytes: Uint8Array, fetchedAt: string) {
-  await mkdir(SATELLITE_IMAGE_CACHE_DIR, { recursive: true });
   const imagePath = join(SATELLITE_IMAGE_CACHE_DIR, `${sourceKey}.png`);
   const metadataPath = join(SATELLITE_IMAGE_CACHE_DIR, `${sourceKey}.json`);
-  await writeFile(`${imagePath}.tmp`, bytes);
-  await rename(`${imagePath}.tmp`, imagePath);
-  await writeFile(`${metadataPath}.tmp`, JSON.stringify({ fetchedAt }), "utf8");
-  await rename(`${metadataPath}.tmp`, metadataPath);
+  await writeFileAtomic(imagePath, bytes);
+  await writeFileAtomic(metadataPath, JSON.stringify({ fetchedAt }));
 }
 
 async function readLastGoodSatelliteImage(sourceKey: string): Promise<CachedSatelliteImage | null> {
@@ -534,27 +535,46 @@ export async function getWindField(stormId?: string | null, requestedBounds?: Wi
   }
 
   const request = (async () => {
-    const persisted = shouldPersistWindField(bounds, sampling) ? await readPersistedWindField(cacheKey) : null;
-    const lastSuccess = windFieldLastSuccess.get(cacheKey) ?? persisted;
-    if (persisted && !windFieldLastSuccess.has(cacheKey)) {
-      windFieldLastSuccess.set(cacheKey, persisted);
+    const [persisted, persistedDirect] = await Promise.all([
+      shouldPersistWindField(bounds, sampling) ? readPersistedWindField(cacheKey) : Promise.resolve(null),
+      readLatestDirectWindField()
+    ]);
+    const retained = newestUsableWindFieldForBounds([
+      windFieldLastSuccess.get(cacheKey),
+      persisted,
+      persistedDirect
+    ], bounds);
+    // Persisted data is a short continuity bridge, not permission to move the
+    // live model clock backwards after a newer frame has already existed.
+    const lastSuccess = retained && isWindFieldSourceUsable(retained.updatedAt)
+      ? retained
+      : null;
+    if (lastSuccess && !windFieldLastSuccess.has(cacheKey)) {
+      windFieldLastSuccess.set(cacheKey, lastSuccess);
     }
 
     const payload = stripWindFieldContext(await loadWindField(bounds, sampling));
     if (payload.status === "available" && payload.points.length > 0) {
+      const sourceIsStale = isWindFieldSourceStale(payload.updatedAt);
       const freshPayload = {
         ...payload,
-        isStale: false,
-        lastSuccessfulAt: payload.updatedAt
+        isStale: sourceIsStale,
+        lastSuccessfulAt: payload.updatedAt,
+        reason: sourceIsStale
+          ? `GFS 分析场时次 ${payload.updatedAt} 已超过 12 小时；保留画面但按延迟资料标注。`
+          : payload.reason
       } satisfies WindFieldPayload;
-      const acceptedPayload = retainNewestWindField(freshPayload, lastSuccess);
+      const acceptedPayload = retainDirectWindFieldAcrossFallback(freshPayload, lastSuccess, bounds);
       windFieldLastSuccess.set(cacheKey, acceptedPayload);
       windFieldCache.set(cacheKey, {
-        expiresAt: Date.now() + windFieldCacheTtl(bounds),
+        expiresAt: Date.now() + (sourceIsStale ? DEGRADED_WIND_FIELD_RETRY_MS : windFieldCacheTtl(bounds)),
         payload: acceptedPayload
       });
       if (shouldPersistWindField(bounds, sampling)) {
         void persistWindField(cacheKey, acceptedPayload);
+      }
+      if (acceptedPayload.source === NCEP_GFS_SOURCE) {
+        void persistLatestDirectWindField(acceptedPayload);
       }
       return acceptedPayload;
     }
@@ -1031,6 +1051,9 @@ async function loadNcepGfsWindField(
         throw new Error("response was not GRIB2");
       }
       const decoded = await decodeNcepGfsWind(bytes, cycle, bounds);
+      if (!isWindFieldSourceUsable(decoded.updatedAt)) {
+        throw new Error(`analysis cycle ${decoded.updatedAt} is older than the 12-hour live window`);
+      }
       return {
         source: NCEP_GFS_SOURCE,
         updatedAt: decoded.updatedAt,
@@ -1233,7 +1256,11 @@ function parseNcepWindCsv(csv: string) {
       const point = indexed.get(windSampleKey(longitudes[lonIndex], latitudes[latIndex]));
       if (!point) continue;
       const speed = Math.hypot(point.u, point.v);
-      points.push({ ...point, speed, direction: (Math.atan2(-point.u, -point.v) * 180) / Math.PI });
+      points.push({
+        ...point,
+        speed,
+        direction: normalizeWindDirection((Math.atan2(-point.u, -point.v) * 180) / Math.PI)
+      });
     }
   }
   if (points.length < 100) throw new Error(`NCEP display grid retained only ${points.length} cells`);
@@ -1462,16 +1489,106 @@ async function readPersistedWindField(cacheKey: string): Promise<WindFieldPayloa
   }
 }
 
+async function readLatestDirectWindField(): Promise<WindFieldPayload | null> {
+  try {
+    const raw = JSON.parse(await readFile(LATEST_DIRECT_WIND_FIELD_PATH, "utf8")) as {
+      version?: number;
+      payload?: WindFieldPayload;
+    };
+    if (
+      raw.version !== 1
+      || raw.payload?.status !== "available"
+      || raw.payload.source !== NCEP_GFS_SOURCE
+      || raw.payload.points.length < 100
+      || !isWindFieldSourceUsable(raw.payload.updatedAt)
+    ) return null;
+    return stripWindFieldContext(raw.payload);
+  } catch {
+    return null;
+  }
+}
+
+function newestUsableWindFieldForBounds(
+  candidates: Array<WindFieldPayload | null | undefined>,
+  bounds: WindFieldBounds | null
+) {
+  return candidates
+    .filter((payload): payload is WindFieldPayload => Boolean(
+      payload
+      && payload.status === "available"
+      && payload.points.length > 0
+      && isWindFieldSourceUsable(payload.updatedAt)
+      && windFieldCovers(payload.coverage, bounds)
+    ))
+    .sort((left, right) => {
+      const sourcePriority = Number(right.source === NCEP_GFS_SOURCE) - Number(left.source === NCEP_GFS_SOURCE);
+      if (sourcePriority !== 0) return sourcePriority;
+      return Date.parse(right.updatedAt) - Date.parse(left.updatedAt);
+    })[0] ?? null;
+}
+
+function retainDirectWindFieldAcrossFallback(
+  next: WindFieldPayload,
+  previous: WindFieldPayload | null,
+  bounds: WindFieldBounds | null
+) {
+  if (
+    previous?.source === NCEP_GFS_SOURCE
+    && next.source !== NCEP_GFS_SOURCE
+    && isWindFieldSourceUsable(previous.updatedAt)
+    && windFieldCovers(previous.coverage, bounds)
+  ) {
+    return { ...previous, reason: next.reason ?? previous.reason };
+  }
+  return retainNewestWindField(next, previous);
+}
+
+function windFieldCovers(
+  coverage: WindFieldBounds | null | undefined,
+  required: WindFieldBounds | null
+) {
+  if (!required) return true;
+  if (!coverage) return false;
+  const epsilon = 0.001;
+  return coverage.west <= required.west + epsilon
+    && coverage.east >= required.east - epsilon
+    && coverage.south <= required.south + epsilon
+    && coverage.north >= required.north - epsilon;
+}
+
 async function persistWindField(cacheKey: string, payload: WindFieldPayload) {
   try {
-    await mkdir(WIND_FIELD_CACHE_DIR, { recursive: true });
     const target = persistedWindFieldPath(cacheKey);
-    const temporary = `${target}.${process.pid}.${Date.now()}.tmp`;
-    await writeFile(temporary, JSON.stringify({ version: 1, savedAt: new Date().toISOString(), payload }), "utf8");
-    await rename(temporary, target);
+    await writeFileAtomic(target, JSON.stringify({ version: 1, savedAt: new Date().toISOString(), payload }));
   } catch (error) {
     console.warn("[wind-field] failed to persist last successful field", error);
   }
+}
+
+async function persistLatestDirectWindField(payload: WindFieldPayload) {
+  try {
+    const current = await readLatestDirectWindField();
+    const currentTime = Date.parse(current?.updatedAt ?? "");
+    const nextTime = Date.parse(payload.updatedAt);
+    const accepted = current
+      && currentTime === nextTime
+      && (current.points.length > payload.points.length
+        || windFieldCoverageArea(current.coverage) > windFieldCoverageArea(payload.coverage))
+      ? current
+      : retainNewestWindField(payload, current);
+    await writeFileAtomic(
+      LATEST_DIRECT_WIND_FIELD_PATH,
+      JSON.stringify({ version: 1, savedAt: new Date().toISOString(), payload: accepted })
+    );
+  } catch (error) {
+    console.warn("[wind-field] failed to persist latest direct GFS field", error);
+  }
+}
+
+function windFieldCoverageArea(bounds: WindFieldBounds | null | undefined) {
+  return bounds
+    ? Math.max(0, bounds.east - bounds.west) * Math.max(0, bounds.north - bounds.south)
+    : 0;
 }
 
 function delay(ms: number) {

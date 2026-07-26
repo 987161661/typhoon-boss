@@ -11,6 +11,7 @@ const EVENT_NAMES = new Set([
   "bridge_fallback_accepted",
   "bridge_fallback_failed",
   "host_frame_watchdog_reload",
+  "host_frame_runtime_stall_reload",
   "fact_validation_rewrite",
   "sanitizer_failure",
   "tts_rate_limit"

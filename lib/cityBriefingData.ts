@@ -1,6 +1,7 @@
 import { createPrivateKey, sign } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { writeFileAtomic } from "@/lib/atomicFile";
 import { narrateCitySituation } from "@/lib/cityNarration";
 import { buildCityBattleReport } from "@/lib/cityBattleReport";
 import { buildCitySituation, type CityObservedAnomaly, type CitySituation } from "@/lib/citySituationCore";
@@ -1239,10 +1240,7 @@ function selectNationalCityLocationId(line: string): string[] {
 }
 
 async function writeJsonAtomic(filePath: string, value: unknown) {
-  await mkdir(dirname(filePath), { recursive: true });
-  const temp = `${filePath}.${process.pid}.tmp`;
-  await writeFile(temp, `${JSON.stringify(value)}\n`, "utf8");
-  await rename(temp, filePath);
+  await writeFileAtomic(filePath, `${JSON.stringify(value)}\n`);
 }
 
 async function loadQWeatherJwtSettings() {

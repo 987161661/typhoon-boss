@@ -107,6 +107,11 @@ export function smoothStep(edge0: number, edge1: number, value: number) {
   return progress * progress * (3 - 2 * progress);
 }
 
+export function windJourneyBudgetKm(targetTrailKm: number, phase: number) {
+  const safeTrailKm = Math.max(0, targetTrailKm);
+  return Math.max(30, safeTrailKm * lerp(2.2, 4, clamp(phase, 0, 1)));
+}
+
 function lerp(start: number, end: number, progress: number) {
   return start + (end - start) * progress;
 }

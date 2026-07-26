@@ -20,8 +20,10 @@ import {
   type HkoTyphoonTrack
 } from "@/lib/hkoTyphoonTrack";
 import { distanceBetweenKm, distanceToPathKm, maxWindRadius, parseBeijingTime, parseWindRadii, toBeijingIso } from "@/lib/meteorology";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { writeFileAtomic } from "@/lib/atomicFile";
+import { resolveTrackSnapshotStatus } from "@/lib/trackSnapshotStatus";
 
 const GDACS_SEARCH_API = "https://gdacs.org/gdacsapi/api/events/geteventlist/SEARCH";
 // The radar client polls every 10 seconds. Do not keep a second server-side
@@ -209,7 +211,11 @@ export async function getTrackSnapshot(): Promise<TrackSnapshot> {
       source: lastTrackSource,
       observedAt: storms[0]?.updatedAt ?? null,
       fetchedAt,
-      status: lastTrackWarning ? "stale" : "fresh",
+      status: resolveTrackSnapshotStatus({
+        warning: lastTrackWarning,
+        relayedOfficialPayload: lastTrackSource === RELAYED_DATA_SOURCE,
+        observedAt: storms[0]?.updatedAt ?? null
+      }),
       storms,
       lastTrackedStorm: lifecycle,
       warnings: lastTrackWarning ? [lastTrackWarning] : []
@@ -741,10 +747,10 @@ async function persistTrackSnapshot(
   source: string
 ) {
   try {
-    await mkdir(path.dirname(TRACK_SNAPSHOT_PATH), { recursive: true });
-    const temporary = `${TRACK_SNAPSHOT_PATH}.${process.pid}.tmp`;
-    await writeFile(temporary, JSON.stringify({ version: 3, source, fetchedAt, storms, lastTrackedStorm: lifecycle }), "utf8");
-    await rename(temporary, TRACK_SNAPSHOT_PATH);
+    await writeFileAtomic(
+      TRACK_SNAPSHOT_PATH,
+      JSON.stringify({ version: 3, source, fetchedAt, storms, lastTrackedStorm: lifecycle })
+    );
   } catch (error) {
     console.warn("[track-snapshot] persistence failed", error);
   }

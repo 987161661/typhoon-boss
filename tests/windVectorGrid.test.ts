@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   createCompositeWindVectorIndex,
   mergeWindVectorPoints,
+  normalizeWindDirection,
   sampleCompositeWindVector,
   windFieldsShareFrame
 } from "../lib/windVectorGrid";
@@ -63,6 +64,13 @@ test("detail grids are accepted only for the same model analysis frame", () => {
   assert.equal(windFieldsShareFrame(ambient, { ...detail, updatedAt: "2026-07-14T00:00:00Z" }), false);
   assert.equal(windFieldsShareFrame(ambient, { ...detail, source: "fallback" }), false);
   assert.equal(windFieldsShareFrame(ambient, { ...detail, stormId: "storm-b" }), false);
+});
+
+test("meteorological directions are normalized to one clockwise turn", () => {
+  assert.equal(normalizeWindDirection(-180), 180);
+  assert.equal(normalizeWindDirection(-45), 315);
+  assert.equal(normalizeWindDirection(360), 0);
+  assert.equal(normalizeWindDirection(405), 45);
 });
 
 function grid(

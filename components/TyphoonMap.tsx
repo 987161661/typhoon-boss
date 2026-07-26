@@ -35,7 +35,12 @@ import {
   stableWindHash,
   type StableWindSeed,
 } from "@/lib/windParticleSeeding";
-import { computeWindFlowPolicy, trimWindTrailToPixelLength, type WindFlowPolicy } from "@/lib/windFlowPolicy";
+import {
+  computeWindFlowPolicy,
+  trimWindTrailToPixelLength,
+  windJourneyBudgetKm,
+  type WindFlowPolicy
+} from "@/lib/windFlowPolicy";
 import { liveCityBroadcastMapOffset } from "@/lib/liveCityBroadcastLayout";
 import type { BossProfile } from "@/lib/bossEngine/types";
 import { useRadarSnapshot } from "./useRadarSnapshot";
@@ -430,8 +435,11 @@ export function TyphoonMap({
     window.history.replaceState(window.history.state, "", url);
   }, [view]);
   const viewportBoundsForMap = useCallback((map: MapLibreMap) => visibleWindBounds(map, 0.08), []);
-  const windRequestBoundsForMap = useCallback((map: MapLibreMap) => visibleWindBounds(map, 0.65), []);
-  const windRequiredBoundsForMap = useCallback((map: MapLibreMap) => visibleWindBounds(map, 0.24), []);
+  // Oversized requests made a national viewport approach hemisphere scale.
+  // NOMADS then timed out on recent cycles and eventually returned an older
+  // cycle, which looked like a 20+ hour time rollback in the live layer.
+  const windRequestBoundsForMap = useCallback((map: MapLibreMap) => visibleWindBounds(map, 0.12), []);
+  const windRequiredBoundsForMap = useCallback((map: MapLibreMap) => visibleWindBounds(map, 0.08), []);
   const viewportWindField = useViewportWindField({
     map: mapReady ? mapRef.current : null,
     enabled: mapReady && noncriticalLayersReady && environmentLayers.wind,
@@ -3609,8 +3617,8 @@ function startWindFieldRenderer(
   const flowSession = ++windFlowRendererSequence;
   const fadeDurationSeconds = 0.18;
   const isMarineFlow = flowKind === "marine";
-  const minimumVectorSpeed = isMarineFlow ? 0.015 : 0.6;
-  const calmVectorSpeed = isMarineFlow ? 0.025 : 1.1;
+  const minimumVectorSpeed = isMarineFlow ? 0.015 : 0.15;
+  const calmVectorSpeed = isMarineFlow ? 0.025 : 0.35;
 
   const warmStartParticle = (particle: WindParticle, projectImmediately: boolean) => {
     if (points.length === 0) return particle;
@@ -3622,6 +3630,8 @@ function startWindFieldRenderer(
     const phase = 0.78 + (stableWindHash(`${particle.id}:warm`) / 0x1_0000_0000) * 0.32;
     const strengthScale = 0.35 + smoothStep(isMarineFlow ? 0.04 : 1.1, isMarineFlow ? 0.45 : 5, initialSpeed) * 0.65;
     const targetTravelKm = Math.max(8, (policy.targetTrailPx * metresPerPixel * phase * strengthScale) / 1000);
+    const journeyPhase = stableWindHash(`${particle.id}:journey`) / 0x1_0000_0000;
+    particle.maxTravelKm = windJourneyBudgetKm(targetTravelKm, journeyPhase);
     const integrationSteps = 32;
     const stepDistanceMetres = (targetTravelKm * 1000) / integrationSteps;
     const trail: Array<{ lon: number; lat: number }> = [{ lon: particle.lon, lat: particle.lat }];

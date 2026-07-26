@@ -1,5 +1,6 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { writeFileAtomic } from "@/lib/atomicFile";
 import { readChinaWeatherProducts } from "@/lib/chinaWeatherProductFeed";
 import { readChinaWeatherVisuals } from "@/lib/chinaWeatherVisualFeed";
 import { readChinaWeatherWarnings } from "@/lib/chinaWeatherWarningFeed";
@@ -81,8 +82,5 @@ function sameSnapshotContent(a: NationalSituationSnapshot, b: NationalSituationS
 }
 
 async function writeJsonAtomic(filePath: string, value: unknown) {
-  await mkdir(dirname(filePath), { recursive: true });
-  const temporaryPath = `${filePath}.${process.pid}.tmp`;
-  await writeFile(temporaryPath, `${JSON.stringify(value)}\n`, "utf8");
-  await rename(temporaryPath, filePath);
+  await writeFileAtomic(filePath, `${JSON.stringify(value)}\n`);
 }

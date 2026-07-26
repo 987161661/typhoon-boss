@@ -15,6 +15,7 @@ import {
   isHostReplyReadyEvent,
   type HostReplyReadyEvent
 } from "@/lib/digitalHostConversation";
+import { shouldRecoverDigitalHostFrame } from "@/lib/digitalHostFrameRecovery";
 import { usePersistentFloatingWindow } from "./usePersistentFloatingWindow";
 
 type DirectorScene = "briefing" | "analysis";
@@ -33,6 +34,14 @@ type HostHealth = {
   queueDepth?: number;
   isSpeaking?: boolean;
   ttsRateLimitCount?: number;
+  lastEventAt?: number;
+  runtimeOwner?: {
+    active?: boolean;
+  };
+  host?: {
+    hostPhase?: string;
+    activeTurnId?: string;
+  };
   supervisor?: {
     state?: string;
     isLive?: boolean;
@@ -92,6 +101,7 @@ export function DigitalHostWindow({
   const [hostFrameReady, setHostFrameReady] = useState(false);
   const hostFrameReadyRef = useRef(false);
   const hostFrameRecoveryAttemptsRef = useRef(0);
+  const lastRuntimeStallRecoveryAtRef = useRef(0);
   const [hostFrameRevision, setHostFrameRevision] = useState(0);
   const [isObsBrowser, setIsObsBrowser] = useState(false);
   const [health, setHealth] = useState<HostHealth | null>(null);
@@ -242,6 +252,38 @@ export function DigitalHostWindow({
       window.clearInterval(timer);
     };
   }, []);
+
+  useEffect(() => {
+    const now = Date.now();
+    if (
+      !shouldRecoverDigitalHostFrame({
+        isObsBrowser,
+        frameReady: hostFrameReady,
+        runtimeOwnerActive: health?.runtimeOwner?.active,
+        queueDepth: health?.queueDepth,
+        hostPhase: health?.host?.hostPhase,
+        activeTurnId: health?.host?.activeTurnId,
+        lastEventAt: health?.lastEventAt,
+        now,
+        lastRecoveryAt: lastRuntimeStallRecoveryAtRef.current
+      })
+    ) {
+      return;
+    }
+    lastRuntimeStallRecoveryAtRef.current = now;
+    setFrameLoaded(false);
+    setHostFrameReady(false);
+    setHostFrameRevision((value) => value + 1);
+    void fetch("/api/digital-host/events", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        event: "host_frame_runtime_stall_reload",
+        requestId: health?.host?.activeTurnId,
+        channel: "health-watchdog"
+      })
+    }).catch(() => undefined);
+  }, [health, hostFrameReady, isObsBrowser]);
 
   useEffect(() => {
     if (!chatRequest?.text.trim()) return;

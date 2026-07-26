@@ -1,5 +1,6 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { writeFileAtomic } from "@/lib/atomicFile";
 import { assertWeatherProviderResponse } from "./weatherProviderBoundary";
 
 const SOURCE_URL = "https://product.weather.com.cn/alarm/grepalarm_cn.php";
@@ -109,8 +110,5 @@ function text(value: unknown) { return typeof value === "string" ? value.trim() 
 function numberOrNull(value: unknown) { const number = Number(value); return Number.isFinite(number) ? number : null; }
 
 async function writeJsonAtomic(filePath: string, value: unknown) {
-  await mkdir(dirname(filePath), { recursive: true });
-  const temporaryPath = `${filePath}.${process.pid}.tmp`;
-  await writeFile(temporaryPath, `${JSON.stringify(value)}\n`, "utf8");
-  await rename(temporaryPath, filePath);
+  await writeFileAtomic(filePath, `${JSON.stringify(value)}\n`);
 }

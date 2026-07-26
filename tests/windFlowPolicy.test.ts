@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { computeWindFlowPolicy, trimWindTrailToPixelLength } from "../lib/windFlowPolicy";
+import {
+  computeWindFlowPolicy,
+  trimWindTrailToPixelLength,
+  windJourneyBudgetKm
+} from "../lib/windFlowPolicy";
 
 test("wind flow policy makes distant views denser with longer screen-space trails", () => {
   const distant = computeWindFlowPolicy({
@@ -42,4 +46,10 @@ test("projected wind trails are clipped to a pixel length with an interpolated s
   assert.equal(clipped.lengthPx, 58);
   assert.equal(clipped.points.at(-1)?.x, 110);
   assert.equal(clipped.points[0].x, 52);
+});
+
+test("wind journeys stay close enough to their geographic seeds to keep the field evenly covered", () => {
+  assert.ok(Math.abs(windJourneyBudgetKm(100, 0) - 220) < 0.001);
+  assert.ok(Math.abs(windJourneyBudgetKm(100, 1) - 400) < 0.001);
+  assert.ok(windJourneyBudgetKm(10, 0.5) >= 30);
 });
