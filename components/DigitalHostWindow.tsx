@@ -48,6 +48,8 @@ const HOST_WINDOW_STORAGE_KEY = "typhoon-boss-radar:linglan-window";
 const CHAT_RETRY_INTERVAL_MS = 750;
 const CHAT_MAX_ATTEMPTS = 8;
 const REPLY_RELAY_POLL_MS = 500;
+const HOST_FRAME_READY_TIMEOUT_MS = 30_000;
+const HOST_FRAME_MAX_RECOVERY_ATTEMPTS = 1;
 const DEFAULT_RADAR_VIEWER = "001号人类";
 
 function isHostReady(health: HostHealth | null) {
@@ -89,6 +91,9 @@ export function DigitalHostWindow({
   const frameLoadedRef = useRef(false);
   const [hostFrameReady, setHostFrameReady] = useState(false);
   const hostFrameReadyRef = useRef(false);
+  const hostFrameRecoveryAttemptsRef = useRef(0);
+  const [hostFrameRevision, setHostFrameRevision] = useState(0);
+  const [isObsBrowser, setIsObsBrowser] = useState(false);
   const [health, setHealth] = useState<HostHealth | null>(null);
   const [healthFailed, setHealthFailed] = useState(false);
   const floating = usePersistentFloatingWindow({
@@ -104,7 +109,16 @@ export function DigitalHostWindow({
       return DEFAULT_HOST_URL;
     }
   }, [hostUrl]);
-  const iframeUrl = `${hostUrl.replace(/\/$/, "")}/?overlay=1&listener=1&avatar=musetalk`;
+  const iframeUrl = isObsBrowser
+    ? `${hostUrl.replace(/\/$/, "")}/?overlay=1&listener=1&avatar=musetalk`
+    : `${hostUrl.replace(/\/$/, "")}/?overlay=1&listener=0&runtime=preview&avatar=musetalk`;
+
+  useEffect(() => {
+    setIsObsBrowser(
+      /\bOBS\//i.test(window.navigator.userAgent) ||
+        "obsstudio" in window
+    );
+  }, []);
 
   useEffect(() => {
     sceneRef.current = scene;
@@ -139,11 +153,12 @@ export function DigitalHostWindow({
         return;
       }
       const data = event.data as { type?: unknown; requestId?: unknown };
-      if (data?.type === "linglan:ready") {
+      if (data?.type === "linglan:ready" || data?.type === "aituber:ready") {
+        hostFrameRecoveryAttemptsRef.current = 0;
         setHostFrameReady(true);
         return;
       }
-      if (data?.type !== "linglan:chat-ack") return;
+      if (data?.type !== "linglan:chat-ack" && data?.type !== "aituber:chat-ack") return;
       const requestId = String(data.requestId ?? "");
       if (!requestId || requestId !== pendingChatRef.current?.id) return;
       pendingChatRef.current.acknowledged = true;
@@ -160,6 +175,34 @@ export function DigitalHostWindow({
     window.addEventListener("message", handleHostMessage);
     return () => window.removeEventListener("message", handleHostMessage);
   }, [hostOrigin]);
+
+  useEffect(() => {
+    if (
+      hostFrameReady ||
+      hostFrameRecoveryAttemptsRef.current >= HOST_FRAME_MAX_RECOVERY_ATTEMPTS
+    ) {
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      // A host restart or failed cross-origin navigation can leave the frame
+      // at about:blank. Waiting forever here made a full-page refresh the only
+      // recovery path. Allow one bounded remount, then leave the stable frame
+      // alone so a delayed handshake cannot create a reconnect loop.
+      setFrameLoaded(false);
+      setHostFrameReady(false);
+      hostFrameRecoveryAttemptsRef.current += 1;
+      setHostFrameRevision((value) => value + 1);
+      void fetch("/api/digital-host/events", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          event: "host_frame_watchdog_reload",
+          channel: "postmessage"
+        })
+      }).catch(() => undefined);
+    }, HOST_FRAME_READY_TIMEOUT_MS);
+    return () => window.clearTimeout(timer);
+  }, [hostFrameReady, hostFrameRevision]);
 
   useEffect(() => {
     let cancelled = false;
@@ -374,6 +417,7 @@ export function DigitalHostWindow({
       </header>
       <div className="digital-host-stage">
         <iframe
+          key={`${hostFrameRevision}:${isObsBrowser ? "owner" : "preview"}`}
           ref={iframeRef}
           src={iframeUrl}
           title="凌岚数字人讲解主播"
