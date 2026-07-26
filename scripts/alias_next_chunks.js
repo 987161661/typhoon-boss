@@ -1,8 +1,9 @@
 const fs = require("fs");
 const path = require("path");
 
-const chunksDir = path.join(process.cwd(), ".next", "static", "chunks");
-const serverDir = path.join(process.cwd(), ".next", "server");
+const distDir = process.env.NEXT_DIST_DIR?.trim() || ".next";
+const chunksDir = path.join(process.cwd(), distDir, "static", "chunks");
+const serverDir = path.join(process.cwd(), distDir, "server");
 const serverChunksDir = path.join(serverDir, "chunks");
 const serverVendorDir = path.join(serverDir, "vendor-chunks");
 

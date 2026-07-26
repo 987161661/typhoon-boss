@@ -259,7 +259,8 @@ const CITY_FACT_TTL_MS = 5 * 60 * 1_000;
 const CITY_LOCATION_TTL_MS = 30 * 24 * 60 * 60 * 1_000;
 const CITY_SOURCE_DEADLINE_MS = 2_500;
 const CITY_OPTIONAL_SOURCE_DEADLINE_MS = 900;
-const CITY_CORE_WEATHER_DEADLINE_MS = 4_000;
+const CITY_CORE_WEATHER_DEADLINE_MS = 6_000;
+const CITY_CORE_REQUEST_TIMEOUT_MS = 2_500;
 type CityComparisonSnapshot = { fetchedAt: string; values: Array<NonNullable<CityBriefing["current"]>> } | null;
 export function createCityComparisonSnapshotCache(
   loader: (dayKey: string) => Promise<CityComparisonSnapshot> = readNationalCitySnapshot,
@@ -306,6 +307,30 @@ export function withCitySourceDeadline<T>(
       rejectRequest(new Error(`${sourceLabel} timed out after ${timeoutMs}ms`));
     }, timeoutMs);
     request.then(
+      (value) => {
+        clearTimeout(timer);
+        resolveRequest(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        rejectRequest(error);
+      }
+    );
+  });
+}
+
+export function withCitySourceDeadlineTask<T>(
+  loader: (signal: AbortSignal) => Promise<T>,
+  sourceLabel: string,
+  timeoutMs = CITY_SOURCE_DEADLINE_MS
+): Promise<T> {
+  const controller = new AbortController();
+  return new Promise<T>((resolveRequest, rejectRequest) => {
+    const timer = setTimeout(() => {
+      controller.abort();
+      rejectRequest(new Error(`${sourceLabel} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    loader(controller.signal).then(
       (value) => {
         clearTimeout(timer);
         resolveRequest(value);
@@ -365,13 +390,13 @@ async function loadCityBriefingFacts(cityQuery: string): Promise<Omit<CityBriefi
     // The providers remain redundant. Their internal retries may continue for
     // recovery, but one slow source must not hold a usable peer past the
     // live-room pre-show budget.
-    withCitySourceDeadline(
-      loadOpenMeteo(city),
+    withCitySourceDeadlineTask(
+      (signal) => loadOpenMeteo(city, signal),
       "Open-Meteo core weather",
       CITY_CORE_WEATHER_DEADLINE_MS
     ),
-    withCitySourceDeadline(
-      loadQWeather(city),
+    withCitySourceDeadlineTask(
+      (signal) => loadQWeather(city, signal),
       "QWeather core weather",
       CITY_CORE_WEATHER_DEADLINE_MS
     ),
@@ -892,16 +917,19 @@ function normalizeProvince(value: string | undefined) {
   return match?.[1] ?? raw.replace(/(壮族|回族|维吾尔|自治区|特别行政区)$/g, "");
 }
 
-async function loadOpenMeteo(city: CityBriefing["city"]) {
+async function loadOpenMeteo(city: CityBriefing["city"], signal: AbortSignal) {
   const query = new URLSearchParams({
     latitude: city.latitude.toFixed(4), longitude: city.longitude.toFixed(4), timezone: city.timezone,
     current: CURRENT_FIELDS, hourly: HOURLY_FIELDS, forecast_hours: "6", wind_speed_unit: "ms"
   });
   const payload = await retryCitySource(async () => {
-    const response = await fetch(`${OPEN_METEO_FORECAST}?${query}`, requestInit(8_000));
+    const response = await fetch(
+      `${OPEN_METEO_FORECAST}?${query}`,
+      requestInit(CITY_CORE_REQUEST_TIMEOUT_MS, signal)
+    );
     if (!response.ok) throw new Error(`Open-Meteo HTTP ${response.status}`);
     return response.json() as Promise<OpenMeteoPayload>;
-  }, 3);
+  }, 2, 150, signal);
   const current = payload.current ?? {};
   const hourly = payload.hourly ?? {};
   return {
@@ -915,7 +943,7 @@ async function loadOpenMeteo(city: CityBriefing["city"]) {
   };
 }
 
-async function loadQWeather(city: CityBriefing["city"]) {
+async function loadQWeather(city: CityBriefing["city"], signal: AbortSignal) {
   const host = process.env.QWEATHER_API_HOST?.trim().replace(/\/$/, "");
   const apiKey = process.env.QWEATHER_API_KEY?.trim();
   const staticToken = process.env.QWEATHER_API_TOKEN?.trim();
@@ -941,12 +969,22 @@ async function loadQWeather(city: CityBriefing["city"]) {
   if (staticToken && apiKey) return notConfigured("请只配置一种旧版和风天气鉴权方式：API Key 或 QWEATHER_API_TOKEN。");
 
   const location = `${city.longitude.toFixed(2)},${city.latitude.toFixed(2)}`;
-  const locationIdPromise = loadQWeatherLocationId(host, headers, city);
+  const locationIdPromise = loadQWeatherLocationId(host, headers, city, signal);
   const [now, hourly, minutely, locationId, history] = await Promise.allSettled([
-    retryCitySource(() => fetchQWeather(host, `/v7/weather/now?location=${encodeURIComponent(city.locationId ?? location)}&lang=zh`, headers), 3),
-    retryCitySource(() => fetchQWeather(host, `/v7/weather/24h?location=${encodeURIComponent(city.locationId ?? location)}&lang=zh`, headers), 3),
+    retryCitySource(
+      () => fetchQWeather(host, `/v7/weather/now?location=${encodeURIComponent(city.locationId ?? location)}&lang=zh`, headers, signal, CITY_CORE_REQUEST_TIMEOUT_MS),
+      2,
+      150,
+      signal
+    ),
+    retryCitySource(
+      () => fetchQWeather(host, `/v7/weather/24h?location=${encodeURIComponent(city.locationId ?? location)}&lang=zh`, headers, signal, CITY_CORE_REQUEST_TIMEOUT_MS),
+      2,
+      150,
+      signal
+    ),
     withCitySourceDeadline(
-      fetchQWeather(host, `/v7/minutely/5m?location=${encodeURIComponent(location)}&lang=zh`, headers),
+      fetchQWeather(host, `/v7/minutely/5m?location=${encodeURIComponent(location)}&lang=zh`, headers, signal, CITY_OPTIONAL_SOURCE_DEADLINE_MS),
       "QWeather minutely rain",
       CITY_OPTIONAL_SOURCE_DEADLINE_MS
     ),
@@ -956,7 +994,7 @@ async function loadQWeather(city: CityBriefing["city"]) {
       CITY_OPTIONAL_SOURCE_DEADLINE_MS
     ),
     withCitySourceDeadline(
-      locationIdPromise.then((id) => loadQWeatherYesterdayRain(host, headers, id)),
+      locationIdPromise.then((id) => loadQWeatherYesterdayRain(host, headers, id, signal)),
       "QWeather recent rain",
       CITY_OPTIONAL_SOURCE_DEADLINE_MS
     )
@@ -987,18 +1025,40 @@ async function loadQWeather(city: CityBriefing["city"]) {
   };
 }
 
-async function loadQWeatherLocationId(host: string, headers: Record<string, string>, city: CityBriefing["city"]) {
+async function loadQWeatherLocationId(
+  host: string,
+  headers: Record<string, string>,
+  city: CityBriefing["city"],
+  signal: AbortSignal
+) {
   if (city.locationId) return city.locationId;
   const location = `${city.longitude.toFixed(2)},${city.latitude.toFixed(2)}`;
-  const geo = await fetchQWeather(host, `/geo/v2/city/lookup?location=${encodeURIComponent(location)}&lang=zh`, headers) as QWeatherGeoPayload;
+  const geo = await fetchQWeather(
+    host,
+    `/geo/v2/city/lookup?location=${encodeURIComponent(location)}&lang=zh`,
+    headers,
+    signal,
+    CITY_OPTIONAL_SOURCE_DEADLINE_MS
+  ) as QWeatherGeoPayload;
   const locationId = geo.location?.[0]?.id;
   if (!locationId) throw new Error("和风天气未返回行政映射所需的 LocationID");
   return locationId;
 }
 
-async function loadQWeatherYesterdayRain(host: string, headers: Record<string, string>, locationId: string) {
+async function loadQWeatherYesterdayRain(
+  host: string,
+  headers: Record<string, string>,
+  locationId: string,
+  signal?: AbortSignal
+) {
   const date = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(Date.now() - 86_400_000)).replaceAll("-", "");
-  const payload = await fetchQWeather(host, `/v7/historical/weather?location=${encodeURIComponent(locationId)}&date=${date}`, headers) as QWeatherHistoryPayload;
+  const payload = await fetchQWeather(
+    host,
+    `/v7/historical/weather?location=${encodeURIComponent(locationId)}&date=${date}`,
+    headers,
+    signal,
+    CITY_OPTIONAL_SOURCE_DEADLINE_MS
+  ) as QWeatherHistoryPayload;
   return { total24hMm: numberValue(payload.weatherDaily?.precip), observedDate: payload.weatherDaily?.date ?? null, sourceId: "qweather-history" as const, available: true };
 }
 
@@ -1235,8 +1295,19 @@ function unavailableQWeather(warning: string) {
   };
 }
 
-async function fetchQWeather(host: string, path: string, headers: HeadersInit) {
-  const response = await fetch(`${host}${path}`, { headers, cache: "no-store", signal: AbortSignal.timeout(8_000) });
+async function fetchQWeather(
+  host: string,
+  path: string,
+  headers: HeadersInit,
+  signal?: AbortSignal,
+  timeoutMs = 8_000
+) {
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const response = await fetch(`${host}${path}`, {
+    headers,
+    cache: "no-store",
+    signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal
+  });
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const payload = await response.json() as QWeatherPayload;
   if (payload.code && payload.code !== "200") throw new Error(`API code ${payload.code}`);
@@ -1246,7 +1317,8 @@ async function fetchQWeather(host: string, path: string, headers: HeadersInit) {
 export async function retryCitySource<T>(
   loader: () => Promise<T>,
   attempts = 2,
-  retryDelayMs = 150
+  retryDelayMs = 150,
+  signal?: AbortSignal
 ): Promise<T> {
   let lastError: unknown;
   for (let attempt = 0; attempt < Math.max(1, attempts); attempt += 1) {
@@ -1254,6 +1326,7 @@ export async function retryCitySource<T>(
       return await loader();
     } catch (error) {
       lastError = error;
+      if (signal?.aborted) throw error;
       if (attempt < attempts - 1 && retryDelayMs > 0) {
         await new Promise((resolveRetry) => setTimeout(resolveRetry, retryDelayMs * (2 ** attempt)));
       }
@@ -1443,7 +1516,15 @@ function heatSummary(level: CityRiskLevel, current: CityBriefing["current"]) {
 function emptyCurrent(): CityBriefing["current"] { return { sourceId: null, evidenceLevel: "unavailable", observedAt: null, temperatureC: null, apparentTemperatureC: null, relativeHumidityPct: null, precipitationMm: null, windSpeedMps: null, windGustMps: null, weatherCode: null, weatherText: null }; }
 function emptySixHours(): CityBriefing["nextSixHours"] { return { sourceId: null, startsAt: null, endsAt: null, precipitationMm: null, maxHourlyPrecipitationMm: null, maxPrecipitationProbabilityPct: null, maxWindGustMps: null, maxCapeJkg: null }; }
 function emptyMinutelyRain(): CityBriefing["minutelyRain"] { return { available: false, updatedAt: null, summary: null, maxFiveMinutePrecipitationMm: null, precipitationNextTwoHoursMm: null }; }
-function requestInit(timeout: number): RequestInit { return { cache: "no-store", headers: { Accept: "application/json", "User-Agent": process.env.WEATHER_API_USER_AGENT ?? "TyphoonBossRadar/1.0" }, signal: AbortSignal.timeout(timeout) }; }
+function requestInit(timeout: number, signal?: AbortSignal): RequestInit {
+  return {
+    cache: "no-store",
+    headers: { Accept: "application/json", "User-Agent": process.env.WEATHER_API_USER_AGENT ?? "TyphoonBossRadar/1.0" },
+    signal: signal
+      ? AbortSignal.any([signal, AbortSignal.timeout(timeout)])
+      : AbortSignal.timeout(timeout)
+  };
+}
 function normalizeCityQuery(value: string) { return value.trim().replace(/^@/, "").replace(/市$/, "").slice(0, 40); }
 function numberValue(value: unknown) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : null; }
 function kmhToMps(value: unknown) { const kmh = numberValue(value); return kmh === null ? null : kmh / 3.6; }

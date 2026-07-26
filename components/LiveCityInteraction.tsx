@@ -162,8 +162,7 @@ export function LiveCityInteraction({
       signal: controller.signal,
       maxAttempts: 4,
       // A degraded response can still contain verified current observations.
-      // Render it with its source limitations instead of repeatedly fetching
-      // until the 30-second live scene expires.
+      // Keep retrying it while the upstream sources recover.
       shouldRetryResult: (briefing) => briefing.status === "unavailable"
     })
       .then((briefing) => {

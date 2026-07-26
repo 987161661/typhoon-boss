@@ -13,6 +13,7 @@ import {
   retryCitySource,
   summarizeQWeatherForecastCurrent,
   withCitySourceDeadline,
+  withCitySourceDeadlineTask,
   type CityBriefing
 } from "../lib/cityBriefingData";
 import type { NationalSituationSnapshot, NationalWeatherEvent } from "../lib/nationalWeatherTypes";
@@ -142,6 +143,24 @@ test("city source deadline rejects a stalled provider instead of blocking the ci
     /stalled-provider.*20ms/
   );
   assert.ok(Date.now() - startedAt < 500, "a stalled city provider must be bounded");
+});
+
+test("city source task deadline aborts the timed-out provider", async () => {
+  let aborted = false;
+  await assert.rejects(
+    withCitySourceDeadlineTask(
+      (signal) => new Promise<never>((_resolve, reject) => {
+        signal.addEventListener("abort", () => {
+          aborted = true;
+          reject(new Error("aborted"));
+        }, { once: true });
+      }),
+      "stalled-provider",
+      20
+    ),
+    /stalled-provider.*20ms/
+  );
+  assert.equal(aborted, true);
 });
 
 test("optional QWeather enrichments cannot hold the core city report beyond one second", async () => {
@@ -319,14 +338,15 @@ test("QWeather hourly first point becomes an explicitly modelled current baselin
 
 test("redundant core weather providers cannot create an eight-second pre-show stall", async () => {
   const source = await readFile(resolve(process.cwd(), "lib/cityBriefingData.ts"), "utf8");
-  assert.match(source, /const CITY_CORE_WEATHER_DEADLINE_MS = 4_000/);
+  assert.match(source, /const CITY_CORE_WEATHER_DEADLINE_MS = 6_000/);
+  assert.match(source, /const CITY_CORE_REQUEST_TIMEOUT_MS = 2_500/);
   assert.match(
     source,
-    /withCitySourceDeadline\(\s*loadOpenMeteo\(city\),\s*"Open-Meteo core weather",\s*CITY_CORE_WEATHER_DEADLINE_MS\s*\)/
+    /withCitySourceDeadlineTask\(\s*\(signal\) => loadOpenMeteo\(city, signal\),\s*"Open-Meteo core weather",\s*CITY_CORE_WEATHER_DEADLINE_MS\s*\)/
   );
   assert.match(
     source,
-    /withCitySourceDeadline\(\s*loadQWeather\(city\),\s*"QWeather core weather",\s*CITY_CORE_WEATHER_DEADLINE_MS\s*\)/
+    /withCitySourceDeadlineTask\(\s*\(signal\) => loadQWeather\(city, signal\),\s*"QWeather core weather",\s*CITY_CORE_WEATHER_DEADLINE_MS\s*\)/
   );
 });
 

@@ -15,8 +15,15 @@ const nationalRequest = (id: string): DirectorCityRequest => ({
   lensIntent: { kind: "national" }
 });
 
+const markPresented = (
+  state: ReturnType<typeof createLiveDirectorQueueState>,
+  id: string,
+  now: number
+) => transitionLiveDirectorQueue(state, { type: "presented", id, now });
+
 test("a queued request cannot replace the active city before ten seconds", () => {
   let state = transitionLiveDirectorQueue(createLiveDirectorQueueState(), { type: "request", request: nationalRequest("杭州"), now: 0 });
+  state = markPresented(state, "杭州", 0);
   state = transitionLiveDirectorQueue(state, { type: "request", request: nationalRequest("广州"), now: 9_999 });
   assert.equal(state.active?.request.id, "杭州");
   assert.deepEqual(state.pending.map((request) => request.id), ["广州"]);
@@ -28,6 +35,7 @@ test("a queued request cannot replace the active city before ten seconds", () =>
 
 test("a request arriving after ten seconds switches immediately", () => {
   let state = transitionLiveDirectorQueue(createLiveDirectorQueueState(), { type: "request", request: nationalRequest("杭州"), now: 100 });
+  state = markPresented(state, "杭州", 100);
   state = transitionLiveDirectorQueue(state, { type: "request", request: nationalRequest("深圳"), now: 10_100 });
   assert.equal(state.active?.request.id, "深圳");
   assert.deepEqual(state.pending, []);
@@ -35,6 +43,7 @@ test("a request arriving after ten seconds switches immediately", () => {
 
 test("a city scene without new requests leaves after at most thirty seconds", () => {
   let state = transitionLiveDirectorQueue(createLiveDirectorQueueState(), { type: "request", request: nationalRequest("杭州"), now: 0 });
+  state = markPresented(state, "杭州", 0);
   state = transitionLiveDirectorQueue(state, { type: "tick", now: 29_999 });
   assert.equal(state.active?.request.id, "杭州");
   state = transitionLiveDirectorQueue(state, { type: "tick", now: 30_000 });
@@ -61,6 +70,7 @@ test("duplicate request ids do not create duplicate queue entries", () => {
 
 test("completion is deferred until ten seconds and then releases to the queued request", () => {
   let state = transitionLiveDirectorQueue(createLiveDirectorQueueState(), { type: "request", request: nationalRequest("杭州"), now: 0 });
+  state = markPresented(state, "杭州", 0);
   state = transitionLiveDirectorQueue(state, { type: "request", request: nationalRequest("广州"), now: 1_000 });
   state = transitionLiveDirectorQueue(state, { type: "complete", id: "杭州", now: 2_000 });
   assert.equal(state.active?.request.id, "杭州");
@@ -69,8 +79,30 @@ test("completion is deferred until ten seconds and then releases to the queued r
   assert.equal(state.active?.request.id, "广州");
 });
 
+test("a slow city briefing keeps its slot and receives a full visible window once presented", () => {
+  let state = transitionLiveDirectorQueue(
+    createLiveDirectorQueueState(),
+    { type: "request", request: nationalRequest("slow-city"), now: 0 }
+  );
+
+  state = transitionLiveDirectorQueue(state, { type: "tick", now: 35_000 });
+  assert.equal(state.active?.request.id, "slow-city");
+
+  state = transitionLiveDirectorQueue(state, {
+    type: "presented",
+    id: "slow-city",
+    now: 35_000
+  });
+  state = transitionLiveDirectorQueue(state, { type: "tick", now: 64_999 });
+  assert.equal(state.active?.request.id, "slow-city");
+
+  state = transitionLiveDirectorQueue(state, { type: "tick", now: 65_000 });
+  assert.equal(state.active, null);
+});
+
 test("operator-style front insertion remains FIFO within its priority", () => {
   let state = transitionLiveDirectorQueue(createLiveDirectorQueueState(), { type: "request", request: nationalRequest("杭州"), now: 0 });
+  state = markPresented(state, "杭州", 0);
   state = transitionLiveDirectorQueue(state, { type: "request", request: nationalRequest("普通队列"), now: 1_000 });
   state = transitionLiveDirectorQueue(state, { type: "request", request: nationalRequest("操作台"), position: "front", now: 2_000 });
   assert.deepEqual(state.pending.map((request) => request.id), ["操作台", "普通队列"]);

@@ -65,6 +65,7 @@ export function LiveDirector() {
     focusedStormId: nationalSituation.snapshot?.storms[0]?.id ?? null
   });
   const submitCityInteractionEvent = cityInteractions.submitEvent;
+  const markCityInteractionPresented = cityInteractions.markActivePresented;
 
   useEffect(() => {
     setCityOverlayHost(document.body);
@@ -168,6 +169,7 @@ export function LiveDirector() {
   }, []);
 
   const handleCityBriefingReady = useCallback((request: CityInteractionRequest, briefing: CityBriefing) => {
+    markCityInteractionPresented(request.id);
     if (cityEngagementIdsRef.current.has(request.id)) return;
     const eventPrompt = buildCityReportEngagementPrompt(request, briefing);
     if (!eventPrompt) return;
@@ -192,7 +194,7 @@ export function LiveDirector() {
       viewerText: request.sourceText,
       at: request.receivedAt
     }));
-  }, []);
+  }, [markCityInteractionPresented]);
 
   useEffect(() => {
     let cancelled = false;

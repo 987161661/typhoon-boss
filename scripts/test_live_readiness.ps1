@@ -94,21 +94,21 @@ if (-not $wind.analysisCenter) {
 }
 
 if (-not $SkipDigitalHost) {
-  $host = Invoke-ReadinessJson -Url "$baseUrl/api/digital-host/health" -BudgetSeconds 30
-  if (-not $host.PSObject.Properties['runtimeOwner']) {
+  $digitalHost = Invoke-ReadinessJson -Url "$baseUrl/api/digital-host/health" -BudgetSeconds 30
+  if (-not $digitalHost.PSObject.Properties['runtimeOwner']) {
     throw 'Digital-host health omitted the runtimeOwner contract.'
   }
-  if (-not $host.PSObject.Properties['lastFaults']) {
+  if (-not $digitalHost.PSObject.Properties['lastFaults']) {
     throw 'Digital-host health omitted the lastFaults contract.'
   }
-  if ($host.runtimeOwner.ttsConfigured -eq $false) {
+  if ($digitalHost.runtimeOwner.ttsConfigured -eq $false) {
     throw 'Digital-host TTS is not configured.'
   }
-  if ($RequireRuntimeOwner -and (-not $host.runtimeOwner.active -or -not $host.runtimeOwner.available)) {
+  if ($RequireRuntimeOwner -and (-not $digitalHost.runtimeOwner.active -or -not $digitalHost.runtimeOwner.available)) {
     throw 'No active digital-host runtime owner is ready to consume the live queue.'
   }
   $recentFaults = @(
-    $host.lastFaults.PSObject.Properties |
+    $digitalHost.lastFaults.PSObject.Properties |
       Where-Object {
         $_.Value -and
         $_.Value.at -and

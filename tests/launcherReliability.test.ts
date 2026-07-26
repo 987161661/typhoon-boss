@@ -5,6 +5,7 @@ import test from "node:test";
 
 const launcher = join(process.cwd(), "scripts", "start_live_with_linglan.ps1");
 const readinessGate = join(process.cwd(), "scripts", "test_live_readiness.ps1");
+const chunkAliasRepair = join(process.cwd(), "scripts", "alias_next_chunks.js");
 
 test("live launcher retries the data health check across cold route compilation", () => {
   const source = readFileSync(launcher, "utf8");
@@ -39,6 +40,13 @@ test("live launcher defaults to an isolated production build and keeps developme
   assert.match(source, /@?\('run', 'dev'/);
 });
 
+test("production chunk repair follows the launcher's isolated dist directory", () => {
+  const source = readFileSync(chunkAliasRepair, "utf8");
+
+  assert.match(source, /process\.env\.NEXT_DIST_DIR\?\.trim\(\) \|\| "\.next"/);
+  assert.match(source, /path\.join\(process\.cwd\(\), distDir, "server"\)/);
+});
+
 test("one readiness gate verifies radar assets, fresh GFS and the digital-host runtime", () => {
   const source = readFileSync(readinessGate, "utf8");
 
@@ -50,4 +58,5 @@ test("one readiness gate verifies radar assets, fresh GFS and the digital-host r
   assert.match(source, /\/api\/digital-host\/health/);
   assert.match(source, /runtimeOwner/);
   assert.match(source, /lastFaults/);
+  assert.doesNotMatch(source, /\$host\s*=/i);
 });

@@ -59,8 +59,8 @@ export function useLiveCityInteractionQueue(idleContext: DirectorIdleContext = D
 
   useEffect(() => {
     const active = machine.active;
-    if (!active) return;
-    const releaseAt = active.startedAt + (
+    if (!active || active.presentedAt === undefined) return;
+    const releaseAt = active.presentedAt + (
       active.releaseRequested || machine.pending.length
         ? CITY_SCENE_MIN_MS
         : CITY_SCENE_MAX_IDLE_MS
@@ -146,12 +146,17 @@ export function useLiveCityInteractionQueue(idleContext: DirectorIdleContext = D
     apply({ type: "complete", id, now: Date.now() });
   }, [apply]);
 
+  const markActivePresented = useCallback((id: string) => {
+    apply({ type: "presented", id, now: Date.now() });
+  }, [apply]);
+
   return {
     active: machine.active ? interactionRequestsRef.current.get(machine.active.request.id) ?? null : null,
     pendingCount: machine.pending.length,
     lensIntent: selectDirectorLens(machine),
     submitComment,
     submitEvent,
+    markActivePresented,
     completeActive
   };
 }

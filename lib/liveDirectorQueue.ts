@@ -16,13 +16,19 @@ export interface DirectorIdleContext {
 }
 
 export interface LiveDirectorQueueState {
-  active: { request: DirectorCityRequest; startedAt: number; releaseRequested?: boolean } | null;
+  active: {
+    request: DirectorCityRequest;
+    startedAt: number;
+    presentedAt?: number;
+    releaseRequested?: boolean;
+  } | null;
   pending: DirectorCityRequest[];
   idleContext: DirectorIdleContext;
 }
 
 export type LiveDirectorQueueAction =
   | { type: "request"; request: DirectorCityRequest; now: number; position?: "front" | "back" }
+  | { type: "presented"; id: string; now: number }
   | { type: "complete"; id: string; now: number }
   | { type: "tick"; now: number }
   | { type: "idle-context"; context: DirectorIdleContext; now: number };
@@ -50,9 +56,15 @@ export function transitionLiveDirectorQueue(
   }
   if (action.type === "tick") return state;
 
+  if (action.type === "presented") {
+    if (state.active?.request.id !== action.id || state.active.presentedAt !== undefined) return state;
+    return { ...state, active: { ...state.active, presentedAt: action.now } };
+  }
+
   if (action.type === "complete") {
     if (state.active?.request.id !== action.id) return state;
-    const elapsed = Math.max(0, action.now - state.active.startedAt);
+    if (state.active.presentedAt === undefined) return releaseActive(state, action.now);
+    const elapsed = Math.max(0, action.now - state.active.presentedAt);
     if (elapsed >= CITY_SCENE_MIN_MS) return releaseActive(state, action.now);
     return { ...state, active: { ...state.active, releaseRequested: true } };
   }
@@ -101,7 +113,10 @@ export function retainQueuedRequestPayloads<T>(
 
 function reconcile(state: LiveDirectorQueueState, now: number): LiveDirectorQueueState {
   if (!state.active) return state;
-  const elapsed = Math.max(0, now - state.active.startedAt);
+  // Loading time is unbounded by the presentation window. Once the briefing is
+  // visible, the normal minimum and maximum scene durations apply.
+  if (state.active.presentedAt === undefined) return state;
+  const elapsed = Math.max(0, now - state.active.presentedAt);
   if (state.active.releaseRequested && elapsed >= CITY_SCENE_MIN_MS) {
     return releaseActive(state, now);
   }

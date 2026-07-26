@@ -36,7 +36,16 @@ export async function POST(request: Request) {
     const response = await fetch(`${hostUrl.replace(/\/$/, "")}/api/external-chat`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ requestId, text, directReply, viewerId, viewerName, requestedAt: Date.now() }),
+      body: JSON.stringify({
+        requestId,
+        text,
+        directReply,
+        viewerId,
+        viewerName,
+        sourceLabel: "台风雷达对话",
+        sourcesSeen: ["typhoon-radar"],
+        requestedAt: Date.now()
+      }),
       cache: "no-store",
       signal: AbortSignal.timeout(2_000)
     });
