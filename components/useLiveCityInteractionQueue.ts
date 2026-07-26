@@ -4,6 +4,7 @@ import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import {
   CITY_SCENE_MAX_IDLE_MS,
   CITY_SCENE_MIN_MS,
+  canQueueCityInteraction,
   createLiveDirectorQueueState,
   retainQueuedRequestPayloads,
   selectDirectorLens,
@@ -23,7 +24,6 @@ import {
 
 const CITY_COOLDOWN_MS = 10_000;
 const EVENT_DEDUPLICATION_MS = 10 * 60_000;
-const MAX_PENDING_INTERACTIONS = 5;
 
 const DEFAULT_IDLE_CONTEXT: DirectorIdleContext = {
   highestOfficialWarningLevel: null,
@@ -98,11 +98,7 @@ export function useLiveCityInteractionQueue(idleContext: DirectorIdleContext = D
     if (!isRadarOperator && !upgradedAfterLockedQuery && acceptedAt && now - acceptedAt < CITY_COOLDOWN_MS) return false;
 
     const current = machineRef.current;
-    if (
-      current.active?.request.cityKey === cityKey
-      || current.pending.some((item) => item.cityKey === cityKey)
-      || current.pending.length >= MAX_PENDING_INTERACTIONS
-    ) return false;
+    if (!canQueueCityInteraction(current, cityKey)) return false;
 
     cityAcceptedAtRef.current.set(cityKey, now);
     if (viewerCityKey) viewerCityAccessRef.current.set(viewerCityKey, request.followEvidence);

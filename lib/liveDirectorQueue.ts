@@ -88,6 +88,19 @@ export function selectDirectorLens(state: LiveDirectorQueueState): DirectorLensI
   return resolveIdleDirectorLens(state.idleContext);
 }
 
+/**
+ * Burst admission belongs to the scheduling core so UI callers cannot mistake
+ * a saturated queue for a non-city chat command. Distinct cities stay queued;
+ * exact city duplicates are still coalesced while active or pending.
+ */
+export function canQueueCityInteraction(
+  state: LiveDirectorQueueState,
+  cityKey: string
+) {
+  return state.active?.request.cityKey !== cityKey
+    && !state.pending.some((request) => request.cityKey === cityKey);
+}
+
 export function resolveIdleDirectorLens(context: DirectorIdleContext): DirectorLensIntent {
   if (context.highestOfficialWarningLevel === "red" || context.highestOfficialWarningLevel === "orange") {
     return { kind: "national" };

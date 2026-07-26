@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  canQueueCityInteraction,
   createLiveDirectorQueueState,
   resolveIdleDirectorLens,
   retainQueuedRequestPayloads,
@@ -66,6 +67,44 @@ test("duplicate request ids do not create duplicate queue entries", () => {
   state = transitionLiveDirectorQueue(state, { type: "request", request, now: 1_000 });
   assert.equal(state.active?.request.id, "杭州");
   assert.deepEqual(state.pending, []);
+});
+
+test("a short burst of city requests remains scheduled beyond the old five-item ceiling", () => {
+  let state = createLiveDirectorQueueState();
+  for (let index = 0; index < 12; index += 1) {
+    const request = nationalRequest(`burst-city-${index}`);
+    assert.equal(
+      canQueueCityInteraction(state, request.cityKey),
+      true,
+      `city ${index + 1} should remain eligible for the battle-report queue`
+    );
+    state = transitionLiveDirectorQueue(state, {
+      type: "request",
+      request,
+      now: index
+    });
+  }
+
+  assert.equal(state.active?.request.id, "burst-city-0");
+  assert.equal(state.pending.length, 11);
+
+  const presented: string[] = [];
+  let now = 1_000;
+  while (state.active) {
+    const activeId = state.active.request.id;
+    presented.push(activeId);
+    state = markPresented(state, activeId, now);
+    state = transitionLiveDirectorQueue(state, {
+      type: "complete",
+      id: activeId,
+      now: now + 10_000
+    });
+    now += 10_000;
+  }
+  assert.deepEqual(
+    presented,
+    Array.from({ length: 12 }, (_, index) => `burst-city-${index}`)
+  );
 });
 
 test("completion is deferred until ten seconds and then releases to the queued request", () => {

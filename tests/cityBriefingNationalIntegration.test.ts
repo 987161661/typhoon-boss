@@ -369,6 +369,8 @@ test("React queue and director are thin adapters over the pure scheduling and le
   assert.match(queue, /CITY_SCENE_MAX_IDLE_MS/);
   assert.match(queue, /const CITY_COOLDOWN_MS = 10_000/);
   assert.doesNotMatch(queue, /const CITY_COOLDOWN_MS = 90_000/);
+  assert.match(queue, /canQueueCityInteraction\(current, cityKey\)/);
+  assert.doesNotMatch(queue, /MAX_PENDING_INTERACTIONS/);
   assert.doesNotMatch(queue, /const MIN_ACTIVE_MS/);
   assert.match(controller, /shouldRetryResult: \(briefing\) => briefing\.status === "unavailable"/);
   assert.match(director, /data-camera-intent/);
