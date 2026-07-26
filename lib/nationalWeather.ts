@@ -3,6 +3,7 @@ import type { ChinaWeatherProductSnapshot } from "@/lib/chinaWeatherProductFeed"
 import type { ChinaWeatherVisualSnapshot } from "@/lib/chinaWeatherVisualFeed";
 import type { ChinaWeatherWarning, ChinaWeatherWarningSnapshot } from "@/lib/chinaWeatherWarningFeed";
 import type {
+  CityRankSnapshotSummary,
   NationalSituationSnapshot,
   NationalWeatherEvent,
   OfficialProductSummary,
@@ -47,6 +48,7 @@ export interface NationalSituationInputs {
   track: TrackSnapshot;
   administrativeHierarchy: AdministrativeHierarchy | null;
   administrativeHierarchyError: string | null;
+  cityRankSnapshot?: CityRankSnapshotSummary | null;
 }
 
 /**
@@ -146,7 +148,7 @@ export function buildNationalSituationSnapshot(
     products,
     // Never project or rebuild Storm: consumers receive the track contract intact.
     storms: inputs.track.storms,
-    cityRankSnapshot: null
+    cityRankSnapshot: inputs.cityRankSnapshot ?? null
   };
 }
 
@@ -363,6 +365,9 @@ function warningEvent(
 }
 
 function stormEvent(storm: Storm): NationalWeatherEvent {
+  const pressureFact = Number.isFinite(storm.minPressure) && storm.minPressure > 0
+    ? `，中心气压 ${storm.minPressure} 百帕`
+    : "，中心气压未提供";
   return {
     id: `typhoon:${storm.id}`,
     kind: "typhoon",
@@ -385,7 +390,7 @@ function stormEvent(storm: Storm): NationalWeatherEvent {
       cityAttribution: "not-applicable"
     },
     sourceIds: [NATIONAL_SOURCE_IDS.storms],
-    factSummary: `${storm.status}；${storm.stage}；中心风速 ${storm.maxWind} 米/秒，中心气压 ${storm.minPressure} 百帕。`,
+    factSummary: `${storm.status}；${storm.stage}；中心风速 ${storm.maxWind} 米/秒${pressureFact}。`,
     limitations: ["台风中心、路径、预报与风圈完整沿用路径源；全国事件层不得移动或重写。"]
   };
 }

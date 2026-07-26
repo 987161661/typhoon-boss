@@ -181,7 +181,7 @@ export function buildLiveBroadcastModel({
   lastTrackedStorm?: LastTrackedStorm | null;
 }): LiveBroadcastModel {
   const status = dataError ? "degraded" : storm ? "active" : "standby";
-  const structure = buildStructureBrief(bossProfile);
+  const structure = buildStructureBrief(storm, bossProfile);
   const sourceParts = storm
     ? ["实时路径", bossProfile?.structure.source !== "unavailable" ? bossProfile?.structure.sourceLabel : null, bossProfile?.ahi.sensor]
     : ["实时路径监测"];
@@ -196,8 +196,8 @@ export function buildLiveBroadcastModel({
     .map((point, index) => ({
     id: `${point.time}-${index}`,
     time: formatCompactTime(point.time),
-    wind: point.wind > 0 ? `${Math.round(point.wind)} m/s` : "风速待报",
-    pressure: point.pressure > 0 ? `${Math.round(point.pressure)} hPa` : "气压待报"
+    wind: point.wind > 0 ? `${Math.round(point.wind)} m/s` : "风速未提供",
+    pressure: point.pressure > 0 ? `${Math.round(point.pressure)} hPa` : "气压未提供"
     }));
   const latestEvent =
     bossProfile?.events.find((event) => event.category === "structure") ?? bossProfile?.events[0] ?? null;
@@ -213,9 +213,9 @@ export function buildLiveBroadcastModel({
     stageLabel: storm?.stage ?? "待机",
     windForceLevel: storm ? windForceFromSpeed(storm.maxWind) : "--",
     energy: bossProfile?.energy ?? (storm ? calculateFallbackEnergy(storm) : 0),
-    landfall: buildLandfallBrief(bossProfile),
+    landfall: buildLandfallBrief(storm, bossProfile),
     landfallScenarios: buildLiveLandfallScenarios(bossProfile, landingPriority),
-    stormTime: storm ? formatCompactTime(storm.updatedAt) : "等待上游发布",
+    stormTime: storm ? formatCompactTime(storm.updatedAt) : "无活动台风时次",
     syncTime: lastSyncedAt ? formatSyncTime(lastSyncedAt) : lastUpdated,
     sourceLabel: sourceSummary,
     sourceTitle: sourceLabel,
@@ -223,7 +223,7 @@ export function buildLiveBroadcastModel({
     metrics: storm ? buildMetrics(storm) : emptyMetrics(),
     structure,
     ahiBands: buildAhiBands(bossProfile),
-    ahiUpdatedAt: bossProfile?.ahi.updatedAt ? formatCompactTime(bossProfile.ahi.updatedAt) : "等待卫星资料",
+    ahiUpdatedAt: bossProfile?.ahi.updatedAt ? formatCompactTime(bossProfile.ahi.updatedAt) : "无卫星资料时次",
     forecast,
     agencyCodes: unique((storm?.forecastScenarios ?? []).map((scenario) => scenario.agencyCode)).slice(0, 5),
     trackPointCount: storm?.track.length ?? 0,
@@ -313,7 +313,7 @@ export function LiveForecastOverlay({ model }: { model: LiveBroadcastModel }) {
           ))}
         </div>
       ) : (
-        <p>预测路径时次等待上游发布</p>
+        <p>当前没有可显示的预测路径时次</p>
       )}
     </section>
   );
@@ -343,7 +343,7 @@ function LiveLandfallBroadcast({ scenarios }: { scenarios: LiveLandfallScenario[
     <section className="live-landfall-broadcast" aria-label="全国省份播报">
       <header>
         <div><RadioTower aria-hidden="true" /><strong>全国省份播报</strong></div>
-        <b>{scenario?.isPriority ? "登陆事件优先播报" : scenarios.length ? `${page + 1}/${playback.length}` : "0/34"} · {scenario?.impactLabel ?? "全国数据同步中"}</b>
+        <b>{scenario?.isPriority ? scenario.priorityReason : scenarios.length ? `${page + 1}/${playback.length}` : "0/34"} · {scenario?.impactLabel ?? "全国态势暂无结论"}</b>
       </header>
       {scenario ? (
         <article className={`${scenario.windDataStale ? "is-wind-stale" : ""} ${scenario.isPriority ? "is-landing-priority" : ""}`} key={`${scenario.id}-${page}`}>
@@ -365,9 +365,9 @@ function LiveLandfallBroadcast({ scenarios }: { scenarios: LiveLandfallScenario[
           </div>
         </article>
       ) : (
-        <div className="live-landfall-empty">全国34省级地区数据正在同步，暂不使用局部情景替代。</div>
+        <div className="live-landfall-empty">全国34省级地区暂无完整情景，不使用局部结果替代全国判断。</div>
       )}
-      <footer><i key={scenario?.id} style={{ animationDuration: `${scenario?.durationMs ?? 2500}ms` }} />下一站 {nextScenario?.province ?? "等待队列"} · 风场 {scenario?.windObservedAt ?? "待同步"}{scenario?.windDataStale ? "（延迟保护）" : ""}</footer>
+      <footer><i key={scenario?.id} style={{ animationDuration: `${scenario?.durationMs ?? 2500}ms` }} />下一站 {nextScenario?.province ?? "暂无后续"} · 风场 {scenario?.windObservedAt ?? "无独立时次"}{scenario?.windDataStale ? "（沿用上一时次）" : ""}</footer>
     </section>
   );
 }
@@ -464,7 +464,7 @@ export function LiveAudiencePanel({
 
       <section className="live-proof-strip">
         <RefreshCw key={refreshSequence} aria-hidden="true" />
-        <div><span>实时数据正在刷新</span><strong>第 {refreshSequence} 次同步 · {model.syncTime}</strong></div>
+        <div><span>公开资料连续读取</span><strong>第 {refreshSequence} 次校验 · {model.syncTime}</strong></div>
         <i />
       </section>
     </aside>
@@ -598,12 +598,20 @@ export function LiveBottomBar({
     <footer className={`live-bottom-bar live-fact-rail status-${model.status}`}>
       {model.status === "standby" ? <>
         <div className="live-cycle-closure"><RadioTower aria-hidden="true" /><span>本轮追踪状态</span><strong><OverflowMarquee>{concludedStorm ? `${concludedStorm.nameZh} 已退出实时路径清单` : "当前无活动台风"}</OverflowMarquee></strong></div>
-        <div className="live-cycle-last-fix"><Clock3 aria-hidden="true" /><span>最后公开实况</span><strong>{concludedStorm ? `${formatCompactTime(concludedStorm.lastObservedAt)} · ${concludedStorm.nameEn}` : "等待上游发布新路径"}</strong></div>
+        <div className="live-cycle-last-fix"><Clock3 aria-hidden="true" /><span>最后公开实况</span><strong>{concludedStorm ? `${formatCompactTime(concludedStorm.lastObservedAt)} · ${concludedStorm.nameEn}` : "当前没有新路径"}</strong></div>
         <div className="live-cycle-listening"><Activity aria-hidden="true" /><span>实时监听</span><strong><OverflowMarquee>本轮收束，继续监测后续热带气旋</OverflowMarquee></strong></div>
       </> : <>
         <div><Zap aria-hidden="true" /><span>当前强度</span><strong>{model.windForceLevel}级 · {model.stageLabel}</strong></div>
         <div className="live-landfall-fact"><MapPin aria-hidden="true" /><span>{model.landfall.label}</span><strong>{model.landfall.time} · {model.landfall.place}</strong></div>
-        {cityTicker && <div className="live-city-ticker-slot"><Route aria-hidden="true" /><span>城市台风动态</span><strong key={cityTicker.id}>{cityTicker.message}</strong></div>}
+        {cityTicker && (
+          <div className="live-city-ticker-slot">
+            <Route aria-hidden="true" />
+            <span>城市台风动态</span>
+            <strong key={cityTicker.id}>
+              <OverflowMarquee alwaysScroll>{cityTicker.message}</OverflowMarquee>
+            </strong>
+          </div>
+        )}
         <div className="live-energy-fact"><BatteryCharging aria-hidden="true" /><span>BOSS 能量</span><strong>{model.energy}%</strong></div>
       </>}
       <div className="live-deck-status"><TimerReset aria-hidden="true" /><span>当前：{deck === "briefing" ? "观众态势" : "专业分析"}</span><strong>{secondsToSwitch > 0 ? `${secondsToSwitch} 秒后自动换屏` : "独立场景 · 导播切换"}</strong></div>
@@ -613,10 +621,16 @@ export function LiveBottomBar({
 
 /**
  * The live fact rail gives every card a different width. Measure the text
- * against its real rendered viewport, then duplicate only overflowing copy so
- * the crawl stays seamless instead of guessing from character count.
+ * against its real rendered viewport. Most fields duplicate only overflowing
+ * copy; broadcast tickers can opt into continuous motion for every message.
  */
-function OverflowMarquee({ children }: { children: string }) {
+function OverflowMarquee({
+  children,
+  alwaysScroll = false
+}: {
+  children: string;
+  alwaysScroll?: boolean;
+}) {
   const viewportRef = useRef<HTMLSpanElement | null>(null);
   const contentRef = useRef<HTMLSpanElement | null>(null);
   const [overflowing, setOverflowing] = useState(false);
@@ -633,11 +647,13 @@ function OverflowMarquee({ children }: { children: string }) {
     return () => observer.disconnect();
   }, [children]);
 
+  const scrolling = alwaysScroll || overflowing;
+
   return (
-    <span className={`live-fact-marquee ${overflowing ? "is-overflowing" : ""}`} ref={viewportRef} title={children}>
+    <span className={`live-fact-marquee ${scrolling ? "is-scrolling" : ""}`} ref={viewportRef} title={children}>
       <span className="live-fact-marquee-track" ref={contentRef}>
         <span>{children}</span>
-        {overflowing ? <span aria-hidden="true">{children}</span> : null}
+        {scrolling ? <span aria-hidden="true">{children}</span> : null}
       </span>
     </span>
   );
@@ -677,11 +693,11 @@ function buildLiveLandfallScenarios(bossProfile?: BossProfile | null, priority?:
         windSpeed: briefing.impactStatus === "unaffected"
           ? ""
           : briefing.stormWindSpeedMs === null ? "风速待定" : `${Math.round(briefing.stormWindSpeedMs)}m/s`,
-        currentWindLevel: current.windForceLevel === "--" ? "待同步" : `${current.windForceLevel}级`,
+        currentWindLevel: current.windForceLevel === "--" ? "未提供" : `${current.windForceLevel}级`,
         currentWindSpeed: current.averageWindSpeedMs === null ? "暂无省域采样" : `${current.averageWindSpeedMs.toFixed(1)}m/s`,
-        currentWindDirection: current.windDirection ?? "风向待同步",
-        windObservedAt: current.windObservedAt ? formatClockTime(current.windObservedAt) : "时次待同步",
-        windSamples: current.windSampleCount ? `${current.windSampleCount}点` : "等待采样",
+        currentWindDirection: current.windDirection ?? "风向未提供",
+        windObservedAt: current.windObservedAt ? formatClockTime(current.windObservedAt) : "无独立时次",
+        windSamples: current.windSampleCount ? `${current.windSampleCount}点` : "无有效采样",
         windDataStale: current.windDataStale,
         ...({
         // Override legacy labels: these values are GFS grid-model samples,
@@ -702,7 +718,7 @@ function buildLiveLandfallScenarios(bossProfile?: BossProfile | null, priority?:
           : briefing.impactStatus === "unaffected" ? "影响强度" : "台风届时强度",
         modelWindObservedAt: current.windObservedAt
           ? `${formatClockTime(current.windObservedAt)} · ${formatSourceAge(current.windObservedAt)}`
-          : "时次待同步",
+          : "无独立时次",
         closestApproach: briefing.headlineLabel === "路径入省推演"
           ? "模式路径入省"
           : briefing.headlineLabel === "中心位置"
@@ -729,7 +745,9 @@ function buildLiveLandfallScenarios(bossProfile?: BossProfile | null, priority?:
         durationMs: isPriority ? 5000 : briefing.displayDurationMs,
         isPriority,
         priorityReason: isPriority
-          ? `${priority?.isConfirmed ? "官方确认" : "推断"}${priority?.phase === "upcoming" ? " · 即将登陆" : " · 登陆后重点播报"}`
+          ? priority?.isConfirmed
+            ? `官方登陆记录 · ${priority.phase === "upcoming" ? "记录时次将到" : "刚刚发布"}`
+            : `路径推演 · ${priority?.phase === "upcoming" ? "预计时段将到" : "预计时段已到"}`
           : null
         };
       });
@@ -797,26 +815,33 @@ function buildLandingPriority(storm: Storm | null, bossProfile?: BossProfile | n
 function buildCityTickerItems(storm: Storm | null): LiveCityTickerItem[] {
   if (!storm) return [];
   const now = Date.now();
-  // Provider city descriptions arrive with the public track update. Keep an
-  // explicit city report on-air across a normal upstream publication gap;
-  // this is still provider text, never a coordinate-derived city guess.
-  const cityReportWindowMs = 3 * 60 * 60 * 1000;
+  // locationDescription describes the storm center at an observed track time.
+  // It is not an arrival event or a local-city wind observation.
+  const positionReportWindowMs = 3 * 60 * 60 * 1000;
+  const futureClockSkewMs = 5 * 60 * 1000;
   return storm.track
     .map((point) => {
-      const city = point.locationDescription ? cityFromPlace(point.locationDescription) : null;
+      const description = point.locationDescription?.trim();
       const timestamp = parseStormTime(point.time);
-      if (!city || !Number.isFinite(timestamp) || Math.abs(timestamp - now) > cityReportWindowMs) return null;
-      const minutes = Math.max(0, Math.ceil((timestamp - now) / 60_000));
+      if (
+        !description ||
+        !Number.isFinite(timestamp) ||
+        timestamp > now + futureClockSkewMs ||
+        now - timestamp > positionReportWindowMs
+      ) return null;
       const level = windForceFromSpeed(point.wind);
       return {
-        id: `${point.time}-${city}`,
-        message: timestamp >= now
-          ? `预计 ${minutes} 分钟后抵达${city}，等级为 ${level} 级`
-          : `已抵达${city}，等级为 ${level} 级`
+        id: `${point.time}-${description}`,
+        message: `${formatCompactTime(point.time)} 公开实况：${formatCenterPosition(description)}，${level === "--" ? "中心最大风力未提供" : `中心最大风力 ${level} 级`}`
       };
     })
     .filter((item): item is LiveCityTickerItem => item !== null)
     .filter((item, index, items) => items.findIndex((candidate) => candidate.id === item.id) === index);
+}
+
+function formatCenterPosition(description: string) {
+  if (/^(?:距离|位于)/.test(description)) return `台风中心${description}`;
+  return `台风中心位置：${description}`;
 }
 
 function parseStormTime(value: string | null | undefined) {
@@ -849,7 +874,7 @@ function formatCountdown(value: string) {
 
 function formatClockTime(value: string) {
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "时次待同步";
+  if (Number.isNaN(date.getTime())) return "无独立时次";
   return new Intl.DateTimeFormat("zh-CN", {
     timeZone: "Asia/Shanghai",
     hour: "2-digit",
@@ -882,10 +907,23 @@ function provinceDisplayName(name: string) {
   return `${name}省`;
 }
 
-function buildLandfallBrief(bossProfile?: BossProfile | null): LiveLandfallBrief {
+function buildLandfallBrief(storm: Storm | null, bossProfile?: BossProfile | null): LiveLandfallBrief {
+  const officialLandfall = storm?.landfalls
+    .filter((item) => Number.isFinite(parseStormTime(item.time)))
+    .sort((left, right) => parseStormTime(right.time) - parseStormTime(left.time))[0];
+  if (officialLandfall) {
+    return {
+      label: "已登陆",
+      place: normalizeOfficialLandfallPlace(officialLandfall.place, officialLandfall.note),
+      time: `${formatCompactTime(officialLandfall.time)} 前后`,
+      detail: "公开路径接口已收录正式登陆记录，以该记录为准。",
+      status: "overland"
+    };
+  }
+
   const landfall = bossProfile?.landfall;
   if (!landfall) {
-    return { label: "登陆判断", place: "资料同步中", time: "等待主路径", detail: "尚未生成路径与省界交会判断。", status: "unavailable" };
+    return { label: "登陆判断", place: "暂无可核实结论", time: "无独立时次", detail: "当前路径资料尚不能支持路径与省界交会判断。", status: "unavailable" };
   }
   if (landfall.status === "forecast-landfall" && landfall.targetProvince && landfall.estimatedAt) {
     return {
@@ -911,6 +949,12 @@ function buildLandfallBrief(bossProfile?: BossProfile | null): LiveLandfallBrief
   return { label: "登陆判断", place: "暂无明确登陆信号", time: "持续监测", detail: landfall.detail, status: landfall.status };
 }
 
+function normalizeOfficialLandfallPlace(place: string, note?: string) {
+  const placeFromNote = note?.match(/在([^，。；]+?)登陆/)?.[1]?.trim();
+  if (placeFromNote) return placeFromNote;
+  return place.trim().replace(/(?:登陆|登)$/, "");
+}
+
 function windForceFromSpeed(speed: number) {
   if (!Number.isFinite(speed) || speed < 0) return "--";
   return sharedWindForceFromSpeed(speed);
@@ -928,7 +972,7 @@ function buildMetrics(storm: Storm): LiveMetric[] {
   const metrics: LiveMetric[] = [
     { label: "中心最大风速", value: storm.maxWind > 0 ? String(Math.round(storm.maxWind)) : "--", unit: "m/s", tone: "hot" },
     { label: "中心气压", value: storm.minPressure > 0 ? String(Math.round(storm.minPressure)) : "--", unit: "hPa", tone: "cool" },
-    { label: "移动", value: storm.moveDirection || "待报", unit: storm.moveSpeed > 0 ? `${Math.round(storm.moveSpeed)} km/h` : "速度待报", tone: "neutral" },
+    { label: "移动", value: storm.moveDirection || "未提供", unit: storm.moveSpeed > 0 ? `${Math.round(storm.moveSpeed)} km/h` : "速度未提供", tone: "neutral" },
   ];
   if (radius) metrics.push({ label: radius.label, value: String(Math.round(radius.value)), unit: "km", tone: "neutral" });
   return metrics;
@@ -938,7 +982,7 @@ function emptyMetrics(): LiveMetric[] {
   return ["中心最大风速", "中心气压", "移动", "风圈半径"].map((label) => ({
     label,
     value: "--",
-    unit: "待发布",
+    unit: "未提供",
     tone: "neutral" as const
   }));
 }
@@ -950,7 +994,7 @@ function selectStrongestRadius(storm: Storm) {
   return null;
 }
 
-function buildStructureBrief(bossProfile?: BossProfile | null): LiveStructureBrief {
+function buildStructureBrief(storm: Storm | null, bossProfile?: BossProfile | null): LiveStructureBrief {
   const structure = bossProfile?.structure;
   const hasRetainedHistory = Boolean(structure?.historyCount);
   if (structure && (structure.state !== "unknown" || hasRetainedHistory)) {
@@ -969,10 +1013,42 @@ function buildStructureBrief(bossProfile?: BossProfile | null): LiveStructureBri
       ].filter(Boolean).join(" · "),
       evidenceLabel: isHistoryFallback ? "最后有效结构通报" : evidenceLabel(structure.evidenceLevel),
       evidenceLevel: structure.evidenceLevel,
-      confidenceLabel: isHistoryFallback ? "等待后续通报" : `置信 ${Math.round(structure.confidence * 100)}%`,
+      confidenceLabel: isHistoryFallback ? "沿用最近有效判读" : `置信 ${Math.round(structure.confidence * 100)}%`,
       sourceLabel: structure.sourceLabel,
       observedAt: formatCompactTime(structure.observedAt)
     };
+  }
+
+  if (storm) {
+    const intensityFacts = [
+      storm.maxWind > 0 ? `中心最大风速 ${Math.round(storm.maxWind)} m/s` : "",
+      storm.minPressure > 0 ? `中心气压 ${Math.round(storm.minPressure)} hPa` : ""
+    ].filter(Boolean);
+    const radiusFacts = ([
+      ["12级风圈", storm.windRadiiKm.r12, storm.windRadiiReports?.r12],
+      ["10级风圈", storm.windRadiiKm.r10, storm.windRadiiReports?.r10],
+      ["7级风圈", storm.windRadiiKm.r7, storm.windRadiiReports?.r7]
+    ] as const).flatMap(([label, currentRadius, report]) => {
+      if (currentRadius > 0) return [`${label} ${Math.round(currentRadius)} km`];
+      if (report && report.max > 0) {
+        return [`${label} ${Math.round(report.max)} km（最近公开于 ${formatCompactTime(report.observedAt)}）`];
+      }
+      return [];
+    });
+    const verifiedFacts = [...intensityFacts, ...radiusFacts];
+    if (verifiedFacts.length > 0) {
+      return {
+        mode: "structure",
+        eyebrow: "核心结构判读",
+        title: "强度与风圈实况",
+        detail: `${verifiedFacts.join("、")}；当前没有权威结构源确认眼壁状态，不推断眼墙。`,
+        evidenceLabel: "公开路径实况",
+        evidenceLevel: "confirmed",
+        confidenceLabel: "字段已核验",
+        sourceLabel: bossProfile?.sourcePolicy.machineReadableTrackSource ?? "公开台风路径",
+        observedAt: formatCompactTime(storm.updatedAt)
+      };
+    }
   }
 
   if (bossProfile && (bossProfile.ahi.status !== "unavailable" || bossProfile.satellite.status !== "unavailable")) {
@@ -995,13 +1071,13 @@ function buildStructureBrief(bossProfile?: BossProfile | null): LiveStructureBri
   return {
     mode: "unavailable",
     eyebrow: "核心结构判读",
-    title: "结构信源待恢复",
+    title: "暂无可核实结构结论",
     detail: "当前未取得可确认眼壁状态的实时结构通报；路径、强度和风圈仍按各自信源显示。",
     evidenceLabel: "实时源不可用",
     evidenceLevel: "unavailable",
     confidenceLabel: "不作推断",
     sourceLabel: "--",
-    observedAt: "等待资料"
+    observedAt: "无独立结构时次"
   };
 }
 
@@ -1087,7 +1163,7 @@ function evidenceLabel(level: BossEvidenceLevel) {
 
 function formatCompactTime(value: string) {
   const date = new Date(value.replace(" ", "T"));
-  if (Number.isNaN(date.getTime())) return value || "等待资料";
+  if (Number.isNaN(date.getTime())) return value || "无独立时次";
   return date.toLocaleString("zh-CN", {
     month: "2-digit",
     day: "2-digit",

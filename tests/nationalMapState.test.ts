@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   activeStormIndexForMap,
   createNationalMapState,
+  overviewStormForMap,
   reduceNationalMapState,
   selectedStormForMap
 } from "../components/map/nationalMapState";
@@ -52,6 +53,7 @@ test("one storm is opt-in and return-national clears the selection", () => {
   const storms = [storm("202610")];
   const initial = createNationalMapState();
   assert.equal(selectedStormForMap(initial, storms), null);
+  assert.equal(overviewStormForMap(initial, storms)?.id, "202610");
 
   const selected = reduceNationalMapState(initial, { type: "select-storm", stormId: "202610" });
   assert.equal(selectedStormForMap(selected, storms)?.id, "202610");

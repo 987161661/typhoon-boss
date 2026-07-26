@@ -47,9 +47,12 @@ export function windFieldMatchesStorm(windField: WindFieldPayload | null, storm:
 export function selectCanonicalStormWindField(
   storm: Storm | null,
   coreWindField: WindFieldPayload | null,
-  snapshotWindField: WindFieldPayload | null
+  renderedWindField: WindFieldPayload | null
 ) {
-  for (const candidate of [coreWindField, snapshotWindField]) {
+  // The marker and the visible vectors must share one model frame. Prefer the
+  // rendered high-resolution core, then the rendered ambient field; never use
+  // an independently refreshed snapshot that is not on the canvas.
+  for (const candidate of [coreWindField, renderedWindField]) {
     if (
       candidate?.status === "available" &&
       candidate.source === "NOAA/NCEP NOMADS Grib Filter" &&

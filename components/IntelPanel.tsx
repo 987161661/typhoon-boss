@@ -97,7 +97,7 @@ export function IntelPanel({
   if (!storm) {
     const syncedLabel = lastSyncedAt
       ? new Date(lastSyncedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false })
-      : "等待首次同步";
+      : "暂无公开资料时次";
     return (
       <aside className={`intel-panel standby-intel-panel ${dataError ? "is-degraded" : ""}`} aria-label="台风监测静息状态">
         <div className="panel-topline standby-topline">
@@ -201,7 +201,7 @@ export function IntelPanel({
         bossProfile.structure.state !== "unknown" ? (
           <StructureEvidenceBrief bossProfile={bossProfile} />
         ) : (
-          <SatelliteEvidenceBrief bossProfile={bossProfile} />
+          <SatelliteEvidenceBrief bossProfile={bossProfile} satelliteLayer={satelliteLayer} />
         )
       ) : null}
 
@@ -750,11 +750,19 @@ function StructureEvidenceBrief({ bossProfile }: { bossProfile: BossProfile }) {
   );
 }
 
-function SatelliteEvidenceBrief({ bossProfile }: { bossProfile: BossProfile }) {
+function SatelliteEvidenceBrief({
+  bossProfile,
+  satelliteLayer
+}: {
+  bossProfile: BossProfile;
+  satelliteLayer?: SatelliteLayerPayload | null;
+}) {
   const satellite = bossProfile.satellite;
   const available = satellite.products.filter((product) => product.status === "available");
-  const statusLabel =
+  const operationalLayerAvailable = satelliteLayer?.status === "available";
+  const advancedStatusLabel =
     satellite.status === "available" ? "全产品可用" : satellite.status === "degraded" ? "部分可用" : "链路不可用";
+  const statusLabel = operationalLayerAvailable ? "实时云图可用" : advancedStatusLabel;
 
   return (
     <HudPanel as="section" className="satellite-evidence-brief">
@@ -764,7 +772,9 @@ function SatelliteEvidenceBrief({ bossProfile }: { bossProfile: BossProfile }) {
         <strong>{statusLabel}</strong>
       </div>
       <p>
-        {satellite.status === "unavailable"
+        {operationalLayerAvailable
+          ? `${satelliteLayer.product} 已同步；多波段增强产品独立刷新，不影响当前云图。`
+          : satellite.status === "unavailable"
           ? satellite.warnings[0] ?? "卫星产品暂不可用。"
           : `${satellite.area.toUpperCase()} 区域：${available.map((product) => product.product.toUpperCase()).join(" / ")}。仅作卫星提示。`}
       </p>

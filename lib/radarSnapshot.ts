@@ -4,14 +4,17 @@ import { getImpactArea, getSatelliteLayer, getWindField } from "@/lib/environmen
 import { findProvinceReferencePoint, getProvinceBoundaryCoordinates, getProvinceReferencePoints, getProvinceSampleCoordinates, normalizeProvinceName } from "@/lib/provinceGeo";
 import { distanceBetweenKm, distanceToPathKm, windForceFromSpeed } from "@/lib/meteorology";
 import { getDataSourceLabel, getTrackSnapshot, type LastTrackedStorm } from "@/lib/realTyphoonData";
+import { retainAvailableRadarPayload, retainUsableBossProfiles } from "@/lib/radarDataContinuity";
 import type { ImpactAreaPayload, SatelliteLayerPayload, Storm, WindFieldPayload } from "@/lib/types";
 
 const DERIVED_CACHE_TTL_MS = 4 * 60 * 1000;
 const DEGRADED_DERIVED_CACHE_TTL_MS = 2 * 60 * 1000;
 const STALE_DERIVED_CACHE_TTL_MS = 10 * 60 * 1000;
+const BOOTSTRAP_DERIVED_CACHE_TTL_MS = 1_000;
 // A decorative or analytical layer must never prevent the live path feed from
 // reaching the broadcast page. Timed-out layers fall back independently.
 const DERIVED_REQUEST_TIMEOUT_MS = 7_000;
+const WIND_DERIVED_TIMEOUT_MS = 20_000;
 const CHINA_WIND_BOUNDS = { west: 73, east: 135, south: 18, north: 54 };
 const MODEL_WIND_MAX_AGE_MS = 6 * 60 * 60 * 1000;
 const FAST_PROVINCE_BRIEFINGS = new Set(["西藏", "青海", "宁夏", "海南", "香港", "澳门"]);
@@ -62,6 +65,7 @@ interface DerivedSnapshot {
 
 const derivedCache = new Map<string, DerivedSnapshot>();
 const derivedInFlight = new Map<string, Promise<DerivedSnapshot>>();
+const lastGoodDerivedByScope = new Map<string, DerivedSnapshot>();
 
 export async function getRadarSnapshot(stormId?: string | null): Promise<RadarSnapshot> {
   const trackSnapshot = await getTrackSnapshot();
@@ -71,7 +75,7 @@ export async function getRadarSnapshot(stormId?: string | null): Promise<RadarSn
   const derived = await getDerivedSnapshot(storms, activeStormId);
 
   return {
-    source: getDataSourceLabel(),
+    source: trackSnapshot.source,
     updatedAt: new Date().toISOString(),
     observedAt: trackSnapshot.observedAt,
     fetchedAt: trackSnapshot.fetchedAt,
@@ -93,29 +97,64 @@ export async function getRadarSnapshot(stormId?: string | null): Promise<RadarSn
 
 async function getDerivedSnapshot(storms: Storm[], activeStormId: string | null) {
   const key = derivedCacheKey(storms, activeStormId);
+  const scope = derivedScopeKey(activeStormId);
   const now = Date.now();
   const cached = derivedCache.get(key);
   if (cached && cached.expiresAt > now) {
     return cached;
   }
 
-  const inFlight = derivedInFlight.get(key);
-  if (inFlight) {
-    return inFlight;
-  }
-
   if (cached && cached.staleUntil > now) {
-    void refreshDerivedSnapshot(key, storms, activeStormId);
+    if (!derivedInFlight.has(key)) void refreshDerivedSnapshot(key, storms, activeStormId, cached);
     return cached;
   }
 
-  return refreshDerivedSnapshot(key, storms, activeStormId);
+  const inFlight = derivedInFlight.get(key);
+  if (inFlight) return inFlight;
+
+  // Track positions are the critical path. Satellite, wind and Boss
+  // enrichment depend on much slower external providers and are hydrated in
+  // the background. This keeps a cold provider from delaying the first map by
+  // the full derived-layer timeout budget.
+  const retained = lastGoodDerivedByScope.get(scope);
+  const bootstrap = buildBootstrapDerivedSnapshot(retained);
+  derivedCache.set(key, bootstrap);
+  void refreshDerivedSnapshot(key, storms, activeStormId, retained);
+  return bootstrap;
 }
 
-function refreshDerivedSnapshot(key: string, storms: Storm[], activeStormId: string | null) {
-  const request = loadDerivedSnapshot(storms, activeStormId).then(
+function buildBootstrapDerivedSnapshot(retained?: DerivedSnapshot): DerivedSnapshot {
+  const generatedAt = new Date().toISOString();
+  return {
+    bosses: retained?.bosses ?? [],
+    environment: retained?.environment ?? {
+      satellite: fallbackSatellite(generatedAt),
+      windField: fallbackWindField(generatedAt),
+      windCenters: {},
+      impactArea: fallbackImpactArea(generatedAt)
+    },
+    generatedAt,
+    expiresAt: Date.now() + BOOTSTRAP_DERIVED_CACHE_TTL_MS,
+    staleUntil: Date.now() + STALE_DERIVED_CACHE_TTL_MS,
+    warnings: retained
+      ? [...retained.warnings, "台风路径已刷新；Boss 与环境图层继续使用上一份有效快照。"]
+      : ["台风路径已先行加载；卫星、风场与影响区尚无可用快照。"]
+  };
+}
+
+function refreshDerivedSnapshot(
+  key: string,
+  storms: Storm[],
+  activeStormId: string | null,
+  retained?: DerivedSnapshot
+) {
+  const scope = derivedScopeKey(activeStormId);
+  const request = loadDerivedSnapshot(storms, activeStormId, retained).then(
     (snapshot) => {
       derivedCache.set(key, snapshot);
+      if (storms.length === 0 || snapshot.bosses.length > 0) {
+        lastGoodDerivedByScope.set(scope, snapshot);
+      }
       derivedInFlight.delete(key);
       pruneDerivedCache();
       return snapshot;
@@ -124,10 +163,12 @@ function refreshDerivedSnapshot(key: string, storms: Storm[], activeStormId: str
       derivedInFlight.delete(key);
       const stale = derivedCache.get(key);
       if (stale) {
-        return {
+        const retainedAfterFailure = {
           ...stale,
           warnings: [...stale.warnings, error instanceof Error ? error.message : "Derived radar data refresh failed."]
         };
+        derivedCache.set(key, retainedAfterFailure);
+        return retainedAfterFailure;
       }
       throw error;
     }
@@ -136,23 +177,56 @@ function refreshDerivedSnapshot(key: string, storms: Storm[], activeStormId: str
   return request;
 }
 
-async function loadDerivedSnapshot(storms: Storm[], activeStormId: string | null): Promise<DerivedSnapshot> {
+async function loadDerivedSnapshot(
+  storms: Storm[],
+  activeStormId: string | null,
+  retained?: DerivedSnapshot
+): Promise<DerivedSnapshot> {
   const generatedAt = new Date().toISOString();
   const warnings: string[] = [];
   const [bossResult, satelliteResult, windResult, windCentersResult, impactResult, chinaWindResult] = await Promise.allSettled([
     withTimeout(buildBossProfiles(storms), "Boss profile"),
-    withTimeout(getSatelliteLayer(storms.find((storm) => storm.id === activeStormId)?.updatedAt ?? storms[0]?.updatedAt), "Satellite layer"),
-    withTimeout(getWindField(activeStormId), "Local wind field"),
-    withTimeout(loadStormWindCenters(storms), "Storm wind centers"),
+    withTimeout(
+      getSatelliteLayer(storms.find((storm) => storm.id === activeStormId)?.updatedAt ?? storms[0]?.updatedAt),
+      "Satellite layer",
+      20_000
+    ),
+    withTimeout(getWindField(activeStormId), "Local wind field", WIND_DERIVED_TIMEOUT_MS),
+    withTimeout(loadStormWindCenters(storms), "Storm wind centers", WIND_DERIVED_TIMEOUT_MS),
     withTimeout(getImpactArea(activeStormId), "Impact area"),
-    withTimeout(getWindField(activeStormId, CHINA_WIND_BOUNDS), "Nationwide wind field")
+    withTimeout(getWindField(activeStormId, CHINA_WIND_BOUNDS), "Nationwide wind field", WIND_DERIVED_TIMEOUT_MS)
   ]);
 
-  const baseBosses = settleValue(bossResult, [], warnings, "Boss profile generation failed.");
-  const satellite = settleValue(satelliteResult, fallbackSatellite(generatedAt), warnings, "Satellite layer generation failed.");
-  const directWindField = settleValue(windResult, fallbackWindField(generatedAt), warnings, "Wind field generation failed.");
-  const windCenters = settleValue(windCentersResult, {}, warnings, "Storm wind center generation failed.");
-  const impactArea = settleValue(impactResult, fallbackImpactArea(generatedAt), warnings, "Impact area generation failed.");
+  const nextBosses = settleValue(bossResult, [], warnings, "Boss profile generation failed.");
+  const baseBosses = retainUsableBossProfiles(
+    nextBosses,
+    retained?.bosses ?? [],
+    storms.map((storm) => storm.id)
+  );
+  const satellite = retainAvailableRadarPayload(settleValue(
+    satelliteResult,
+    fallbackSatellite(generatedAt),
+    warnings,
+    "Satellite layer generation failed."
+  ), retained?.environment.satellite);
+  const directWindField = retainAvailableRadarPayload(settleValue(
+    windResult,
+    fallbackWindField(generatedAt),
+    warnings,
+    "Wind field generation failed."
+  ), retained?.environment.windField);
+  const windCenters = settleValue(
+    windCentersResult,
+    retained?.environment.windCenters ?? {},
+    warnings,
+    "Storm wind center generation failed."
+  );
+  const impactArea = retainAvailableRadarPayload(settleValue(
+    impactResult,
+    fallbackImpactArea(generatedAt),
+    warnings,
+    "Impact area generation failed."
+  ), retained?.environment.impactArea);
   const chinaWindField = settleValue(chinaWindResult, directWindField, warnings, "Nationwide province wind field generation failed.");
   const windField = directWindField.status === "available"
     ? directWindField
@@ -215,9 +289,9 @@ function compactWindField(payload: WindFieldPayload): WindFieldPayload {
   };
 }
 
-function withTimeout<T>(request: Promise<T>, label: string): Promise<T> {
+function withTimeout<T>(request: Promise<T>, label: string, timeoutMs = DERIVED_REQUEST_TIMEOUT_MS): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${DERIVED_REQUEST_TIMEOUT_MS / 1000}s.`)), DERIVED_REQUEST_TIMEOUT_MS);
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs / 1000}s.`)), timeoutMs);
     request.then(
       (value) => { clearTimeout(timer); resolve(value); },
       (error) => { clearTimeout(timer); reject(error); }
@@ -418,6 +492,10 @@ function derivedCacheKey(storms: Storm[], activeStormId: string | null) {
     activeStormId ?? "default",
     ...storms.map((storm) => `${storm.id}:${storm.updatedAt}:${storm.maxWind}:${storm.minPressure}`)
   ].join("|");
+}
+
+function derivedScopeKey(activeStormId: string | null) {
+  return activeStormId ?? "no-storms";
 }
 
 function pruneDerivedCache() {

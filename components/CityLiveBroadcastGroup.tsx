@@ -25,6 +25,7 @@ import {
   type LiveCityBroadcastMetric
 } from "@/lib/liveCityBroadcastModel";
 import {
+  LIVE_CITY_BROADCAST_RENDER_MILESTONES,
   LIVE_CITY_BROADCAST_TIMELINE,
   resolveLiveCityBroadcastAct,
   resolveLiveScoreAt,
@@ -94,10 +95,6 @@ export function CityLiveBroadcastGroup({
     () => resolveLiveSummarySpeed(presentation.battle.summary),
     [presentation.battle.summary]
   );
-  const score = reducedMotion
-    ? Math.round(presentation.battle.score)
-    : resolveLiveScoreAt(elapsedMs, presentation.battle.score);
-
   useEffect(() => setSummaryComplete(reducedMotion), [presentation.battle.summary, reducedMotion]);
 
   useEffect(() => {
@@ -186,14 +183,7 @@ export function CityLiveBroadcastGroup({
           </header>
 
           <section className={styles.verdict} aria-label="战况结论">
-            <div
-              className={styles.score}
-              style={{ "--broadcast-score": `${score}%` } as CSSProperties}
-              aria-label={`战况指数 ${score}`}
-            >
-              <span>指数</span>
-              <strong>{score}</strong>
-            </div>
+            <BroadcastScore target={presentation.battle.score} reducedMotion={reducedMotion} />
             <div className={styles.verdictCopy}>
               <span>本轮结论</span>
               <h3>{presentation.battle.title}</h3>
@@ -359,6 +349,51 @@ function ArchiveSlot({
   </section>;
 }
 
+function BroadcastScore({ target, reducedMotion }: {
+  target: number | null;
+  reducedMotion: boolean;
+}) {
+  const scoreEndMs = LIVE_CITY_BROADCAST_TIMELINE.summaryStartMs + 600;
+  const [elapsedMs, setElapsedMs] = useState(reducedMotion ? scoreEndMs : 0);
+
+  useEffect(() => {
+    if (target === null || reducedMotion) {
+      setElapsedMs(scoreEndMs);
+      return;
+    }
+    const startedAt = performance.now();
+    let frame = 0;
+    let lastPaint = -50;
+    const tick = (now: number) => {
+      const next = Math.min(scoreEndMs, now - startedAt);
+      if (next - lastPaint >= 32 || next >= scoreEndMs) {
+        lastPaint = next;
+        setElapsedMs(next);
+      }
+      if (next < scoreEndMs) frame = window.requestAnimationFrame(tick);
+    };
+    frame = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(frame);
+  }, [reducedMotion, scoreEndMs, target]);
+
+  const score = target === null
+    ? null
+    : reducedMotion
+      ? Math.round(target)
+      : resolveLiveScoreAt(elapsedMs, target);
+  return (
+    <div
+      className={styles.score}
+      style={{ "--broadcast-score": `${score ?? 0}%` } as CSSProperties}
+      data-score-state={score === null ? "unknown" : "available"}
+      aria-label={score === null ? "战况指数待判，当前资料不足" : `战况指数 ${score}`}
+    >
+      <span>{score === null ? "指数待判" : "指数"}</span>
+      <strong>{score === null ? "—" : score}</strong>
+    </div>
+  );
+}
+
 function compactArchiveCode(code: string) {
   const segments = code.split("-").filter(Boolean);
   return segments.length > 2 ? segments.slice(-2).join("-") : code;
@@ -394,20 +429,13 @@ function useLiveBroadcastTimeline(effects: LiveCityBroadcastEffects, reducedMoti
       setElapsedMs(LIVE_CITY_BROADCAST_TIMELINE.settledMs);
       return;
     }
-    const startedAt = performance.now();
-    let frame = 0;
-    let lastPaint = -50;
-    const tick = (now: number) => {
-      const next = Math.min(LIVE_CITY_BROADCAST_TIMELINE.settledMs, now - startedAt);
-      if (next - lastPaint >= 32 || next >= LIVE_CITY_BROADCAST_TIMELINE.settledMs) {
-        lastPaint = next;
-        elapsedRef.current = next;
-        setElapsedMs(next);
-      }
-      if (next < LIVE_CITY_BROADCAST_TIMELINE.settledMs) frame = window.requestAnimationFrame(tick);
-    };
-    frame = window.requestAnimationFrame(tick);
-    return () => window.cancelAnimationFrame(frame);
+    setElapsedMs(0);
+    elapsedRef.current = 0;
+    const timers = LIVE_CITY_BROADCAST_RENDER_MILESTONES.map((at) => window.setTimeout(() => {
+      elapsedRef.current = at;
+      setElapsedMs(at);
+    }, at));
+    return () => timers.forEach((timer) => window.clearTimeout(timer));
   }, [reducedMotion]);
 
   useEffect(() => {

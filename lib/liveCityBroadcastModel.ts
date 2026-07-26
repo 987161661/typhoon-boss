@@ -17,7 +17,7 @@ export interface LiveCityBroadcastModel {
   viewerLabel: string | null;
   battle: {
     title: string;
-    score: number;
+    score: number | null;
     summary: string;
     spotlight: LiveCityBroadcastMetric;
     nearTerm: LiveCityBroadcastMetric | null;

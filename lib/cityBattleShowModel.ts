@@ -37,7 +37,7 @@ export interface CityBattleShowViewModel {
   cityLabel: string;
   viewerLabel: string | null;
   title: string;
-  score: number;
+  score: number | null;
   statusSeal: string | null;
   summary: string;
   rankIntel: CityBattleRankIntel[];
@@ -65,7 +65,9 @@ export function buildCityBattleShowModel({
     cityLabel: model.shared.cityLabel,
     viewerLabel: model.shared.viewerName,
     title: safeText(model.battle.title, officialFacts, "城市战况载入"),
-    score: clamp(model.battle.threatScore, 0, 100),
+    score: model.battle.threatScore === null
+      ? null
+      : clamp(model.battle.threatScore, 0, 100),
     statusSeal: model.battle.statusSeal
       ? safeText(model.battle.statusSeal, officialFacts, "EVENT // ACTIVE")
       : null,
@@ -284,7 +286,7 @@ function sanitizeArchive(archive: BattleArchive, officialFacts: string[]): Battl
     ...archive,
     status: "unavailable",
     fragment: null,
-    statusText: "观测员权限已确认，档案同步中"
+    statusText: "观测员权限已确认，本次暂无可展示档案"
   };
 }
 

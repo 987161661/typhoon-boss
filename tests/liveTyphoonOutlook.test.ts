@@ -3,8 +3,15 @@ import test from "node:test";
 import {
   buildLiveTyphoonOutlookView,
   buildTyphoonOutlookMarkerModels,
+  shouldShowTyphoonEvolutionOutlook,
   type TyphoonEvolutionOutlookPayload
 } from "../lib/liveTyphoonOutlook";
+
+test("disturbance-generation outlook is hidden while an active storm exists", () => {
+  assert.equal(shouldShowTyphoonEvolutionOutlook(true, true, 0), true);
+  assert.equal(shouldShowTyphoonEvolutionOutlook(true, true, 1), false);
+  assert.equal(shouldShowTyphoonEvolutionOutlook(false, true, 0), false);
+});
 
 const payload: TyphoonEvolutionOutlookPayload = {
   status: "available",
@@ -13,6 +20,8 @@ const payload: TyphoonEvolutionOutlookPayload = {
     schemaVersion: 1,
     generatedAt: "2026-07-19T15:12:51.424Z",
     basin: "western-north-pacific",
+    evidenceStatus: "available",
+    coverage: { nearTerm: "available", week2: "available", week3: "available" },
     summary: "JTWC 当前未列出热带扰动；延伸期有 2 个 CPC 概率区域。",
     sources: {},
     nearTermDisturbances: [],
@@ -66,4 +75,24 @@ test("returns an explicit unavailable broadcast without map markers", () => {
   };
   assert.equal(buildLiveTyphoonOutlookView(unavailable).available, false);
   assert.deepEqual(buildTyphoonOutlookMarkerModels(unavailable), []);
+});
+
+test("degraded evidence is labeled partial while retaining verified markers", () => {
+  const degraded: TyphoonEvolutionOutlookPayload = {
+    ...payload,
+    status: "degraded",
+    outlook: {
+      ...payload.outlook!,
+      evidenceStatus: "degraded",
+      coverage: { nearTerm: "unavailable", week2: "available", week3: "unavailable" },
+      summary: "JTWC 资料不可用，近24小时扰动状态未知；CPC 延伸期资料不完整，已取得资料中解析到 2 个概率区域。"
+    }
+  };
+
+  const view = buildLiveTyphoonOutlookView(degraded);
+  assert.equal(view.available, true);
+  assert.match(view.tickerText, /资料覆盖不完整/);
+  assert.match(view.tickerText, /状态未知/);
+  assert.match(view.sourceLabel, /PARTIAL/);
+  assert.equal(buildTyphoonOutlookMarkerModels(degraded).length, 2);
 });

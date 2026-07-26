@@ -87,10 +87,61 @@ function Wait-TyphoonHealth {
   throw "Typhoon data connection did not become ready within $TimeoutSeconds seconds. Last result: $lastFailure"
 }
 
+function Remove-RetiredBilibiliListener {
+  param([int]$GatewayPort = 8197)
+
+  $gatewayListener = Get-NetTCPConnection `
+    -LocalPort $GatewayPort `
+    -State Listen `
+    -ErrorAction SilentlyContinue |
+    Select-Object -First 1
+  if (-not $gatewayListener) {
+    return
+  }
+
+  try {
+    $health = Invoke-RestMethod `
+      -Uri "http://127.0.0.1:$GatewayPort/health" `
+      -TimeoutSec 2
+    if ($health.connectorId -eq 'ordinaryroad') {
+      return
+    }
+  } catch {
+    # Resolve the owning process below. Never stop an unknown port owner.
+  }
+
+  $listenerProcess = Get-CimInstance Win32_Process `
+    -Filter "ProcessId=$($gatewayListener.OwningProcess)"
+  $retiredScript = Join-Path $vtuberRoot 'scripts\bilibili-room-supervisor.mjs'
+  if (
+    -not $listenerProcess -or
+    $listenerProcess.Name -ne 'node.exe' -or
+    $listenerProcess.CommandLine -notlike "*$retiredScript*"
+  ) {
+    throw "Port $GatewayPort is occupied by an unrecognized process; refusing to stop it."
+  }
+
+  Write-Host "Replacing retired Bilibili listener on port $GatewayPort."
+  Stop-Process -Id $listenerProcess.ProcessId -Force
+  for ($attempt = 0; $attempt -lt 20; $attempt += 1) {
+    Start-Sleep -Milliseconds 250
+    $gatewayListener = Get-NetTCPConnection `
+      -LocalPort $GatewayPort `
+      -State Listen `
+      -ErrorAction SilentlyContinue
+    if (-not $gatewayListener) {
+      return
+    }
+  }
+  throw "Retired Bilibili listener did not release port $GatewayPort."
+}
+
 if (-not $NoLinglan) {
   if (-not $linglanLauncher) {
     throw "Linglan runtime launcher was not found. Expected one of: $linglanControlRoomLauncher; $linglanLegacyLauncher"
   }
+
+  Remove-RetiredBilibiliListener -GatewayPort 8197
 
   # Prefer the current control-room launcher. It is self-sufficient when the
   # retired umbrella launcher is absent, and keeps the radar independent of a

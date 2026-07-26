@@ -39,6 +39,11 @@ export function selectedStormForMap(state: NationalMapState, storms: readonly St
   return storms.find((storm) => storm.id === state.selectedStormId) ?? null;
 }
 
+/** Keeps status panels synchronized without changing the national map camera. */
+export function overviewStormForMap(state: NationalMapState, storms: readonly Storm[]): Storm | null {
+  return selectedStormForMap(state, storms) ?? storms[0] ?? null;
+}
+
 export function activeStormIndexForMap(state: NationalMapState, storms: readonly Storm[]) {
   if (state.mode !== "typhoon") return 0;
   const index = storms.findIndex((storm) => storm.id === state.selectedStormId);

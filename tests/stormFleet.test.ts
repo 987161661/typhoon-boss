@@ -127,14 +127,14 @@ test("a wind field can never move a different storm", () => {
   assert.equal(windFieldMatchesStorm(field, haishen), false);
 });
 
-test("canonical storm center prefers the high-resolution core field and never accepts a viewport substitute", () => {
+test("canonical storm center prefers the rendered high-resolution core and otherwise uses the rendered ambient frame", () => {
   const bavi = storm("202609", 121, 36.9);
-  const snapshot = windField(bavi.id, 119.25, 35.25, 1);
+  const renderedAmbient = windField(bavi.id, 119.25, 35.25, 1);
   const core = windField(bavi.id, 119.5, 35.5, 0.25);
   const foreign = windField("202611", 136.75, 11.75, 0.25);
 
-  assert.equal(selectCanonicalStormWindField(bavi, core, snapshot), core);
-  assert.equal(selectCanonicalStormWindField(bavi, null, snapshot), snapshot);
+  assert.equal(selectCanonicalStormWindField(bavi, core, renderedAmbient), core);
+  assert.equal(selectCanonicalStormWindField(bavi, null, renderedAmbient), renderedAmbient);
   assert.equal(selectCanonicalStormWindField(bavi, foreign, null), null);
 });
 

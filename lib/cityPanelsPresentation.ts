@@ -89,7 +89,7 @@ export interface CityPanelsModel {
   };
   battle: {
     title: string;
-    threatScore: number;
+    threatScore: number | null;
     statusSeal: string | null;
     summary: string;
     mutators: BattleMutator[];
@@ -294,7 +294,10 @@ function buildWarning(briefing: CityBriefing): PanelWarning {
 function getPrimaryKind(briefing: CityBriefing): PanelRiskId | "warning" | "ordinary" | "unavailable" {
   const situation = briefing.situation;
   if (situation) {
-    if (situation.mode === "data-unavailable") return "unavailable";
+    // The national situation layer can be unavailable while city observations
+    // and forecasts are healthy. That is a warning-capability gap, not a reason
+    // to erase the city's weather battle model.
+    if (situation.mode === "data-unavailable" && !hasUsableCityWeather(briefing)) return "unavailable";
     if (situation.mode === "official-warning") {
       const hazard = situation.primaryWarning?.hazard;
       return isPanelRiskId(hazard) ? hazard : "warning";
@@ -373,8 +376,21 @@ function buildThreatScore(briefing: CityBriefing, warning: PanelWarning) {
     const level = warning.level?.toLowerCase() ?? "watch";
     return WARNING_WEIGHT[level] ?? WARNING_WEIGHT[warning.level ?? ""] ?? 72;
   }
-  if (briefing.situation?.mode === "data-unavailable" || briefing.status === "unavailable") return 0;
+  if (!hasUsableCityWeather(briefing)) return null;
   return Math.max(18, ...briefing.risks.map((risk) => RISK_WEIGHT[risk.level]));
+}
+
+function hasUsableCityWeather(briefing: CityBriefing) {
+  if (briefing.status === "unavailable" || !briefing.current.sourceId) return false;
+  return [
+    briefing.current.temperatureC,
+    briefing.current.apparentTemperatureC,
+    briefing.current.relativeHumidityPct,
+    briefing.current.precipitationMm,
+    briefing.current.windSpeedMps,
+    briefing.current.weatherCode,
+    briefing.current.weatherText
+  ].some((value) => value !== null && value !== undefined && value !== "");
 }
 
 function buildMutators(briefing: CityBriefing, primaryKind: ReturnType<typeof getPrimaryKind>): BattleMutator[] {
@@ -510,7 +526,7 @@ function archiveStatusText(status: CityArchiveStatus) {
   if (status === "locked") return "未检测到关注凭证｜关注主播，登记为观测员并解锁本次档案。";
   if (status === "unlocking") return "关注凭证已确认｜档案解封中。";
   if (status === "unlocked") return "观测员权限已确认｜档案已公开解码。";
-  return "观测员权限已确认，档案同步中。";
+  return "观测员权限已确认，本次暂无可展示档案。";
 }
 
 function buildCurrentMetrics(briefing: CityBriefing): PanelMetric[] {

@@ -26,8 +26,9 @@ test("failed warning refresh retains the last-good red warning instead of becomi
 test("city controller keeps location acquisition and exactly one full briefing request", async () => {
   const source = await read("components/LiveCityInteraction.tsx");
   assert.match(source, /stage=location/);
-  assert.equal(matches(source, /fetch\(cityBriefingUrl\s*,/g), 1);
+  assert.equal(matches(source, /fetchCityBriefingWithRetry<CityBriefing>\(cityBriefingUrl\s*,/g), 1);
   assert.equal(matches(source, /fetch\(`\$\{cityBriefingUrl\}&stage=location`\s*,/g), 1);
+  assert.match(source, /shouldRetryResult:\s*\(briefing\)\s*=>\s*briefing\.status === "unavailable"/);
 });
 
 test("battle and information panels are fetch-free views of one synchronized city model", async () => {

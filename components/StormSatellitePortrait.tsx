@@ -12,7 +12,12 @@ export function StormSatellitePortrait({
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [frameState, setFrameState] = useState<"loading" | "ready" | "unavailable">("loading");
+  const [displayedFrameLabel, setDisplayedFrameLabel] = useState<string | null>(null);
   const imageUrl = satelliteLayer?.status === "available" ? satelliteLayer.imageUrl : null;
+  const sourceLabel = satelliteLayer?.updatedAt ? new Date(satelliteLayer.updatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : null;
+  const frameLabel = satelliteLayer?.isStale
+    ? `卫星帧 ${sourceLabel ?? "时次未知"}（较旧）`
+    : `卫星帧 ${sourceLabel ?? "时次未知"}`;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -45,6 +50,7 @@ export function StormSatellitePortrait({
       context.fillStyle = "rgba(153, 230, 255, 0.13)";
       for (let y = 3; y < canvas.height; y += 7) context.fillRect(0, y, canvas.width, 1);
 
+      setDisplayedFrameLabel(frameLabel);
       setFrameState("ready");
     };
     image.onerror = () => {
@@ -56,12 +62,7 @@ export function StormSatellitePortrait({
     return () => {
       cancelled = true;
     };
-  }, [imageUrl, satelliteLayer, storm]);
-
-  const sourceLabel = satelliteLayer?.updatedAt ? new Date(satelliteLayer.updatedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) : null;
-  const frameLabel = satelliteLayer?.isStale
-    ? `卫星帧 ${sourceLabel ?? "时次未知"}（较旧）`
-    : `卫星帧 ${sourceLabel ?? "时次未知"}`;
+  }, [frameLabel, imageUrl, satelliteLayer, storm]);
 
   return (
     <div
@@ -71,7 +72,7 @@ export function StormSatellitePortrait({
       <canvas ref={canvasRef} width="256" height="256" aria-hidden="true" />
       <span className="storm-satellite-portrait-grid" aria-hidden="true" />
       <span className="storm-satellite-portrait-crosshair" aria-hidden="true" />
-      <span className="storm-satellite-portrait-tag">{frameState === "ready" ? frameLabel : frameState === "loading" ? "卫星帧同步中" : "卫星帧不可用"}</span>
+      <span className="storm-satellite-portrait-tag">{frameState === "ready" ? frameLabel : displayedFrameLabel ?? "卫星帧不可用"}</span>
     </div>
   );
 }

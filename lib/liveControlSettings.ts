@@ -6,6 +6,7 @@ export type LiveControlSettings = {
   evolutionAgentEnabled: boolean;
   evolutionAgentIntervalMinutes: number;
   typhoonOutlookVisible: boolean;
+  conversationPanelVisible: boolean;
   cityReportEffectsEnabled: boolean;
   cityReportEffectsVolume: LiveCityReportEffectsVolume;
   updatedAt?: string;
@@ -23,6 +24,7 @@ export const DEFAULT_LIVE_CONTROL_SETTINGS: LiveControlSettings = {
   evolutionAgentEnabled: false,
   evolutionAgentIntervalMinutes: 30,
   typhoonOutlookVisible: true,
+  conversationPanelVisible: true,
   cityReportEffectsEnabled: true,
   cityReportEffectsVolume: "standard"
 };
@@ -70,6 +72,10 @@ export function normalizeLiveControlSettings(
       typeof value?.typhoonOutlookVisible === "boolean"
         ? value.typhoonOutlookVisible
         : current.typhoonOutlookVisible,
+    conversationPanelVisible:
+      typeof value?.conversationPanelVisible === "boolean"
+        ? value.conversationPanelVisible
+        : current.conversationPanelVisible,
     cityReportEffectsEnabled:
       typeof value?.cityReportEffectsEnabled === "boolean"
         ? value.cityReportEffectsEnabled

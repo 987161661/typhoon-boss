@@ -4,15 +4,18 @@ import {
   useEffect,
   useMemo,
   useRef,
-  useState,
-  type CSSProperties,
-  type PointerEvent as ReactPointerEvent
+  useState
 } from "react";
 import {
   isHostLiveComment,
   isHostViewerRelationEvent,
   type HostLiveEvent
 } from "@/lib/liveCityInteraction";
+import {
+  isHostReplyReadyEvent,
+  type HostReplyReadyEvent
+} from "@/lib/digitalHostConversation";
+import { usePersistentFloatingWindow } from "./usePersistentFloatingWindow";
 
 type DirectorScene = "briefing" | "analysis";
 
@@ -42,40 +45,10 @@ const DEFAULT_HOST_URL = "http://127.0.0.1:5173";
 const HEALTH_POLL_MS = 5_000;
 const NARRATION_COOLDOWN_MS = 90_000;
 const HOST_WINDOW_STORAGE_KEY = "typhoon-boss-radar:linglan-window";
-const HOST_WINDOW_MIN_WIDTH = 200;
-const HOST_WINDOW_MIN_HEIGHT = 220;
-const HOST_WINDOW_PADDING = 8;
 const CHAT_RETRY_INTERVAL_MS = 750;
 const CHAT_MAX_ATTEMPTS = 8;
+const REPLY_RELAY_POLL_MS = 500;
 const DEFAULT_RADAR_VIEWER = "001号人类";
-
-type HostWindowBounds = {
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-};
-
-type HostWindowInteraction = {
-  kind: "move" | "resize";
-  pointerId: number;
-  startX: number;
-  startY: number;
-  bounds: HostWindowBounds;
-};
-
-function constrainHostWindow(bounds: HostWindowBounds): HostWindowBounds {
-  const maxWidth = Math.max(HOST_WINDOW_MIN_WIDTH, window.innerWidth - HOST_WINDOW_PADDING * 2);
-  const maxHeight = Math.max(HOST_WINDOW_MIN_HEIGHT, window.innerHeight - HOST_WINDOW_PADDING * 2);
-  const width = Math.min(maxWidth, Math.max(HOST_WINDOW_MIN_WIDTH, Math.round(bounds.width)));
-  const height = Math.min(maxHeight, Math.max(HOST_WINDOW_MIN_HEIGHT, Math.round(bounds.height)));
-  return {
-    width,
-    height,
-    left: Math.min(window.innerWidth - width - HOST_WINDOW_PADDING, Math.max(HOST_WINDOW_PADDING, Math.round(bounds.left))),
-    top: Math.min(window.innerHeight - height - HOST_WINDOW_PADDING, Math.max(HOST_WINDOW_PADDING, Math.round(bounds.top)))
-  };
-}
 
 function isHostReady(health: HostHealth | null) {
   return health?.supervisor?.state === "online";
@@ -85,14 +58,15 @@ export function DigitalHostWindow({
   scene,
   visible = true,
   chatRequest,
-  onLiveEvent
+  onLiveEvent,
+  onReplyReady
 }: {
   scene: DirectorScene;
   visible?: boolean;
   chatRequest?: HostChatRequest | null;
   onLiveEvent?: (event: HostLiveEvent) => void;
+  onReplyReady?: (event: HostReplyReadyEvent) => void;
 }) {
-  const hostWindowRef = useRef<HTMLElement | null>(null);
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const sceneRef = useRef(scene);
   const lastNarrationAtRef = useRef(0);
@@ -107,14 +81,21 @@ export function DigitalHostWindow({
     acknowledged: boolean;
   } | null>(null);
   const onLiveEventRef = useRef(onLiveEvent);
+  const onReplyReadyRef = useRef(onReplyReady);
+  const deliveredReplyIdsRef = useRef(new Set<string>());
+  const replyRelayInitializedRef = useRef(false);
+  const replyRelayStartedAtRef = useRef(Date.now());
   const [frameLoaded, setFrameLoaded] = useState(false);
   const frameLoadedRef = useRef(false);
   const [hostFrameReady, setHostFrameReady] = useState(false);
   const hostFrameReadyRef = useRef(false);
   const [health, setHealth] = useState<HostHealth | null>(null);
   const [healthFailed, setHealthFailed] = useState(false);
-  const [windowBounds, setWindowBounds] = useState<HostWindowBounds | null>(null);
-  const [interaction, setInteraction] = useState<HostWindowInteraction | null>(null);
+  const floating = usePersistentFloatingWindow({
+    storageKey: HOST_WINDOW_STORAGE_KEY,
+    minWidth: 200,
+    minHeight: 220
+  });
   const hostUrl = process.env.NEXT_PUBLIC_LINGLAN_HOST_URL || DEFAULT_HOST_URL;
   const hostOrigin = useMemo(() => {
     try {
@@ -134,6 +115,10 @@ export function DigitalHostWindow({
   }, [onLiveEvent]);
 
   useEffect(() => {
+    onReplyReadyRef.current = onReplyReady;
+  }, [onReplyReady]);
+
+  useEffect(() => {
     frameLoadedRef.current = frameLoaded;
   }, [frameLoaded]);
 
@@ -142,66 +127,15 @@ export function DigitalHostWindow({
   }, [hostFrameReady]);
 
   useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(HOST_WINDOW_STORAGE_KEY);
-      if (!stored) return;
-      const value = JSON.parse(stored) as Partial<HostWindowBounds>;
-      if (
-        Number.isFinite(value.left) &&
-        Number.isFinite(value.top) &&
-        Number.isFinite(value.width) &&
-        Number.isFinite(value.height)
-      ) {
-        setWindowBounds(constrainHostWindow(value as HostWindowBounds));
-      }
-    } catch {
-      // A malformed local preference must never prevent the host from loading.
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!windowBounds) return;
-    window.localStorage.setItem(HOST_WINDOW_STORAGE_KEY, JSON.stringify(windowBounds));
-  }, [windowBounds]);
-
-  useEffect(() => {
-    if (!interaction) return;
-    const update = (event: PointerEvent) => {
-      if (event.pointerId !== interaction.pointerId) return;
-      const deltaX = event.clientX - interaction.startX;
-      const deltaY = event.clientY - interaction.startY;
-      const next =
-        interaction.kind === "move"
-          ? {
-              ...interaction.bounds,
-              left: interaction.bounds.left + deltaX,
-              top: interaction.bounds.top + deltaY
-            }
-          : {
-              ...interaction.bounds,
-              width: interaction.bounds.width + deltaX,
-              height: interaction.bounds.height + deltaY
-            };
-      setWindowBounds(constrainHostWindow(next));
-    };
-    const stop = (event: PointerEvent) => {
-      if (event.pointerId === interaction.pointerId) setInteraction(null);
-    };
-    window.addEventListener("pointermove", update);
-    window.addEventListener("pointerup", stop);
-    window.addEventListener("pointercancel", stop);
-    return () => {
-      window.removeEventListener("pointermove", update);
-      window.removeEventListener("pointerup", stop);
-      window.removeEventListener("pointercancel", stop);
-    };
-  }, [interaction]);
-
-  useEffect(() => {
     const handleHostMessage = (event: MessageEvent<unknown>) => {
       if (event.origin !== hostOrigin || event.source !== iframeRef.current?.contentWindow) return;
       if (isHostLiveComment(event.data) || isHostViewerRelationEvent(event.data)) {
         onLiveEventRef.current?.(event.data);
+        return;
+      }
+      if (isHostReplyReadyEvent(event.data)) {
+        deliveredReplyIdsRef.current.add(event.data.requestId);
+        onReplyReadyRef.current?.(event.data);
         return;
       }
       const data = event.data as { type?: unknown; requestId?: unknown };
@@ -226,6 +160,45 @@ export function DigitalHostWindow({
     window.addEventListener("message", handleHostMessage);
     return () => window.removeEventListener("message", handleHostMessage);
   }, [hostOrigin]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const refreshReplies = async () => {
+      try {
+        const response = await fetch("/api/digital-host/replies", {
+          cache: "no-store"
+        });
+        if (!response.ok) return;
+        const payload = (await response.json()) as { replies?: unknown[] };
+        const initial = !replyRelayInitializedRef.current;
+        for (const value of payload.replies ?? []) {
+          if (!isHostReplyReadyEvent(value)) continue;
+          if (deliveredReplyIdsRef.current.has(value.requestId)) continue;
+          deliveredReplyIdsRef.current.add(value.requestId);
+          const isCurrentPending = pendingChatRef.current?.id === value.requestId;
+          if (!initial || isCurrentPending || value.readyAt >= replyRelayStartedAtRef.current) {
+            onReplyReadyRef.current?.(value);
+          }
+        }
+        replyRelayInitializedRef.current = true;
+        if (deliveredReplyIdsRef.current.size > 500) {
+          deliveredReplyIdsRef.current = new Set(
+            Array.from(deliveredReplyIdsRef.current).slice(-250)
+          );
+        }
+      } catch {
+        // The iframe bridge remains available while the local relay restarts.
+      }
+    };
+    void refreshReplies();
+    const timer = window.setInterval(() => {
+      if (!cancelled) void refreshReplies();
+    }, REPLY_RELAY_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   useEffect(() => {
     if (!chatRequest?.text.trim()) return;
@@ -380,52 +353,17 @@ export function DigitalHostWindow({
         ? "直播监听中"
         : "待机";
 
-  const beginWindowInteraction = (
-    kind: HostWindowInteraction["kind"],
-    event: ReactPointerEvent<HTMLElement>
-  ) => {
-    if (event.button !== 0) return;
-    const rect = hostWindowRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    event.preventDefault();
-    const bounds = {
-      left: rect.left,
-      top: rect.top,
-      width: rect.width,
-      height: rect.height
-    };
-    setWindowBounds(bounds);
-    setInteraction({
-      kind,
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      bounds
-    });
-  };
-
-  const positionedStyle: CSSProperties | undefined = windowBounds
-    ? {
-        left: `${windowBounds.left}px`,
-        top: `${windowBounds.top}px`,
-        width: `${windowBounds.width}px`,
-        height: `${windowBounds.height}px`,
-        right: "auto",
-        bottom: "auto"
-      }
-    : undefined;
-
   return (
     <aside
-      ref={hostWindowRef}
-      className={`digital-host-window ${healthFailed ? "is-offline" : ""} ${visible ? "" : "is-hidden"} ${windowBounds ? "is-positioned" : ""} ${interaction ? "is-interacting" : ""}`}
+      ref={floating.windowRef}
+      className={`digital-host-window ${healthFailed ? "is-offline" : ""} ${visible ? "" : "is-hidden"} ${floating.positioned ? "is-positioned" : ""} ${floating.interacting ? "is-interacting" : ""}`}
       aria-label="数字人讲解主播凌岚"
       aria-hidden={!visible}
-      style={positionedStyle}
+      style={floating.positionedStyle}
     >
       <header
         className="digital-host-head"
-        onPointerDown={(event) => beginWindowInteraction("move", event)}
+        onPointerDown={(event) => floating.beginInteraction("move", event)}
         title="拖动调整数字人窗口位置"
       >
         <div>
@@ -457,7 +395,7 @@ export function DigitalHostWindow({
         className="digital-host-resize-handle"
         type="button"
         aria-label="拖动调整数字人窗口大小"
-        onPointerDown={(event) => beginWindowInteraction("resize", event)}
+        onPointerDown={(event) => floating.beginInteraction("resize", event)}
       >
         <i aria-hidden="true" />
       </button>

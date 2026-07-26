@@ -70,6 +70,7 @@ import {
   NATIONAL_CAMERA,
   activeStormIndexForMap,
   createNationalMapState,
+  overviewStormForMap,
   reduceNationalMapState,
   selectedStormForMap
 } from "./map/nationalMapState";
@@ -94,8 +95,10 @@ import {
   LiveTopBar,
   type LiveDeckView
 } from "./LiveBroadcastView";
+import { retainAvailableRadarPayload, retainUsableBossProfiles } from "@/lib/radarDataContinuity";
 import { LiveTyphoonOutlookTicker } from "./LiveTyphoonOutlookTicker";
 import { useTyphoonEvolutionOutlook } from "./useTyphoonEvolutionOutlook";
+import { shouldShowTyphoonEvolutionOutlook } from "@/lib/liveTyphoonOutlook";
 
 const MAP_STYLE = {
   version: 8,
@@ -245,6 +248,7 @@ const DEFAULT_ENVIRONMENT_LAYERS: EnvironmentLayerToggles = {
   marineCurrent: false,
   seaSurfaceTemperature: false
 };
+const NONCRITICAL_LAYER_DELAY_MS = 1_200;
 
 export function TyphoonMap({
   view = "standard",
@@ -264,10 +268,11 @@ export function TyphoonMap({
   onSceneReady?: () => void;
 }) {
   const isLiveView = view === "live";
-  const typhoonOutlook = useTyphoonEvolutionOutlook(isLiveView && typhoonOutlookVisible);
   const secondsToSwitch = 0;
   const liveDeckCycle = 0;
   const [storms, setStorms] = useState<Storm[]>([]);
+  const showTyphoonOutlook = shouldShowTyphoonEvolutionOutlook(isLiveView, typhoonOutlookVisible, storms.length);
+  const typhoonOutlook = useTyphoonEvolutionOutlook(showTyphoonOutlook);
   const [bossProfiles, setBossProfiles] = useState<BossProfile[]>([]);
   const [nationalMapState, dispatchNationalMap] = useReducer(
     reduceNationalMapState,
@@ -295,6 +300,7 @@ export function TyphoonMap({
   const [cwaRadarVisible, setCwaRadarVisible] = useState(false);
   const [nationalWarningsVisible, setNationalWarningsVisible] = useState(true);
   const [nationalRadarVisible, setNationalRadarVisible] = useState(false);
+  const [noncriticalLayersReady, setNoncriticalLayersReady] = useState(false);
   const [impactArea, setImpactArea] = useState<ImpactAreaPayload | null>(null);
   const [watchRegions, setWatchRegions] = useState<ProvinceAlertPoint[]>([]);
   const [mainCityAttention, setMainCityAttention] = useState<CityAttention | null>(null);
@@ -360,6 +366,7 @@ export function TyphoonMap({
   const storm = isLiveView && nationalMapState.mode === "national"
     ? storms[0] ?? null
     : selectedStormForMap(nationalMapState, storms);
+  const overviewStorm = overviewStormForMap(nationalMapState, storms);
   const mainCityInteractions = useLiveCityInteractionQueue({
     highestOfficialWarningLevel: null,
     focusedStormId: storm?.id ?? null
@@ -427,7 +434,7 @@ export function TyphoonMap({
   const windRequiredBoundsForMap = useCallback((map: MapLibreMap) => visibleWindBounds(map, 0.24), []);
   const viewportWindField = useViewportWindField({
     map: mapReady ? mapRef.current : null,
-    enabled: mapReady && environmentLayers.wind,
+    enabled: mapReady && noncriticalLayersReady && environmentLayers.wind,
     stormId: storm?.id,
     boundsForMap: windRequestBoundsForMap,
     requiredBoundsForMap: windRequiredBoundsForMap
@@ -436,7 +443,7 @@ export function TyphoonMap({
     ? windField?.analysisCenter ?? storm?.position
     : storm?.position;
   const coreWindField = useStormCoreWindField({
-    enabled: mapReady && environmentLayers.wind,
+    enabled: mapReady && noncriticalLayersReady && environmentLayers.wind,
     stormId: storm?.id,
     center: coreWindCenter,
     refreshKey: windField?.updatedAt
@@ -488,7 +495,9 @@ export function TyphoonMap({
   const cwaRadarLayer = usePollingEnvironmentLayer<RadarMosaicLayerPayload>({
     url: "/api/environment/cwa-radar",
     intervalMs: 5 * 60 * 1000,
-    enabled: !isLiveView || showLiveStandbyEnvironment
+    // Metadata must be known before the initially disabled toggle can become
+    // usable. Visibility controls rendering, not whether status is fetched.
+    enabled: noncriticalLayersReady
   });
   const ecmwfTrackLayer = usePollingEnvironmentLayer<EcmwfTrackPayload>({
     url: "/api/environment/ecmwf-tracks",
@@ -496,17 +505,17 @@ export function TyphoonMap({
     // On the live standby deck this is an on-demand, cancellable layer. The
     // toggle is not merely cosmetic: turning it off aborts its active fetch
     // and stops the 30-minute polling loop.
-    enabled: !isLiveView || (showLiveStandbyEnvironment && ecmwfTracksVisible)
+    enabled: noncriticalLayersReady && ecmwfTracksVisible
   });
   const officialAlerts = usePollingEnvironmentLayer<OfficialAlertPayload>({
     url: "/api/environment/official-alerts",
     intervalMs: 5 * 60 * 1000,
-    enabled: !isLiveView || showLiveStandbyEnvironment
+    enabled: noncriticalLayersReady && (!isLiveView || showLiveStandbyEnvironment)
   });
   const regionalObservations = usePollingEnvironmentLayer<RegionalObservationPayload>({
     url: "/api/environment/regional-observations",
     intervalMs: 5 * 60 * 1000,
-    enabled: !isLiveView || showLiveStandbyEnvironment
+    enabled: noncriticalLayersReady
   });
   const nationalSituation = useNationalSituation({ enabled: true });
   const focusNationalEvent = useCallback((eventId: string) => {
@@ -552,8 +561,8 @@ export function TyphoonMap({
   const compatibleCoreWindField = windFieldsShareFrame(stormWindField, coreWindField) ? coreWindField : null;
   latestCoreWindFieldRef.current = compatibleCoreWindField;
   const canonicalStormWindField = useMemo(
-    () => selectCanonicalStormWindField(storm, compatibleCoreWindField, windField),
-    [compatibleCoreWindField, storm, windField]
+    () => selectCanonicalStormWindField(storm, compatibleCoreWindField, stormWindField),
+    [compatibleCoreWindField, storm, stormWindField]
   );
   const gfsAlignedStorm = useMemo(
     () => stormAtGfsAnalysisCenter(storm, canonicalStormWindField),
@@ -568,6 +577,15 @@ export function TyphoonMap({
     refreshSequence,
     pollIntervalMs
   } = useRadarSnapshot(requestedStormId ?? storm?.id ?? null);
+
+  useEffect(() => {
+    if (!mapReady || !snapshotLoaded) {
+      setNoncriticalLayersReady(false);
+      return;
+    }
+    const timer = window.setTimeout(() => setNoncriticalLayersReady(true), NONCRITICAL_LAYER_DELAY_MS);
+    return () => window.clearTimeout(timer);
+  }, [mapReady, snapshotLoaded]);
   const [showPerfOverlay] = useState(() => {
     if (typeof window === "undefined") return false;
     return new URLSearchParams(window.location.search).get("perf") === "1";
@@ -575,6 +593,10 @@ export function TyphoonMap({
   const bossProfile = useMemo(
     () => (storm ? bossProfiles.find((profile) => profile.stormId === storm.id) ?? null : null),
     [bossProfiles, storm]
+  );
+  const overviewBossProfile = useMemo(
+    () => (overviewStorm ? bossProfiles.find((profile) => profile.stormId === overviewStorm.id) ?? null : null),
+    [bossProfiles, overviewStorm]
   );
   const cycloneCoreAnalysis = useMemo(() => buildCycloneCoreAnalysis(storm, bossProfile), [storm, bossProfile]);
   const liveModel = useMemo(
@@ -618,7 +640,10 @@ export function TyphoonMap({
     + stormGeo.r10.features.length
     + stormGeo.r12.features.length;
   const activeMarkerStorm = markerStorms.find((item) => item.id === storm?.id) ?? null;
-  const provinceAlerts = useMemo(() => buildProvinceAlerts(storm, watchRegions), [storm, watchRegions]);
+  const provinceAlerts = useMemo(
+    () => buildProvinceAlerts(overviewStorm, watchRegions),
+    [overviewStorm, watchRegions]
+  );
   const toggleEnvironmentLayer = useCallback((layer: EnvironmentLayerKey) => {
     setEnvironmentLayers((current) => ({
       ...current,
@@ -636,10 +661,14 @@ export function TyphoonMap({
     setSourceLabel(snapshot.source);
     setLastUpdated(formatClock(snapshot.updatedAt));
     setStorms(snapshot.storms ?? []);
-    setBossProfiles(snapshot.bosses ?? []);
-    setSatelliteLayer(snapshot.environment.satellite);
-    setWindField(snapshot.environment.windField);
-    setImpactArea(snapshot.environment.impactArea);
+    setBossProfiles((current) => retainUsableBossProfiles(
+      snapshot.bosses ?? [],
+      current,
+      (snapshot.storms ?? []).map((item) => item.id)
+    ));
+    setSatelliteLayer((current) => retainAvailableRadarPayload(snapshot.environment.satellite, current));
+    setWindField((current) => retainAvailableRadarPayload(snapshot.environment.windField, current));
+    setImpactArea((current) => retainAvailableRadarPayload(snapshot.environment.impactArea, current));
     setDataError(snapshotError);
   }, [snapshot, snapshotError, snapshotLoaded]);
 
@@ -934,7 +963,7 @@ export function TyphoonMap({
     for (const marker of markers.values()) marker.remove();
     markers.clear();
     const map = mapRef.current;
-    if (!mapReady || !map || !isLiveView || !typhoonOutlookVisible) return;
+    if (!mapReady || !map || !showTyphoonOutlook) return;
     for (const model of typhoonOutlook.markers) {
       const element = document.createElement("div");
       element.className = "typhoon-outlook-map-marker";
@@ -950,7 +979,7 @@ export function TyphoonMap({
       for (const marker of markers.values()) marker.remove();
       markers.clear();
     };
-  }, [isLiveView, mapReady, typhoonOutlook.markers, typhoonOutlookVisible]);
+  }, [mapReady, showTyphoonOutlook, typhoonOutlook.markers]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -1138,16 +1167,16 @@ export function TyphoonMap({
               secondsToSwitch={secondsToSwitch}
               cycle={liveDeckCycle}
             />
-            {typhoonOutlookVisible ? <LiveTyphoonOutlookTicker model={typhoonOutlook.view} /> : null}
+            {showTyphoonOutlook ? <LiveTyphoonOutlookTicker model={typhoonOutlook.view} /> : null}
             {liveDeck === "analysis" ? <LiveForecastOverlay model={liveModel} /> : null}
           </>
         ) : (
           <TopCommandBar
-            storm={storm}
+            storm={overviewStorm}
             storms={storms}
             activeIndex={activeIndex}
             onSelect={selectStorm}
-            bossProfile={bossProfile}
+            bossProfile={overviewBossProfile}
             count={storms.length}
             lastUpdated={lastUpdated}
             dataError={dataError}
@@ -1162,7 +1191,7 @@ export function TyphoonMap({
         {!isLiveView && theme === "night-radar" ? (
           <div className="left-tactical-stack">
             <DefenseStatusPanel alerts={provinceAlerts} onSelect={fetchDefense} />
-            <BossSkillSlotPanel storm={storm} bossProfile={bossProfile} className="left-boss-skill-panel" />
+            <BossSkillSlotPanel storm={overviewStorm} bossProfile={overviewBossProfile} className="left-boss-skill-panel" />
             <div className="environment-panel-stack">
               <EnvironmentLayerPanel
                 layers={environmentLayers}
@@ -1234,7 +1263,7 @@ export function TyphoonMap({
         {!isLiveView && theme === "archive-command" ? <MapLegendPanel /> : null}
         {!isLiveView && theme === "archive-command" ? <DossierStormIndex storms={storms} activeIndex={activeIndex} onSelect={selectStorm} /> : null}
         {!isLiveView && theme === "archive-command" ? <ImpactLegend /> : null}
-        {!isLiveView && theme === "night-radar" ? <BottomAlertBar storm={storm} bossProfile={bossProfile} dataError={dataError} sourceLabel={sourceLabel} lastTrackedStorm={snapshot?.lastTrackedStorm ?? null} onSendChat={submitMainChat} /> : null}
+        {!isLiveView && theme === "night-radar" ? <BottomAlertBar storm={overviewStorm} bossProfile={overviewBossProfile} dataError={dataError} sourceLabel={sourceLabel} lastTrackedStorm={snapshot?.lastTrackedStorm ?? null} onSendChat={submitMainChat} /> : null}
         {!isLiveView ? <DefenseDrawer defense={selectedDefense} onClose={() => setSelectedDefense(null)} /> : null}
       </section>
 

@@ -1,11 +1,31 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  assessTropicalDisturbanceOutlook,
   buildTropicalDisturbanceOutlook,
   renderTropicalDisturbanceReport
 } from "../lib/agent/tropicalDisturbanceOutlook.mjs";
 
 const NOW = "2026-07-19T15:00:00.000Z";
+
+test("all unavailable sources remain unknown instead of becoming a zero forecast", () => {
+  const outlook = buildTropicalDisturbanceOutlook({
+    jtwcAdvisory: null,
+    cpcWeek2Kml: null,
+    cpcWeek3Kml: null
+  }, { now: NOW });
+
+  assert.equal(outlook.evidenceStatus, "unavailable");
+  assert.deepEqual(assessTropicalDisturbanceOutlook(outlook), {
+    status: "unavailable",
+    coverage: { nearTerm: "unavailable", week2: "unavailable", week3: "unavailable" }
+  });
+  assert.match(outlook.summary, /状态未知/);
+  assert.doesNotMatch(outlook.summary, /未列出热带扰动|有 0 个/);
+  const report = renderTropicalDisturbanceReport(outlook);
+  assert.match(report, /资料缺失/);
+  assert.match(report, /不得报告为 0 个概率区域/);
+});
 
 test("an empty JTWC advisory is preserved as evidence instead of inventing an embryo", () => {
   const outlook = buildTropicalDisturbanceOutlook({
@@ -22,8 +42,29 @@ RMKS/
   }, { now: NOW });
 
   assert.equal(outlook.nearTermDisturbances.length, 0);
+  assert.equal(outlook.evidenceStatus, "degraded");
   assert.equal(outlook.sources.jtwc.status, "fresh");
   assert.match(outlook.summary, /未列出热带扰动/);
+  assert.match(outlook.summary, /资料均不可用/);
+});
+
+test("a stale empty advisory cannot claim the current basin has no disturbances", () => {
+  const outlook = buildTropicalDisturbanceOutlook({
+    jtwcAdvisory: `ABPW10 PGTW 150600
+SUBJ/SIGNIFICANT TROPICAL WEATHER ADVISORY FOR THE WESTERN AND SOUTH PACIFIC OCEANS/150600Z-160600ZJUL2026//
+1. WESTERN NORTH PACIFIC AREA (180 TO MALAY PENINSULA):
+ B. TROPICAL DISTURBANCE SUMMARY: NONE.
+ C. SUBTROPICAL SYSTEM SUMMARY: NONE.
+2. SOUTH PACIFIC AREA (WEST COAST OF SOUTH AMERICA TO 135 EAST):`,
+    cpcWeek2Kml: null,
+    cpcWeek3Kml: null
+  }, { now: NOW });
+
+  assert.equal(outlook.sources.jtwc.status, "stale");
+  assert.equal(outlook.coverage.nearTerm, "degraded");
+  assert.match(outlook.summary, /时效待核验/);
+  assert.doesNotMatch(outlook.summary, /JTWC 当前未列出/);
+  assert.match(renderTropicalDisturbanceReport(outlook), /不能代表当前完整扰动状态/);
 });
 
 test("JTWC invest position and qualitative 24-hour potential remain source-faithful", () => {

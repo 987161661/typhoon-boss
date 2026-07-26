@@ -11,6 +11,14 @@ import type {
 import { classifyTyphoonHazard, downgradeTyphoonHazard } from "@/lib/typhoonHazardRating";
 import { findProvinceReferencePoint, getProvinceBoundaryCoordinates, normalizeProvinceName } from "@/lib/provinceGeo";
 import { readControlConsoleSettings } from "@/lib/controlConsoleSettingsStore";
+import { evaluateTrackSnapshotRecovery, type TrackSnapshotRecoveryMode } from "@/lib/radarDataContinuity";
+import {
+  fetchHkoTyphoonTrack,
+  HKO_TRACK_SOURCE,
+  mergeHkoForecastScenarios,
+  normalizeHkoName,
+  type HkoTyphoonTrack
+} from "@/lib/hkoTyphoonTrack";
 import { distanceBetweenKm, distanceToPathKm, maxWindRadius, parseBeijingTime, parseWindRadii, toBeijingIso } from "@/lib/meteorology";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -20,8 +28,11 @@ const GDACS_SEARCH_API = "https://gdacs.org/gdacsapi/api/events/geteventlist/SEA
 // freshness window here: the latest point must come from the upstream source
 // on every polling cycle, even if that source has not published a new fix yet.
 const CURRENT_STORMS_CACHE_TTL_MS = 0;
+const RELAYED_STORMS_CACHE_TTL_MS = 60 * 1000;
 const TRACK_SNAPSHOT_PATH = path.join(process.cwd(), ".runtime", "track-snapshot.json");
 const DATA_SOURCE = "浙江省水利厅台风路径公开接口";
+const RELAYED_DATA_SOURCE = `${DATA_SOURCE}（经 Jina Reader 只读传输中继）`;
+const COMBINED_TRACK_SOURCE = `${HKO_TRACK_SOURCE}（最新中心）+ ${DATA_SOURCE}（历史档案）`;
 const NOTICE =
   "本系统用于台风路径可视化与创意大屏演示，真实预警以中央气象台、海洋预报台和属地应急部门发布为准。";
 
@@ -149,6 +160,8 @@ let currentStormsCache: { expiresAt: number; storms: Storm[] } | null = null;
 let currentStormsInFlight: Promise<Storm[]> | null = null;
 let lastTrackWarning: string | null = null;
 let lastTrackFetchedAt: string | null = null;
+let lastTrackSource = DATA_SOURCE;
+let currentLoadUsedReaderRelay = false;
 let lastTrackedStorm: LastTrackedStorm | null | undefined;
 
 export interface LastTrackedStorm {
@@ -191,9 +204,9 @@ export async function getTrackSnapshot(): Promise<TrackSnapshot> {
     const storms = await getCurrentStorms();
     const fetchedAt = lastTrackFetchedAt ?? new Date().toISOString();
     const lifecycle = await reconcileLastTrackedStorm(storms, fetchedAt);
-    void persistTrackSnapshot(storms, fetchedAt, lifecycle);
+    void persistTrackSnapshot(storms, fetchedAt, lifecycle, lastTrackSource);
     return {
-      source: DATA_SOURCE,
+      source: lastTrackSource,
       observedAt: storms[0]?.updatedAt ?? null,
       fetchedAt,
       status: lastTrackWarning ? "stale" : "fresh",
@@ -225,10 +238,13 @@ export async function getCurrentStorms(): Promise<Storm[]> {
 
   currentStormsInFlight = loadCurrentStorms().then(
     (storms) => {
-      lastTrackWarning = null;
+      lastTrackWarning = currentLoadUsedReaderRelay
+        ? "浙江台风路径官方接口直连 TLS 失败；本轮官方 JSON 经 Jina Reader 只读传输中继取得。机构名称、路径点和数据时次均保留官方原值。"
+        : null;
       lastTrackFetchedAt = new Date().toISOString();
+      lastTrackSource = currentLoadUsedReaderRelay ? RELAYED_DATA_SOURCE : DATA_SOURCE;
       currentStormsCache = {
-        expiresAt: Date.now() + CURRENT_STORMS_CACHE_TTL_MS,
+        expiresAt: Date.now() + (currentLoadUsedReaderRelay ? RELAYED_STORMS_CACHE_TTL_MS : CURRENT_STORMS_CACHE_TTL_MS),
         storms
       };
       currentStormsInFlight = null;
@@ -238,9 +254,25 @@ export async function getCurrentStorms(): Promise<Storm[]> {
       currentStormsInFlight = null;
       const fallback = await readLastTrackSnapshot();
       if (fallback) {
+        const failure = error instanceof Error ? error.message : String(error);
+        const hkoRecovery = await recoverLatestCenterFromHko(fallback.storms);
+        if (hkoRecovery) {
+          currentStormsCache = { expiresAt: 0, storms: hkoRecovery.storms };
+          lastTrackFetchedAt = new Date().toISOString();
+          lastTrackSource = COMBINED_TRACK_SOURCE;
+          lastTrackWarning =
+            `${HKO_TRACK_SOURCE}已补入 ${hkoRecovery.observedAt} 的最新中心和强度；` +
+            `该来源未发布的中心气压、风圈和移速已显示为暂无，不沿用旧实况。浙江路径源仍刷新失败：${failure}`;
+          return hkoRecovery.storms;
+        }
         currentStormsCache = { expiresAt: 0, storms: fallback.storms };
         lastTrackFetchedAt = fallback.fetchedAt;
-        lastTrackWarning = `路径源刷新失败，继续使用最后有效数据：${error instanceof Error ? error.message : String(error)}`;
+        lastTrackSource = fallback.source;
+        lastTrackWarning = fallback.source === COMBINED_TRACK_SOURCE
+          ? `${HKO_TRACK_SOURCE}最近一次成功中心为 ${fallback.storms[0]?.updatedAt ?? fallback.fetchedAt}；本轮权威源刷新失败，继续显示该中心。中心气压、风圈和移速仍为暂无：${failure}`
+          : fallback.recoveryMode === "forecast-window"
+          ? `路径源刷新失败；最后有效实况已超过配置保留期，仅因已发布预报仍覆盖至 ${fallback.forecastEndsAt} 而继续展示。当前位置不是实时位置，请以 ${fallback.storms[0]?.updatedAt ?? fallback.fetchedAt} 的数据时次为准：${failure}`
+          : `路径源刷新失败，继续使用最后有效数据：${failure}`;
         return fallback.storms;
       }
       throw error;
@@ -251,13 +283,17 @@ export async function getCurrentStorms(): Promise<Storm[]> {
 }
 
 async function loadCurrentStorms(): Promise<Storm[]> {
+  currentLoadUsedReaderRelay = false;
   const year = new Date().getFullYear();
   const list = await getTyphoonList(year);
   const activeItems = list.filter((item) => item.isactive === "1");
   const storms = await Promise.all(
     activeItems.map(async (item) => {
       const detail = await getTyphoonInfo(item.tfid);
-      return convertStorm(detail ?? item);
+      if (!detail) {
+        throw new Error(`Active typhoon detail unavailable: ${item.tfid}`);
+      }
+      return convertStorm(detail);
     })
   );
 
@@ -405,14 +441,20 @@ export async function getProvinceDefenseStatus(provinceName: string, stormId?: s
 }
 
 export function getDataSourceLabel() {
-  return DATA_SOURCE;
+  return lastTrackSource;
 }
 
 async function getTyphoonList(year: number): Promise<ZjTyphoonListItem[]> {
+  const currentYear = new Date().getFullYear();
   const cached = yearlyTyphoonListCache.get(year);
-  if (cached && cached.expiresAt > Date.now()) return cached.items;
+  // Historical archive lists are stable enough for a day-long cache. The
+  // current-year list is also the active-storm discovery feed, so caching it
+  // would hide a newly numbered storm while still reporting a fresh fetch.
+  if (year !== currentYear && cached && cached.expiresAt > Date.now()) return cached.items;
   const items = await fetchJson<ZjTyphoonListItem[]>(`${await typhoonApiBase()}/TyphoonList/${year}`);
-  yearlyTyphoonListCache.set(year, { expiresAt: Date.now() + 24 * 60 * 60 * 1000, items });
+  if (year !== currentYear) {
+    yearlyTyphoonListCache.set(year, { expiresAt: Date.now() + 24 * 60 * 60 * 1000, items });
+  }
   return items;
 }
 
@@ -431,20 +473,39 @@ async function typhoonApiBase() {
 
 async function fetchJson<T>(url: string): Promise<T> {
   const settings = await readControlConsoleSettings();
-  const response = await fetch(url, {
-    headers: {
-      Accept: "application/json",
-      "User-Agent": "TyphoonBossRadar/1.0"
-    },
-    cache: "no-store",
-    signal: AbortSignal.timeout(settings.reliability.requestTimeoutSeconds * 1000)
-  });
-
-  if (!response.ok) {
-    throw new Error(`Typhoon API request failed: ${response.status} ${url}`);
+  try {
+    const response = await fetch(url, {
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "TyphoonBossRadar/1.0"
+      },
+      cache: "no-store",
+      signal: AbortSignal.timeout(settings.reliability.requestTimeoutSeconds * 1000)
+    });
+    if (!response.ok) throw new Error(`Typhoon API request failed: ${response.status} ${url}`);
+    return response.json() as Promise<T>;
+  } catch (directError) {
+    try {
+      const relayUrl = `https://r.jina.ai/http://${url}`;
+      const response = await fetch(relayUrl, {
+        headers: { Accept: "text/plain", "User-Agent": "TyphoonBossRadar/1.0" },
+        cache: "no-store",
+        signal: AbortSignal.timeout(settings.reliability.requestTimeoutSeconds * 1000)
+      });
+      if (!response.ok) throw new Error(`reader relay HTTP ${response.status}`);
+      const body = await response.text();
+      const marker = "Markdown Content:";
+      const markerIndex = body.indexOf(marker);
+      if (markerIndex < 0) throw new Error("reader relay response has no JSON marker");
+      const payload = JSON.parse(body.slice(markerIndex + marker.length).trim()) as T;
+      currentLoadUsedReaderRelay = true;
+      return payload;
+    } catch (relayError) {
+      const directMessage = directError instanceof Error ? directError.message : String(directError);
+      const relayMessage = relayError instanceof Error ? relayError.message : String(relayError);
+      throw new Error(`Typhoon API direct and relay requests failed: ${directMessage}; ${relayMessage}`);
+    }
   }
-
-  return response.json() as Promise<T>;
 }
 
 export async function getGdacsEvidence(name: string, startedAt: string | null, endedAt: string | null): Promise<NonNullable<DexEntry["impactData"]["gdacs"]> | null> {
@@ -673,28 +734,125 @@ async function reconcileLastTrackedStorm(storms: Storm[], fetchedAt: string): Pr
   return lastTrackedStorm;
 }
 
-async function persistTrackSnapshot(storms: Storm[], fetchedAt: string, lifecycle: LastTrackedStorm | null) {
+async function persistTrackSnapshot(
+  storms: Storm[],
+  fetchedAt: string,
+  lifecycle: LastTrackedStorm | null,
+  source: string
+) {
   try {
     await mkdir(path.dirname(TRACK_SNAPSHOT_PATH), { recursive: true });
     const temporary = `${TRACK_SNAPSHOT_PATH}.${process.pid}.tmp`;
-    await writeFile(temporary, JSON.stringify({ version: 2, fetchedAt, storms, lastTrackedStorm: lifecycle }), "utf8");
+    await writeFile(temporary, JSON.stringify({ version: 3, source, fetchedAt, storms, lastTrackedStorm: lifecycle }), "utf8");
     await rename(temporary, TRACK_SNAPSHOT_PATH);
   } catch (error) {
     console.warn("[track-snapshot] persistence failed", error);
   }
 }
 
-async function readLastTrackSnapshot(): Promise<{ fetchedAt: string; storms: Storm[]; lastTrackedStorm: LastTrackedStorm | null } | null> {
+async function readLastTrackSnapshot(): Promise<{
+  fetchedAt: string;
+  storms: Storm[];
+  lastTrackedStorm: LastTrackedStorm | null;
+  recoveryMode: TrackSnapshotRecoveryMode;
+  forecastEndsAt: string | null;
+  source: string;
+} | null> {
   try {
     const settings = await readControlConsoleSettings();
-    const payload = JSON.parse(await readFile(TRACK_SNAPSHOT_PATH, "utf8")) as { version?: number; fetchedAt?: string; storms?: Storm[]; lastTrackedStorm?: unknown };
+    const payload = JSON.parse(await readFile(TRACK_SNAPSHOT_PATH, "utf8")) as {
+      version?: number;
+      source?: string;
+      fetchedAt?: string;
+      storms?: Storm[];
+      lastTrackedStorm?: unknown;
+    };
     const fetchedAt = Date.parse(payload.fetchedAt ?? "");
-    if ((payload.version !== 1 && payload.version !== 2) || !Array.isArray(payload.storms) || !Number.isFinite(fetchedAt)) return null;
-    if (Date.now() - fetchedAt > settings.reliability.retainLastGoodDataHours * 60 * 60 * 1000) return null;
-    return { fetchedAt: payload.fetchedAt as string, storms: payload.storms, lastTrackedStorm: normalizeLastTrackedStorm(payload.lastTrackedStorm) };
+    if (![1, 2, 3].includes(payload.version ?? 0) || !Array.isArray(payload.storms) || !Number.isFinite(fetchedAt)) return null;
+    const lifecycle = normalizeLastTrackedStorm(payload.lastTrackedStorm);
+    const recovery = evaluateTrackSnapshotRecovery({
+      fetchedAt: payload.fetchedAt as string,
+      retainLastGoodDataHours: settings.reliability.retainLastGoodDataHours,
+      active: lifecycle?.status === "active" && payload.storms.some((storm) => storm.id === lifecycle.id),
+      forecastTimes: payload.storms.flatMap((storm) => [
+        ...storm.forecast.map((point) => point.time),
+        ...storm.forecastScenarios.flatMap((scenario) => scenario.points.map((point) => point.time))
+      ])
+    });
+    if (!recovery.retain) return null;
+    return {
+      fetchedAt: payload.fetchedAt as string,
+      storms: payload.storms,
+      lastTrackedStorm: lifecycle,
+      recoveryMode: recovery.mode,
+      forecastEndsAt: recovery.forecastEndsAt,
+      source: payload.source || DATA_SOURCE
+    };
   } catch {
     return null;
   }
+}
+
+async function recoverLatestCenterFromHko(storms: Storm[]): Promise<{ storms: Storm[]; observedAt: string } | null> {
+  if (storms.length === 0) return null;
+  try {
+    const settings = await readControlConsoleSettings();
+    const report = await fetchHkoTyphoonTrack(settings.reliability.requestTimeoutSeconds * 1000);
+    const currentAgeMs = Date.now() - Date.parse(report.current.time);
+    if (!Number.isFinite(currentAgeMs) || currentAgeMs < -60 * 60 * 1000 || currentAgeMs > 12 * 60 * 60 * 1000) {
+      return null;
+    }
+    const match = storms.find((storm) => normalizeHkoName(storm.nameZh) === normalizeHkoName(report.nameZh));
+    if (!match || Date.parse(report.current.time) < Date.parse(match.updatedAt)) return null;
+    return {
+      storms: storms.map((storm) => storm.id === match.id ? mergeHkoTrack(storm, report) : storm),
+      observedAt: report.current.time
+    };
+  } catch {
+    return null;
+  }
+}
+
+function mergeHkoTrack(storm: Storm, report: HkoTyphoonTrack): Storm {
+  const historyByTime = new Map(storm.track.map((point) => [point.time, point]));
+  for (const point of report.history) {
+    historyByTime.set(point.time, {
+      time: point.time,
+      lat: point.lat,
+      lon: point.lon,
+      wind: point.wind,
+      pressure: 0
+    });
+  }
+  const track = [...historyByTime.values()].sort((a, b) => Date.parse(a.time) - Date.parse(b.time));
+  const zeroRadius = { ne: 0, se: 0, sw: 0, nw: 0, max: 0 };
+  const windRadiiKm = {
+    r7: 0,
+    r10: 0,
+    r12: 0,
+    quadrants: { r7: zeroRadius, r10: zeroRadius, r12: zeroRadius }
+  };
+  const forecastScenarios = mergeHkoForecastScenarios(storm.forecastScenarios, report);
+
+  return {
+    ...storm,
+    nameZh: normalizeHkoName(report.nameZh),
+    stage: report.current.stage,
+    rating: classifyTyphoonHazard(report.current.wind, report.current.stage, windRadiiKm),
+    status: "实时监测中 · HKO 最新中心",
+    position: { lat: report.current.lat, lon: report.current.lon },
+    maxWind: report.current.wind,
+    minPressure: 0,
+    moveDirection: "暂无",
+    moveSpeed: 0,
+    updatedAt: report.current.time,
+    windRadiiKm,
+    windRadiiReports: { r7: null, r10: null, r12: null },
+    track,
+    forecast: report.forecast,
+    forecastScenarios,
+    skills: []
+  };
 }
 
 function normalizeLastTrackedStorm(value: unknown): LastTrackedStorm | null {

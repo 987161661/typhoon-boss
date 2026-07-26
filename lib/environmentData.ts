@@ -281,7 +281,9 @@ async function loadCwaRadarLayer(): Promise<RadarMosaicLayerPayload> {
     const response = await fetch(CWA_RADAR_REMOTE_URL, {
       method: "HEAD",
       cache: "no-store",
-      signal: AbortSignal.timeout(5_000)
+      // The public S3 endpoint commonly needs 6-7 seconds from this region.
+      // Five seconds made a healthy source deterministically look unavailable.
+      signal: AbortSignal.timeout(10_000)
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const contentLength = Number(response.headers.get("content-length") ?? 0);
@@ -1537,16 +1539,21 @@ async function loadRegionalSatelliteFrames() {
 async function loadGlobalSatelliteFrames() {
   const frames: SatelliteFrame[] = [];
   const now = new Date();
-  for (let dayOffset = 0; dayOffset < 3; dayOffset += 1) {
+  const manifests = await Promise.all(Array.from({ length: 3 }, async (_, dayOffset) => {
     const day = new Date(now.getTime() - dayOffset * 24 * 60 * 60 * 1000);
     const dateKey = day.toISOString().slice(0, 10).replaceAll("-", "");
     const manifestUrl = `${NOAA_GMGSI_BASE_URL}/assets/${dateKey}_GMGSI_filelist.js`;
-    let text: string;
     try {
-      text = await fetchRemoteTextWithPowershell(manifestUrl);
+      // A day manifest legitimately returns 404 before NOAA publishes its
+      // first frame. Do not spend the whole layer budget retrying that
+      // deterministic miss; adjacent-day manifests are fetched in parallel.
+      return await fetchRemoteTextWithPowershell(manifestUrl, 1);
     } catch {
-      continue;
+      return null;
     }
+  }));
+  for (const text of manifests) {
+    if (!text) continue;
     const block = text.match(/var\s+GMGSI_LW_GIF_C\s*=\s*\[\s*\{([\s\S]*?)\}\s*\];/);
     if (!block) continue;
     for (const match of block[1].matchAll(/"\d{2}"\s*:\s*"([^"]+)"/g)) {
@@ -1605,15 +1612,15 @@ function parseReferenceTime(value?: string | null) {
   return Number.isNaN(time) ? null : time;
 }
 
-async function fetchRemoteTextWithPowershell(remoteUrl: string) {
+async function fetchRemoteTextWithPowershell(remoteUrl: string, maxAttempts = 5) {
   const script = [
     "$ProgressPreference='SilentlyContinue'",
     "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)",
-    `$text=(Invoke-WebRequest -UseBasicParsing '${remoteUrl}').Content`,
+    `$text=(Invoke-WebRequest -UseBasicParsing -TimeoutSec 8 '${remoteUrl}').Content`,
     "[Console]::Out.Write([string]$text)"
   ].join("; ");
   let lastError: unknown;
-  for (let attempt = 0; attempt < 5; attempt += 1) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
       const { stdout } = await execFileAsync("powershell.exe", ["-NoProfile", "-Command", script], {
         maxBuffer: 4 * 1024 * 1024,
@@ -1623,7 +1630,7 @@ async function fetchRemoteTextWithPowershell(remoteUrl: string) {
     } catch (error) {
       lastError = error;
     }
-    await delay(600 + attempt * 900);
+    if (attempt + 1 < maxAttempts) await delay(600 + attempt * 900);
   }
   throw lastError instanceof Error ? lastError : new Error(`Remote text request failed for ${remoteUrl}`);
 }

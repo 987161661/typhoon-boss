@@ -1,9 +1,16 @@
 export type TyphoonOutlookSourceStatus = "fresh" | "stale" | "unknown" | "unavailable";
+export type TyphoonOutlookEvidenceStatus = "available" | "degraded" | "unavailable";
 
 export type TyphoonEvolutionOutlook = {
   schemaVersion: 1;
   generatedAt: string;
   basin: "western-north-pacific";
+  evidenceStatus: TyphoonOutlookEvidenceStatus;
+  coverage: {
+    nearTerm: TyphoonOutlookEvidenceStatus;
+    week2: TyphoonOutlookEvidenceStatus;
+    week3: TyphoonOutlookEvidenceStatus;
+  };
   summary: string;
   sources: Record<string, {
     url: string;
@@ -38,7 +45,7 @@ export type TyphoonEvolutionOutlook = {
 };
 
 export type TyphoonEvolutionOutlookPayload = {
-  status: "available" | "unavailable";
+  status: TyphoonOutlookEvidenceStatus;
   updatedAt: string | null;
   outlook: TyphoonEvolutionOutlook | null;
 };
@@ -57,6 +64,14 @@ export type TyphoonOutlookMarkerModel = {
   label: string;
   detail: string;
 };
+
+export function shouldShowTyphoonEvolutionOutlook(
+  isLiveView: boolean,
+  configuredVisible: boolean,
+  activeStormCount: number
+) {
+  return isLiveView && configuredVisible && activeStormCount === 0;
+}
 
 const POTENTIAL_LABELS = { low: "低", medium: "中", high: "高" } as const;
 
@@ -85,11 +100,19 @@ export function buildLiveTyphoonOutlookView(
 ): LiveTyphoonOutlookView {
   const outlook = payload.outlook;
   if (payload.status !== "available" || !outlook) {
+    if (payload.status === "degraded" && outlook) {
+      return {
+        available: true,
+        timestampLabel: formatShanghaiTimestamp(outlook.generatedAt),
+        tickerText: `资料覆盖不完整：${outlook.summary}`,
+        sourceLabel: "JTWC / NOAA CPC · PARTIAL"
+      };
+    }
     return {
       available: false,
-      timestampLabel: "等待首份研判",
-      tickerText: "台风生成研判暂不可用；系统正在等待下一次资料同步。",
-      sourceLabel: "DATA PENDING"
+      timestampLabel: formatShanghaiTimestamp(outlook?.generatedAt),
+      tickerText: outlook?.summary ?? "台风生成研判暂不可用；系统正在等待下一次资料同步。",
+      sourceLabel: "DATA UNAVAILABLE"
     };
   }
 
@@ -117,7 +140,7 @@ export function buildLiveTyphoonOutlookView(
 export function buildTyphoonOutlookMarkerModels(
   payload: TyphoonEvolutionOutlookPayload
 ): TyphoonOutlookMarkerModel[] {
-  if (payload.status !== "available" || !payload.outlook) return [];
+  if (payload.status === "unavailable" || !payload.outlook) return [];
   return payload.outlook.extendedRangeAreas.map((area) => ({
     id: area.factRef,
     longitude: area.center.longitude,

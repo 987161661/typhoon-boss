@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  LIVE_CITY_BROADCAST_RENDER_MILESTONES,
   LIVE_CITY_BROADCAST_TIMELINE,
   resolveLiveCityBroadcastAct,
   resolveLiveScoreAt,
   resolveLiveSummarySpeed
 } from "../lib/liveCityBroadcastPerformance";
 
-test("broadcast timeline reaches the two towers and settles inside the 2.45-second panel budget", () => {
+test("broadcast timeline preserves the full 2.45-second performance", () => {
   assert.equal(resolveLiveCityBroadcastAct(0), "battle");
   assert.equal(resolveLiveCityBroadcastAct(799), "battle");
   assert.equal(resolveLiveCityBroadcastAct(800), "info");
@@ -16,6 +17,14 @@ test("broadcast timeline reaches the two towers and settles inside the 2.45-seco
   assert.equal(resolveLiveCityBroadcastAct(2_450), "settled");
   assert.equal(LIVE_CITY_BROADCAST_TIMELINE.settledMs, 2_450);
   assert.equal(resolveLiveCityBroadcastAct(0, true), "settled");
+});
+
+test("broadcast animation updates React only at bounded visual milestones", () => {
+  assert.deepEqual(LIVE_CITY_BROADCAST_RENDER_MILESTONES, [300, 800, 1_800, 2_450]);
+  assert.ok(
+    LIVE_CITY_BROADCAST_RENDER_MILESTONES.length <= 4,
+    "the full dual-panel tree must not rerender on every animation frame"
+  );
 });
 
 test("summary pacing stays readable while fitting the two-second broadcast budget", () => {

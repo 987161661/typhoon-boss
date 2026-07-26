@@ -246,9 +246,39 @@ test("all four practical risks exist even when data is unavailable", () => {
     }
   }));
   assert.equal(model.battle.title, "信号迷雾");
-  assert.equal(model.battle.threatScore, 0);
+  assert.equal(model.battle.threatScore, null, "missing evidence must not be presented as a zero-risk index");
   assert.deepEqual(model.info.risks.map((risk) => risk.id), ["rain", "wind", "convection", "heat"]);
   assert.ok(model.info.risks.every((risk) => risk.level === "unavailable" && risk.evidence === "unavailable"));
+});
+
+test("a missing national warning snapshot does not erase usable city weather", () => {
+  const input = sample({
+    status: "degraded",
+    situation: {
+      target: { name: "拉萨", cityCode: "540100" },
+      mode: "data-unavailable",
+      headline: "全国预警快照暂不可用。",
+      primaryWarning: null,
+      officialWarnings: [],
+      anomalies: [],
+      ordinarySummary: null,
+      limitations: ["全国预警快照暂不可用。"]
+    },
+    sources: [{
+      id: "qweather-warning",
+      label: "全国官方预警快照",
+      evidenceLevel: "unavailable",
+      updatedAt: null,
+      status: "unavailable",
+      limitation: "当前无法核对属地官方预警。"
+    }]
+  });
+  const model = build(input);
+
+  assert.notEqual(model.battle.title, "信号迷雾");
+  assert.equal(model.battle.threatScore, 18);
+  assert.equal(model.info.currentMetrics.find((metric) => metric.id === "temperature")?.value, "26");
+  assert.equal(model.info.warning.status, "unavailable");
 });
 
 test("orange heat warning becomes a playful heat battle while official facts stay info-only", () => {

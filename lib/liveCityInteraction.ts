@@ -39,6 +39,7 @@ export type HostLiveEvent = HostLiveComment | HostViewerRelationEvent;
 export interface CityInteractionRequest {
   id: string;
   cityQuery: string;
+  sourceText: string;
   viewerId: string | null;
   viewerName: string | null;
   platform: string | null;
@@ -140,7 +141,37 @@ function strongestRank(comparison: CityHostWeatherBriefing["comparison"]) {
   const strongest = ranked
     .sort((left, right) => left[1].position - right[1].position)[0];
   if (!strongest || strongest[1].position > Math.max(10, Math.ceil(strongest[1].total * 0.1))) return null;
-  return `${promptField(comparison.scope, 18)}${strongest[0]}第${strongest[1].position}/${strongest[1].total}`;
+  const scope = promptField(comparison.scope, 18)
+    .replace(/城市排名$/, "")
+    .replace(/城市$/, "")
+    .replace(/排名$/, "");
+  return `${scope}${spokenInteger(strongest[1].total)}个城市中，${strongest[0]}排名第${spokenInteger(strongest[1].position)}`;
+}
+
+function spokenInteger(value: number) {
+  const integer = Math.trunc(value);
+  if (!Number.isFinite(integer) || integer < 0 || integer > 9999) return String(integer);
+  if (integer === 0) return "零";
+
+  const digits = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
+  const units = ["", "十", "百", "千"];
+  let result = "";
+  let pendingZero = false;
+
+  for (let place = 3; place >= 0; place -= 1) {
+    const divisor = 10 ** place;
+    const digit = Math.floor(integer / divisor) % 10;
+    if (digit === 0) {
+      if (result && integer % divisor !== 0) pendingZero = true;
+      continue;
+    }
+    if (pendingZero) result += "零";
+    pendingZero = false;
+    if (!(digit === 1 && place === 1 && !result)) result += digits[digit];
+    result += units[place];
+  }
+
+  return result;
 }
 
 function round(value: number) {
@@ -243,6 +274,7 @@ export function toCityInteractionRequest(comment: HostLiveComment): CityInteract
   return {
     id: comment.id.trim(),
     cityQuery,
+    sourceText: comment.text.trim(),
     viewerId: optionalText(comment.viewerId, 160),
     viewerName: optionalText(comment.viewerName, 80),
     platform: optionalText(comment.platform, 80),

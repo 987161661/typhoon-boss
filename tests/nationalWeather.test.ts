@@ -220,6 +220,31 @@ test("aggregation preserves the complete Storm contract and keeps image/catalog 
   assert.equal(provinceWarning?.geography.cityCode, null);
 });
 
+test("a missing storm pressure sentinel is never published as zero hectopascals", () => {
+  const snapshot = buildNationalSituationSnapshot(inputs({
+    track: {
+      ...track,
+      storms: [{ ...storm, minPressure: 0 }]
+    }
+  }), now);
+  const event = snapshot.events.find((item) => item.kind === "typhoon");
+
+  assert.ok(event);
+  assert.match(event.factSummary, /中心气压未提供/);
+  assert.doesNotMatch(event.factSummary, /中心气压\s*0\s*百帕/);
+});
+
+test("aggregation carries the available national city-rank coverage summary", () => {
+  const cityRankSnapshot = {
+    generatedAt: "2026-07-15T02:15:00.000Z",
+    sourceIds: ["qweather"],
+    cityCount: 354,
+    status: "fresh" as const
+  };
+  const snapshot = buildNationalSituationSnapshot(inputs({ cityRankSnapshot }), now);
+  assert.deepEqual(snapshot.cityRankSnapshot, cityRankSnapshot);
+});
+
 test("an unavailable source retains its last valid facts and is not rewritten as no risk", () => {
   const previous = buildNationalSituationSnapshot(inputs(), now);
   const current = buildNationalSituationSnapshot(inputs({ warnings: null }), "2026-07-15T02:31:00.000Z");

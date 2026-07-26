@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getRadarSnapshot } from "@/lib/radarSnapshot";
-import { createHash } from "node:crypto";
 import { recordSnapshot } from "@/lib/runtimeMetrics";
 import { resolveServerAcceptanceScenario } from "@/lib/acceptanceScenarioServer";
 import { createAcceptanceRadarSnapshot } from "@/lib/acceptanceScenarioFixtures";
+import { createRadarSnapshotResponse } from "@/lib/radarSnapshotResponse";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
@@ -17,19 +17,9 @@ export async function GET(request: NextRequest) {
     const snapshot = acceptanceScenario
       ? createAcceptanceRadarSnapshot(acceptanceScenario)
       : await getRadarSnapshot(stormId);
-    const etag = `"${createHash("sha1").update(`${snapshot.activeStormId}:${snapshot.cache.stormUpdatedAt}:${snapshot.cache.derivedGeneratedAt}`).digest("hex")}"`;
-    if (request.headers.get("if-none-match") === etag) {
-      return new NextResponse(null, { status: 304, headers: { ETag: etag, "Cache-Control": "no-store, max-age=0" } });
-    }
     const body = JSON.stringify(snapshot);
     recordSnapshot(Buffer.byteLength(body), Date.now() - startedAt, snapshot.bosses.length);
-    return new NextResponse(body, {
-      headers: {
-        "Content-Type": "application/json; charset=utf-8",
-        "Cache-Control": "no-store, max-age=0",
-        ETag: etag
-      }
-    });
+    return createRadarSnapshotResponse(snapshot, request.headers.get("if-none-match"));
   } catch (error) {
     return NextResponse.json(
       {

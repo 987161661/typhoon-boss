@@ -1,9 +1,12 @@
 export type SourceStatus = "fresh" | "stale" | "unknown" | "unavailable";
+export type EvidenceStatus = "available" | "degraded" | "unavailable";
 
 export interface TropicalDisturbanceOutlook {
   schemaVersion: 1;
   generatedAt: string;
   basin: "western-north-pacific";
+  evidenceStatus: EvidenceStatus;
+  coverage: { nearTerm: EvidenceStatus; week2: EvidenceStatus; week3: EvidenceStatus };
   summary: string;
   sources: Record<string, { url: string; updatedAt: string | null; status: SourceStatus; error: string | null }>;
   nearTermDisturbances: Array<{
@@ -29,5 +32,9 @@ export function buildTropicalDisturbanceOutlook(
   inputs: { jtwcAdvisory: string | null; cpcWeek2Kml: string | null; cpcWeek3Kml: string | null },
   options?: { now?: string | number | Date }
 ): TropicalDisturbanceOutlook;
+
+export function assessTropicalDisturbanceOutlook(
+  outlook: Pick<TropicalDisturbanceOutlook, "sources">
+): { status: EvidenceStatus; coverage: TropicalDisturbanceOutlook["coverage"] };
 
 export function renderTropicalDisturbanceReport(outlook: TropicalDisturbanceOutlook): string;

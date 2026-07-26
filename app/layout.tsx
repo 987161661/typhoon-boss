@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { CHUNK_LOAD_RECOVERY_SCRIPT } from "@/lib/chunkLoadRecovery";
 import "maplibre-gl/dist/maplibre-gl.css";
 import "./globals.css";
 
@@ -10,6 +11,9 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="zh-CN">
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: CHUNK_LOAD_RECOVERY_SCRIPT }} />
+      </head>
       <body>{children}</body>
     </html>
   );

@@ -4,6 +4,7 @@ import type {
   TyphoonEvolutionOutlook,
   TyphoonEvolutionOutlookPayload
 } from "./liveTyphoonOutlook";
+import { assessTropicalDisturbanceOutlook } from "./agent/tropicalDisturbanceOutlook.mjs";
 
 const STATE_PATH = path.join(process.cwd(), ".runtime", "typhoon-evolution-agent.json");
 
@@ -23,10 +24,16 @@ export async function readTyphoonEvolutionOutlook(): Promise<TyphoonEvolutionOut
     if (!isOutlook(state.lastDisturbanceOutlook)) {
       return { status: "unavailable", updatedAt: null, outlook: null };
     }
+    const evidence = assessTropicalDisturbanceOutlook(state.lastDisturbanceOutlook);
+    const outlook: TyphoonEvolutionOutlook = {
+      ...state.lastDisturbanceOutlook,
+      evidenceStatus: evidence.status,
+      coverage: evidence.coverage
+    };
     return {
-      status: "available",
+      status: evidence.status,
       updatedAt: typeof state.updatedAt === "string" ? state.updatedAt : state.lastDisturbanceOutlook.generatedAt,
-      outlook: state.lastDisturbanceOutlook
+      outlook
     };
   } catch {
     return { status: "unavailable", updatedAt: null, outlook: null };

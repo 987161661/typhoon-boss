@@ -39,12 +39,29 @@ test("successful city reports create a viewer-specific result event without a CT
   assert.match(prompt, /@小雨/);
   assert.match(prompt, /查询城市：伊宁/);
   assert.match(prompt, /气温36℃/);
-  assert.match(prompt, /体感温度第2\/300/);
+  assert.match(prompt, /全国三百个城市中，体感温度排名第二/);
   assert.match(prompt, /幽默毒舌/);
   assert.match(prompt, /你们人类/);
   assert.match(prompt, /不索取关注点赞礼物/);
   assert.match(prompt, /不要说“战报已经展开”/);
   assert.ok(prompt.length <= 500, "avatar bridge rejects prompts longer than 500 characters");
+});
+
+test("national rank facts are produced as natural speech instead of slash notation", () => {
+  const prompt = buildCityReportEngagementPrompt({
+    cityQuery: "深圳",
+    viewerName: "测试观众",
+    followEvidence: "unknown"
+  }, {
+    ...ordinaryBriefing,
+    comparison: {
+      scope: "全国城市",
+      windSpeedRank: { position: 1, total: 354 }
+    }
+  }) ?? "";
+
+  assert.ok(prompt.includes("全国三百五十四个城市中，风速排名第一"));
+  assert.doesNotMatch(prompt, /第1\/354|第1 354/);
 });
 
 test("official warnings stay lively without disaster jokes", () => {
@@ -140,6 +157,7 @@ test("host bridge comment is shape-checked before it can enter the city queue", 
   assert.deepEqual(toCityInteractionRequest(comment), {
     id: "comment-1",
     cityQuery: "北京",
+    sourceText: "@北京",
     viewerId: null,
     viewerName: "测试观众",
     platform: null,

@@ -65,6 +65,10 @@ const cityLocations = [
   { region: "澳门特别行政区", city: "澳门", lat: 22.1987, lon: 113.5439 }
 ];
 
+// Keep the background agent credential isolated from unrelated server keys.
+// The dedicated ignored file wins because the loader preserves the first
+// configured value.
+loadEnvFile(path.join(root, ".env.agent.local"));
 loadEnvFile(path.join(root, ".env.local"));
 
 async function main() {

@@ -51,7 +51,7 @@ export function NationalSituationHud({
         <WarningSignalCard {...cardProps} variant="compact" />
         <div className={styles.compactFooter}>
           <span>{model.warning.countsLabel}</span>
-          <small>{primarySource ? `${primarySource.label} · ${primarySource.statusLabel}` : "来源待同步"}</small>
+          <small>{primarySource ? `${primarySource.label} · ${primarySource.statusLabel}` : "暂无来源记录"}</small>
         </div>
       </section>
     );

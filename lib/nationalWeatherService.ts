@@ -5,64 +5,79 @@ import { readChinaWeatherVisuals } from "@/lib/chinaWeatherVisualFeed";
 import { readChinaWeatherWarnings } from "@/lib/chinaWeatherWarningFeed";
 import { getAdministrativeHierarchy } from "@/lib/administrativeHierarchyService";
 import { buildNationalSituationSnapshot, retainLastValidSources } from "@/lib/nationalWeather";
-import type { NationalSituationSnapshot } from "@/lib/nationalWeatherTypes";
+import type { CityRankSnapshotSummary, NationalSituationSnapshot } from "@/lib/nationalWeatherTypes";
 import { getTrackSnapshot } from "@/lib/realTyphoonData";
+import { createStaleWhileRefreshCache } from "@/lib/staleWhileRefreshCache";
+import {
+  NATIONAL_SITUATION_SNAPSHOT_PATH,
+  readPersistedNationalSituationSnapshot
+} from "@/lib/nationalSituationSnapshotStore";
 
-const NATIONAL_SNAPSHOT_PATH = resolve(process.cwd(), ".runtime/national-situation.json");
+const NATIONAL_CITY_SNAPSHOT_PATH = resolve(process.cwd(), ".runtime/qweather-national-city-snapshot.json");
 const MEMORY_CACHE_MS = 15_000;
+const CITY_RANK_FRESH_MS = 26 * 60 * 60 * 1_000;
+const CITY_RANK_DELAYED_MS = 3 * 24 * 60 * 60 * 1_000;
 
-let memoryCache: { snapshot: NationalSituationSnapshot; expiresAt: number } | null = null;
-let snapshotInFlight: Promise<NationalSituationSnapshot> | null = null;
+const nationalSnapshotCache = createStaleWhileRefreshCache({
+  loader: loadNationalSituationSnapshot,
+  readPersisted: readPersistedNationalSituationSnapshot,
+  ttlMs: MEMORY_CACHE_MS
+});
 
 export async function getNationalSituationSnapshot(): Promise<NationalSituationSnapshot> {
-  const cached = memoryCache;
-  if (cached && cached.expiresAt > Date.now()) return cached.snapshot;
-  if (snapshotInFlight) return snapshotInFlight;
-
-  snapshotInFlight = loadNationalSituationSnapshot().then((snapshot) => {
-    memoryCache = { snapshot, expiresAt: Date.now() + MEMORY_CACHE_MS };
-    return snapshot;
-  }).finally(() => {
-    snapshotInFlight = null;
-  });
-  return snapshotInFlight;
+  return nationalSnapshotCache.get();
 }
 
 async function loadNationalSituationSnapshot(): Promise<NationalSituationSnapshot> {
-  const [warnings, visuals, products, track, administrative, previous] = await Promise.all([
+  const now = new Date();
+  const [warnings, visuals, products, track, administrative, cityRankSnapshot, previous] = await Promise.all([
     readChinaWeatherWarnings(),
     readChinaWeatherVisuals(),
     readChinaWeatherProducts(),
     getTrackSnapshot(),
     getAdministrativeHierarchy(),
-    readPersistedNationalSituation()
+    readNationalCityRankSummary(now),
+    readPersistedNationalSituationSnapshot()
   ]);
-  const now = new Date();
   const current = buildNationalSituationSnapshot({
     warnings,
     visuals,
     products,
     track,
     administrativeHierarchy: administrative.hierarchy,
-    administrativeHierarchyError: administrative.error
+    administrativeHierarchyError: administrative.error,
+    cityRankSnapshot
   }, now);
   const merged = previous ? retainLastValidSources(current, previous, now) : current;
   const snapshot = previous && sameSnapshotContent(previous, merged) ? previous : merged;
-  if (snapshot !== previous) await writeJsonAtomic(NATIONAL_SNAPSHOT_PATH, snapshot);
+  if (snapshot !== previous) await writeJsonAtomic(NATIONAL_SITUATION_SNAPSHOT_PATH, snapshot);
   return snapshot;
+}
+
+async function readNationalCityRankSummary(now: Date): Promise<CityRankSnapshotSummary | null> {
+  try {
+    const value = JSON.parse(await readFile(NATIONAL_CITY_SNAPSHOT_PATH, "utf8")) as {
+      fetchedAt?: string;
+      values?: unknown[];
+    };
+    const generatedAt = value.fetchedAt;
+    if (!generatedAt || !Array.isArray(value.values) || value.values.length < 200) return null;
+    const generatedTime = Date.parse(generatedAt);
+    if (!Number.isFinite(generatedTime)) return null;
+    const age = Math.max(0, now.getTime() - generatedTime);
+    return {
+      generatedAt,
+      sourceIds: ["qweather"],
+      cityCount: value.values.length,
+      status: age <= CITY_RANK_FRESH_MS ? "fresh" : age <= CITY_RANK_DELAYED_MS ? "delayed" : "expired"
+    };
+  } catch {
+    return null;
+  }
 }
 
 function sameSnapshotContent(a: NationalSituationSnapshot, b: NationalSituationSnapshot) {
   return JSON.stringify({ ...a, generatedAt: null }) === JSON.stringify({ ...b, generatedAt: null });
-}
-
-async function readPersistedNationalSituation() {
-  try {
-    const value = JSON.parse(await readFile(NATIONAL_SNAPSHOT_PATH, "utf8")) as NationalSituationSnapshot;
-    return value.schemaVersion === 1 && Array.isArray(value.sourceHealth) && Array.isArray(value.events) ? value : null;
-  } catch {
-    return null;
-  }
 }
 
 async function writeJsonAtomic(filePath: string, value: unknown) {

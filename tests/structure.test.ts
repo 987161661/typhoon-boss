@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { futureForecastPoints } from "../lib/bossEngine";
-import { parseJtwcStructureBulletin } from "../lib/bossEngine/structureIntelligence";
+import { parseJtwcStructureBulletin, resolveJtwcAtcfId } from "../lib/bossEngine/structureIntelligence";
 import type { Storm } from "../lib/types";
 
 const storm = {
@@ -14,6 +14,14 @@ const storm = {
     r12: { ne: 50, se: 40, sw: 30, nw: 20, max: 50 }
   } }, track: [], forecast: [], forecastScenarios: [], landfalls: [], skills: [], notice: ""
 } satisfies Storm;
+
+test("domestic typhoon numbering is never guessed to be the JTWC ATCF identifier", () => {
+  assert.equal(resolveJtwcAtcfId(storm), null);
+  assert.equal(resolveJtwcAtcfId({
+    ...storm,
+    agencyIdentifiers: { jtwcAtcf: "WP922026" }
+  }), "wp922026");
+});
 
 test("JTWC bulletin must match the storm identity", () => {
   assert.throws(() => parseJtwcStructureBulletin("WDPN31 PGTW 120900 PROGNOSTIC REASONING FOR TYPHOON 10W (MAYSAK)", storm, "https://example.invalid"), /identity did not match/);

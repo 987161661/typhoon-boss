@@ -9,6 +9,7 @@ import {
   Eye,
   EyeOff,
   LayoutDashboard,
+  MessageSquareText,
   PanelLeftOpen,
   RadioTower,
   Save,
@@ -27,6 +28,7 @@ export function LiveOperatorControls({
   hostVisible,
   onToggleHost,
   onToggleTyphoonOutlook,
+  onToggleConversationPanel,
   onSendChat,
   settings,
   settingsStatus,
@@ -35,6 +37,7 @@ export function LiveOperatorControls({
   hostVisible: boolean;
   onToggleHost: () => void;
   onToggleTyphoonOutlook: () => void;
+  onToggleConversationPanel: () => void;
   onSendChat: (text: string) => "city" | "host";
   settings: LiveControlSettings;
   settingsStatus: SettingsStatus;
@@ -57,6 +60,7 @@ export function LiveOperatorControls({
       evolutionAgentEnabled: draft.evolutionAgentEnabled,
       evolutionAgentIntervalMinutes: draft.evolutionAgentIntervalMinutes,
       typhoonOutlookVisible: draft.typhoonOutlookVisible,
+      conversationPanelVisible: draft.conversationPanelVisible,
       cityReportEffectsEnabled: draft.cityReportEffectsEnabled,
       cityReportEffectsVolume: draft.cityReportEffectsVolume
     });
@@ -97,6 +101,11 @@ export function LiveOperatorControls({
               {settings.typhoonOutlookVisible ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
               <span>{settings.typhoonOutlookVisible ? "关闭台风预报窗" : "打开台风预报窗"}</span>
               <b>{settings.typhoonOutlookVisible ? "ON" : "OFF"}</b>
+            </button>
+            <button type="button" onClick={onToggleConversationPanel} aria-pressed={settings.conversationPanelVisible}>
+              {settings.conversationPanelVisible ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+              <span>{settings.conversationPanelVisible ? "关闭通联聊天板" : "打开通联聊天板"}</span>
+              <b>{settings.conversationPanelVisible ? "ON" : "OFF"}</b>
             </button>
             <Link href="/dex">
               <BookOpen aria-hidden="true" />
@@ -210,6 +219,27 @@ export function LiveOperatorControls({
                     setDraft((current) => ({
                       ...current,
                       typhoonOutlookVisible: event.target.checked
+                    }))
+                  }
+                />
+                <i aria-hidden="true" />
+              </label>
+            </fieldset>
+
+            <fieldset>
+              <legend>数字人通联</legend>
+              <label className="live-setting-switch">
+                <span>
+                  <b><MessageSquareText aria-hidden="true" /> 显示通联聊天板</b>
+                  <small>在凌岚发声前显示互动对象、问题与待播回复</small>
+                </span>
+                <input
+                  type="checkbox"
+                  checked={draft.conversationPanelVisible}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      conversationPanelVisible: event.target.checked
                     }))
                   }
                 />

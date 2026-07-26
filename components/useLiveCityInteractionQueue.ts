@@ -21,7 +21,7 @@ import {
   type HostViewerRelationEvent
 } from "@/lib/liveCityInteraction";
 
-const CITY_COOLDOWN_MS = 90_000;
+const CITY_COOLDOWN_MS = 10_000;
 const EVENT_DEDUPLICATION_MS = 10 * 60_000;
 const MAX_PENDING_INTERACTIONS = 5;
 

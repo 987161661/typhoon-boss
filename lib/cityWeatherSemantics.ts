@@ -1,5 +1,5 @@
 export interface CurrentWeatherSignal {
-  sourceId: "open-meteo" | "qweather-now" | null;
+  sourceId: "open-meteo" | "qweather-now" | "qweather-hourly" | null;
   weatherCode: number | null;
   weatherText?: string | null;
 }

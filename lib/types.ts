@@ -53,6 +53,10 @@ export interface StormLandfall {
 export interface Storm {
   id: string;
   code: string;
+  /** Explicit cross-agency identifiers; never infer these from domestic numbering. */
+  agencyIdentifiers?: {
+    jtwcAtcf?: string;
+  };
   nameZh: string;
   nameEn: string;
   stage: StormStage;

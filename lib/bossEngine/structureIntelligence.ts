@@ -68,7 +68,7 @@ let ledgerWriteQueue: Promise<void> = Promise.resolve();
 
 export async function getStormStructureIntelligence(storm: Storm): Promise<BossStructureSummary> {
   const source = jtwcSourceForStorm(storm);
-  const cacheKey = `${STRUCTURE_CACHE_VERSION}:${storm.id}:${source.url}`;
+  const cacheKey = `${STRUCTURE_CACHE_VERSION}:${storm.id}:${source?.url ?? "jtwc-id-unmapped"}`;
   const cached = structureCache.get(cacheKey);
   if (cached && cached.expiresAt > Date.now()) return cached.value;
 
@@ -95,6 +95,9 @@ export async function getStormStructureIntelligence(storm: Storm): Promise<BossS
 
 async function loadStormStructure(storm: Storm, source: ReturnType<typeof jtwcSourceForStorm>) {
   try {
+    if (!source) {
+      throw new Error("JTWC ATCF identifier is unavailable; domestic typhoon numbering was not used as a substitute.");
+    }
     const bulletin = await fetchJtwcBulletin(source);
     const observation = parseJtwcStructureBulletin(bulletin.text, storm, bulletin.url);
     return persistObservation(storm.id, observation);
@@ -110,7 +113,7 @@ async function loadStormStructure(storm: Storm, source: ReturnType<typeof jtwcSo
         warnings: [...previous.warnings, reason]
       };
     }
-    return unknownStructure(storm, reason, source.url);
+    return unknownStructure(storm, reason, source?.url ?? "");
   }
 }
 
@@ -126,11 +129,11 @@ export async function getPersistedStormStructure(stormId: string): Promise<BossS
     ...entry.lastSummary,
     historyCount: entry.transitions.length,
     stale: true,
-    warnings: [...entry.lastSummary.warnings, "实时 JTWC 结构源正在刷新；当前展示本地已记录通报。"]
+    warnings: [...entry.lastSummary.warnings, "当前继续展示本地最近一份有效 JTWC 结构通报。"]
   };
 }
 
-async function fetchJtwcBulletin(source: ReturnType<typeof jtwcSourceForStorm>) {
+async function fetchJtwcBulletin(source: NonNullable<ReturnType<typeof jtwcSourceForStorm>>) {
   // The official reasoning message is the preferred source for an active
   // eyewall cycle. NRL's ATCF mirror is fetched in parallel because it
   // retains the official warning, final-warning and dissipation lifecycle
@@ -396,16 +399,19 @@ function unknownStructure(storm: Storm, reason: string, sourceUrl: string): Boss
   };
 }
 
+export function resolveJtwcAtcfId(storm: Storm) {
+  const candidate = storm.agencyIdentifiers?.jtwcAtcf?.trim().toLowerCase() ?? "";
+  return /^wp\d{6}$/.test(candidate) ? candidate : null;
+}
+
 function jtwcSourceForStorm(storm: Storm) {
-  const digits = String(storm.code || storm.id).replace(/\D/g, "");
-  const fullYear = digits.slice(0, 4) || String(new Date().getUTCFullYear());
-  const year = fullYear.slice(-2);
-  const stormNumber = (digits.slice(-2) || "00").padStart(2, "0");
-  const basinId = `wp${stormNumber}${year}`;
+  const atcfId = resolveJtwcAtcfId(storm);
+  if (!atcfId) return null;
+  const basinId = `${atcfId.slice(0, 4)}${atcfId.slice(-2)}`;
   return {
     basinId,
     url: `https://www.metoc.navy.mil/jtwc/products/${basinId}prog.txt`,
-    warningUrl: `https://science.nrlmry.navy.mil/atcf/docs/current_storms/wp${stormNumber}${fullYear}.wrn`
+    warningUrl: `https://science.nrlmry.navy.mil/atcf/docs/current_storms/${atcfId}.wrn`
   };
 }
 

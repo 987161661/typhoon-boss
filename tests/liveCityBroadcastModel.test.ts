@@ -158,6 +158,7 @@ test("no-warning and missing-data states remain explicit rather than inventing s
 
   const missing = broadcast(briefing("rain", true));
   assert.equal(missing.info.dataStatus, "unavailable");
+  assert.equal(missing.battle.score, null, "the OBS battle window must render an unknown index, not 0");
   assert.ok(missing.info.metrics.every((metric) => metric.evidence === "unavailable"));
   assert.doesNotMatch(`${missing.battle.summary}${missing.info.warning.description}`, /安全|无风险$/);
 });

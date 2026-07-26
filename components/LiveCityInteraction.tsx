@@ -16,6 +16,7 @@ import {
   playLiveCityBroadcastCue,
   type LiveCityBroadcastEffects
 } from "@/lib/liveCityBroadcastAudio";
+import { fetchCityBriefingWithRetry } from "@/lib/cityBriefingClient";
 import styles from "./LiveCityInteraction.module.css";
 
 const FLASH_DURATION_MS = 1_000;
@@ -157,14 +158,14 @@ export function LiveCityInteraction({
       })
       .catch(() => undefined);
 
-    void fetch(cityBriefingUrl, { cache: "no-store", signal: controller.signal })
-      .then(async (response) => {
-        if (!response.ok) {
-          const body = await response.json().catch(() => null) as { error?: string } | null;
-          throw new Error(body?.error ?? `HTTP ${response.status}`);
-        }
-        return response.json() as Promise<CityBriefing>;
-      })
+    void fetchCityBriefingWithRetry<CityBriefing>(cityBriefingUrl, {
+      signal: controller.signal,
+      maxAttempts: 4,
+      // A degraded response can still contain verified current observations.
+      // Render it with its source limitations instead of repeatedly fetching
+      // until the 30-second live scene expires.
+      shouldRetryResult: (briefing) => briefing.status === "unavailable"
+    })
       .then((briefing) => {
         if (cancelled) return;
         startAttention({ id: request.id, city: briefing.city.name, longitude: briefing.city.longitude, latitude: briefing.city.latitude });
@@ -239,11 +240,11 @@ export function LiveCityInteraction({
           setArchive({ status: "unlocked", code: result.archiveCode, fragment: result.fragment });
           return;
         }
-        setArchive({ status: "unavailable", code: result.archiveCode, statusText: "观测员权限已确认，档案同步中" });
+        setArchive({ status: "unavailable", code: result.archiveCode, statusText: "观测员权限已确认，本次暂无可展示档案" });
       })
-      .catch((error) => {
+      .catch(() => {
         if (controller.signal.aborted) return;
-        setArchive({ status: "unavailable", statusText: error instanceof Error ? `观测员权限已确认，档案同步中：${error.message}` : "观测员权限已确认，档案同步中" });
+        setArchive({ status: "unavailable", statusText: "观测员权限已确认，本次暂无可展示档案" });
       });
     return () => controller.abort();
   }, [accessSource, briefing, interaction?.platform, interaction?.viewerId, interactionId]);

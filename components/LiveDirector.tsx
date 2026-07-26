@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { TyphoonMap } from "./TyphoonMap";
 import { DigitalHostWindow, type HostChatRequest } from "./DigitalHostWindow";
+import { DigitalHostConversationPanel } from "./DigitalHostConversationPanel";
 import { LiveOperatorControls } from "./LiveOperatorControls";
 import { LiveCityInteraction } from "./LiveCityInteraction";
 import { LiveCityTargetLock } from "./LiveCityTargetLock";
@@ -25,6 +26,12 @@ import {
   type LiveControlSettings
 } from "@/lib/liveControlSettings";
 import { primeLiveCityBroadcastAudio } from "@/lib/liveCityBroadcastAudio";
+import {
+  recordConversationPrompt,
+  recordConversationReply,
+  type HostConversationEntry,
+  type HostReplyReadyEvent
+} from "@/lib/digitalHostConversation";
 
 type DirectorScene = "briefing" | "analysis";
 
@@ -37,6 +44,7 @@ export function LiveDirector() {
   const [cycle, setCycle] = useState(0);
   const [hostVisible, setHostVisible] = useState(true);
   const [chatRequest, setChatRequest] = useState<HostChatRequest | null>(null);
+  const [hostConversations, setHostConversations] = useState<HostConversationEntry[]>([]);
   const [cityAttention, setCityAttention] = useState<CityAttention | null>(null);
   const [cityAttentionAnchor, setCityAttentionAnchor] = useState<CityAttentionAnchor | null>(null);
   const [controlSettings, setControlSettings] = useState(DEFAULT_LIVE_CONTROL_SETTINGS);
@@ -73,8 +81,20 @@ export function LiveDirector() {
   }, []);
 
   const handleLiveEvent = useCallback((event: HostLiveEvent) => {
+    if (isHostLiveComment(event)) {
+      setHostConversations((current) => recordConversationPrompt(current, {
+        id: event.id,
+        viewerName: event.viewerName ?? event.viewerId ?? "观众",
+        viewerText: event.text,
+        at: event.receivedAt
+      }));
+    }
     submitCityInteractionEvent(event);
   }, [submitCityInteractionEvent]);
+
+  const handleReplyReady = useCallback((event: HostReplyReadyEvent) => {
+    setHostConversations((current) => recordConversationReply(current, event));
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -103,7 +123,7 @@ export function LiveDirector() {
         for (const item of payload.events || []) {
           if (typeof item.sequence !== "number") continue;
           after = Math.max(after, item.sequence);
-          if (isHostLiveComment(item.event)) submitCityInteractionEvent(item.event);
+          if (isHostLiveComment(item.event)) handleLiveEvent(item.event);
         }
       } catch {
         // The local gateway may restart independently of the radar page.
@@ -117,7 +137,7 @@ export function LiveDirector() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [submitCityInteractionEvent]);
+  }, [handleLiveEvent]);
 
   const handleRadarChat = useCallback((text: string) => {
     const id = createLiveCityEventId("radar-chat");
@@ -134,7 +154,12 @@ export function LiveDirector() {
     // The city card is visual first. Its short engagement line is emitted
     // only after the matching card is actually ready.
     if (handledAsCity) return "city";
-    setChatRequest({ id, text });
+    setHostConversations((current) => recordConversationPrompt(current, {
+      id,
+      viewerName: "雷达操作台",
+      viewerText: text
+    }));
+    setChatRequest({ id, text, viewerId: "radar-operator", viewerName: "雷达操作台" });
     return "host";
   }, [cityInteractions]);
 
@@ -161,6 +186,12 @@ export function LiveDirector() {
       viewerId: request.viewerId ?? undefined,
       viewerName: request.viewerName ?? undefined
     });
+    setHostConversations((current) => recordConversationPrompt(current, {
+      id: `city-engagement:${request.id}`,
+      viewerName: request.viewerName ?? request.viewerId ?? "观众",
+      viewerText: request.sourceText,
+      at: request.receivedAt
+    }));
   }, []);
 
   useEffect(() => {
@@ -272,6 +303,11 @@ export function LiveDirector() {
         visible={hostVisible}
         chatRequest={chatRequest}
         onLiveEvent={handleLiveEvent}
+        onReplyReady={handleReplyReady}
+      />
+      <DigitalHostConversationPanel
+        entries={hostConversations}
+        visible={controlSettings.conversationPanelVisible}
       />
       {/* City reports are broadcast overlays, outside the map scene and side
           rail stacking contexts. */}
@@ -295,6 +331,9 @@ export function LiveDirector() {
         onToggleHost={() => setHostVisible((current) => !current)}
         onToggleTyphoonOutlook={() => {
           void saveControlSettings({ typhoonOutlookVisible: !controlSettings.typhoonOutlookVisible });
+        }}
+        onToggleConversationPanel={() => {
+          void saveControlSettings({ conversationPanelVisible: !controlSettings.conversationPanelVisible });
         }}
         onSendChat={handleRadarChat}
         settings={controlSettings}

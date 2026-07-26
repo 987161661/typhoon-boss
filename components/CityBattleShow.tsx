@@ -147,9 +147,15 @@ export function CityBattleShow({
   );
 }
 
-export function ThreatDial({ score }: { score: number }) {
-  return <div className={styles.threatDial} data-role="threat-dial" style={{ "--battle-threat": `${score}%` } as CSSProperties}>
-    <i /><span>热压指数</span><b>{Math.round(score)}</b><small>THREAT</small>
+export function ThreatDial({ score }: { score: number | null }) {
+  return <div
+    className={styles.threatDial}
+    data-role="threat-dial"
+    data-score-state={score === null ? "unknown" : "available"}
+    aria-label={score === null ? "热压指数待判，当前资料不足" : `热压指数 ${Math.round(score)}`}
+    style={{ "--battle-threat": `${score ?? 0}%` } as CSSProperties}
+  >
+    <i /><span>{score === null ? "指数待判" : "热压指数"}</span><b>{score === null ? "—" : Math.round(score)}</b><small>{score === null ? "UNKNOWN" : "THREAT"}</small>
   </div>;
 }
 

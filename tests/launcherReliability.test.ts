@@ -16,3 +16,14 @@ test("live launcher retries the data health check across cold route compilation"
   assert.match(source, /Start-Sleep -Milliseconds 500/);
   assert.doesNotMatch(source, /\$health\s*=\s*Invoke-RestMethod[^\r\n]*\/api\/health[^\r\n]*-TimeoutSec 8/);
 });
+
+test("live launcher replaces the retired Bilibili listener before starting Linglan", () => {
+  const source = readFileSync(launcher, "utf8");
+
+  assert.match(source, /function Remove-RetiredBilibiliListener/);
+  assert.match(source, /http:\/\/127\.0\.0\.1:\$GatewayPort\/health/);
+  assert.match(source, /\$health\.connectorId -eq 'ordinaryroad'/);
+  assert.match(source, /scripts\\bilibili-room-supervisor\.mjs/);
+  assert.match(source, /Stop-Process -Id \$listenerProcess\.ProcessId -Force/);
+  assert.match(source, /Remove-RetiredBilibiliListener -GatewayPort 8197/);
+});
