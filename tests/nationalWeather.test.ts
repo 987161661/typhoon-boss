@@ -220,6 +220,70 @@ test("aggregation preserves the complete Storm contract and keeps image/catalog 
   assert.equal(provinceWarning?.geography.cityCode, null);
 });
 
+test("a legacy seven-digit city warning is recovered from its exact official issuer path", () => {
+  const cityWarning: ChinaWeatherWarningSnapshot = {
+    fetchedAt: now,
+    source: "warning-source",
+    total: 1,
+    warnings: [{
+      id: "1012708-city-red",
+      issuer: "四川省广安市",
+      locationId: "1012708",
+      issuedAt: "2026-07-15T10:09:28+08:00",
+      typeCode: "02",
+      gradeCode: "04",
+      grade: "red",
+      severity: 4,
+      longitude: 106.63,
+      latitude: 30.47,
+      title: "四川省广安市发布暴雨红色预警信号",
+      detailUrl: "https://example.invalid/city-red"
+    }]
+  };
+
+  const snapshot = buildNationalSituationSnapshot(
+    inputs({ warnings: cityWarning }),
+    now
+  );
+  const event = snapshot.events.find((item) => item.id.includes("1012708-city-red"));
+
+  assert.equal(event?.geography.cityAttribution, "deterministic");
+  assert.equal(event?.geography.cityCode, "511600");
+  assert.equal(event?.geography.countyCode, null);
+});
+
+test("a warning whose official issuer conflicts with its title is never assigned by location id", () => {
+  const conflictingWarning: ChinaWeatherWarningSnapshot = {
+    fetchedAt: now,
+    source: "warning-source",
+    total: 1,
+    warnings: [{
+      id: "101270803-conflict",
+      issuer: "四川省广安市武胜县",
+      locationId: "101270803",
+      issuedAt: "2026-07-15T10:09:28+08:00",
+      typeCode: "07",
+      gradeCode: "03",
+      grade: "orange",
+      severity: 3,
+      longitude: 0,
+      latitude: 0,
+      title: "陕西省安康市岚皋县发布高温橙色预警信号",
+      detailUrl: "https://example.invalid/conflict"
+    }]
+  };
+
+  const snapshot = buildNationalSituationSnapshot(
+    inputs({ warnings: conflictingWarning }),
+    now
+  );
+  const event = snapshot.events.find((item) => item.id.includes("101270803-conflict"));
+
+  assert.equal(event?.geography.cityAttribution, "ambiguous");
+  assert.equal(event?.geography.cityCode, null);
+  assert.match(event?.limitations.join(" ") ?? "", /发布地区.*标题地区.*不一致/);
+});
+
 test("a missing storm pressure sentinel is never published as zero hectopascals", () => {
   const snapshot = buildNationalSituationSnapshot(inputs({
     track: {

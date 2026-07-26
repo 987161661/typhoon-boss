@@ -1,4 +1,8 @@
-import { canEnterCitySituation, resolveAdministrativeLocation, type AdministrativeHierarchy } from "@/lib/administrativeMapping";
+import {
+  canEnterCitySituation,
+  resolveAdministrativeWarningIdentity,
+  type AdministrativeHierarchy
+} from "@/lib/administrativeMapping";
 import type { ChinaWeatherProductSnapshot } from "@/lib/chinaWeatherProductFeed";
 import type { ChinaWeatherVisualSnapshot } from "@/lib/chinaWeatherVisualFeed";
 import type { ChinaWeatherWarning, ChinaWeatherWarningSnapshot } from "@/lib/chinaWeatherWarningFeed";
@@ -329,7 +333,12 @@ function warningEvent(
 ): NationalWeatherEvent[] {
   const level = warningLevel(warning.grade);
   if (!level) return [];
-  const administrative = resolveAdministrativeLocation(warning.locationId, administrativeHierarchy);
+  const administrative = resolveAdministrativeWarningIdentity(
+    warning.locationId,
+    warning.issuer,
+    warning.title,
+    administrativeHierarchy
+  );
   const cityEligible = canEnterCitySituation(administrative);
   const locationLength = warning.locationId.length;
   return [{

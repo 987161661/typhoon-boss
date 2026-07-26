@@ -36,6 +36,10 @@ export interface AdministrativeResolution {
 }
 
 const DIRECT_ADMIN_PROVINCES = new Set(["110000", "120000", "310000", "500000", "710000", "810000", "820000"]);
+const warningIssuerIndexCache = new WeakMap<
+  AdministrativeHierarchy,
+  ReadonlyMap<string, readonly AdministrativeHierarchyRow[]>
+>();
 
 export function parseAdministrativeHierarchyCsv(csv: string): AdministrativeHierarchyRow[] {
   const records = parseCsv(csv);
@@ -232,8 +236,103 @@ export function resolveAdministrativeCityIdentity(
   return resolveAdministrativeCityName(rawCityName, hierarchy);
 }
 
+/**
+ * Warning station codes and the QWeather hierarchy use different namespaces:
+ * city-wide China Weather warnings often carry a seven-digit station code.
+ * Resolve the independently published administrative path, and reject any
+ * record whose station code, issuer and title disagree instead of assigning it
+ * to the wrong city.
+ */
+export function resolveAdministrativeWarningIdentity(
+  rawLocationId: string,
+  rawIssuer: string,
+  rawTitle: string,
+  hierarchy: AdministrativeHierarchy | null
+): AdministrativeResolution {
+  const byLocation = resolveAdministrativeLocation(rawLocationId, hierarchy);
+  if (!hierarchy) return byLocation;
+
+  const issuer = normalizeAdministrativePath(rawIssuer);
+  const titleIssuer = normalizeAdministrativePath(
+    rawTitle.match(/^(.+?)发布/u)?.[1] ?? ""
+  );
+  const issuerRows = warningIssuerIndex(hierarchy).get(issuer) ?? [];
+  const uniqueIssuerRows = uniqueRows(issuerRows);
+  const byIssuer = uniqueIssuerRows.length === 1
+    ? resolveAdministrativeLocation(uniqueIssuerRows[0].locationId, hierarchy)
+    : unresolved(rawLocationId.trim(), "官方预警发布地区不能唯一对应行政区");
+  const shortIssuer = uniqueIssuerRows.length === 1
+    ? normalizeAdministrativePath(
+      uniqueIssuerRows[0].adCode.endsWith("00")
+        ? uniqueIssuerRows[0].cityName
+        : administrativeLocationLabel(uniqueIssuerRows[0])
+    )
+    : "";
+  if (
+    !issuer
+    || !titleIssuer
+    || (issuer !== titleIssuer && shortIssuer !== titleIssuer)
+  ) {
+    return unresolved(
+      rawLocationId.trim(),
+      "官方预警发布地区与标题地区不一致"
+    );
+  }
+
+  if (byIssuer.cityAttribution !== "deterministic") return byLocation;
+  if (
+    byLocation.cityAttribution === "deterministic"
+    && (
+      byLocation.cityCode !== byIssuer.cityCode
+      || byLocation.countyCode !== byIssuer.countyCode
+    )
+  ) {
+    return unresolved(
+      rawLocationId.trim(),
+      "官方预警站点编码与发布地区不一致"
+    );
+  }
+  return byIssuer;
+}
+
 export function canEnterCitySituation(resolution: AdministrativeResolution) {
   return resolution.cityAttribution === "deterministic" && resolution.cityCode !== null;
+}
+
+function warningIssuerIndex(
+  hierarchy: AdministrativeHierarchy
+): ReadonlyMap<string, readonly AdministrativeHierarchyRow[]> {
+  const cached = warningIssuerIndexCache.get(hierarchy);
+  if (cached) return cached;
+  const index = groupRows(hierarchy.rows, warningIssuerPath);
+  warningIssuerIndexCache.set(hierarchy, index);
+  return index;
+}
+
+function warningIssuerPath(row: AdministrativeHierarchyRow) {
+  const province = normalizeAdministrativePath(row.provinceName);
+  const city = normalizeAdministrativePath(row.cityName);
+  if (row.adCode.endsWith("00")) {
+    return province === city ? province : `${province}${city}`;
+  }
+  const location = normalizeAdministrativePath(
+    administrativeLocationLabel(row)
+  );
+  return province === city
+    ? `${province}${location}`
+    : `${province}${city}${location}`;
+}
+
+function administrativeLocationLabel(row: AdministrativeHierarchyRow) {
+  if (/[市县区旗]$/u.test(row.locationName)) return row.locationName;
+  const localCode = Number(row.adCode.slice(-2));
+  if (localCode <= 20) return `${row.locationName}区`;
+  if (localCode >= 81) return `${row.locationName}市`;
+  return `${row.locationName}县`;
+}
+
+function normalizeAdministrativePath(value: string) {
+  return value.normalize("NFKC").replace(/\s+/gu, "");
 }
 
 /**
