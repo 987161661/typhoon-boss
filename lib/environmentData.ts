@@ -4,6 +4,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import sharp from "sharp";
+import { retainNewestWindField } from "@/lib/radarDataContinuity";
 import { makeQuadrantWindPolygon } from "@/lib/meteorology";
 import {
   globalMercatorLatitudeCrop,
@@ -546,15 +547,16 @@ export async function getWindField(stormId?: string | null, requestedBounds?: Wi
         isStale: false,
         lastSuccessfulAt: payload.updatedAt
       } satisfies WindFieldPayload;
-      windFieldLastSuccess.set(cacheKey, freshPayload);
+      const acceptedPayload = retainNewestWindField(freshPayload, lastSuccess);
+      windFieldLastSuccess.set(cacheKey, acceptedPayload);
       windFieldCache.set(cacheKey, {
         expiresAt: Date.now() + windFieldCacheTtl(bounds),
-        payload: freshPayload
+        payload: acceptedPayload
       });
       if (shouldPersistWindField(bounds, sampling)) {
-        void persistWindField(cacheKey, freshPayload);
+        void persistWindField(cacheKey, acceptedPayload);
       }
-      return freshPayload;
+      return acceptedPayload;
     }
 
     const resilientPayload = lastSuccess

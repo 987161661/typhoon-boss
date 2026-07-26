@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Map as MapLibreMap } from "maplibre-gl";
 import type { WindFieldBounds } from "@/lib/environmentData";
+import { retainNewestWindField } from "@/lib/radarDataContinuity";
 import type { WindFieldPayload } from "@/lib/types";
 
 export function useViewportWindField({
@@ -46,8 +47,9 @@ export function useViewportWindField({
         const response = await fetch(`/api/environment/wind-field?${query}`, { cache: "no-store", signal: requestController.signal });
         const payload = response.ok ? await response.json() as WindFieldPayload : null;
         if (!disposed && payload?.status === "available" && payload.points.length > 0) {
-          fieldRef.current = payload;
-          setField(payload);
+          const accepted = retainNewestWindField(payload, fieldRef.current);
+          fieldRef.current = accepted;
+          setField(accepted);
         }
       } catch (error) {
         if (!(error instanceof DOMException && error.name === "AbortError")) return;
@@ -118,7 +120,9 @@ export function useStormCoreWindField({
     void fetch(`/api/environment/wind-field?${query}`, { cache: "no-store", signal: controller.signal })
       .then((response) => response.ok ? response.json() as Promise<WindFieldPayload> : null)
       .then((payload) => {
-        if (!disposed && payload?.status === "available" && payload.points.length > 0) setField(payload);
+        if (!disposed && payload?.status === "available" && payload.points.length > 0) {
+          setField((current) => retainNewestWindField(payload, current));
+        }
       })
       .catch((error) => {
         if (!(error instanceof DOMException && error.name === "AbortError")) return;

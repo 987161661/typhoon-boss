@@ -95,7 +95,7 @@ import {
   LiveTopBar,
   type LiveDeckView
 } from "./LiveBroadcastView";
-import { retainAvailableRadarPayload, retainUsableBossProfiles } from "@/lib/radarDataContinuity";
+import { retainAvailableRadarPayload, retainNewestWindField, retainUsableBossProfiles } from "@/lib/radarDataContinuity";
 import { LiveTyphoonOutlookTicker } from "./LiveTyphoonOutlookTicker";
 import { useTyphoonEvolutionOutlook } from "./useTyphoonEvolutionOutlook";
 import { shouldShowTyphoonEvolutionOutlook } from "@/lib/liveTyphoonOutlook";
@@ -667,7 +667,7 @@ export function TyphoonMap({
       (snapshot.storms ?? []).map((item) => item.id)
     ));
     setSatelliteLayer((current) => retainAvailableRadarPayload(snapshot.environment.satellite, current));
-    setWindField((current) => retainAvailableRadarPayload(snapshot.environment.windField, current));
+    setWindField((current) => retainNewestWindField(snapshot.environment.windField, current));
     setImpactArea((current) => retainAvailableRadarPayload(snapshot.environment.impactArea, current));
     setDataError(snapshotError);
   }, [snapshot, snapshotError, snapshotLoaded]);

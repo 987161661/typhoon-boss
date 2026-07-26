@@ -89,7 +89,10 @@ export function buildGfsAnalysisCenterMarkerModels(
           center: recordedCenter.analysisCenter
         }
       : null;
-    const field = activeField ?? fallback;
+    // The active marker is a projection of the frame that is actually being
+    // rendered. Falling back to an independently refreshed snapshot would
+    // display a plausible-looking center that cannot coincide with the flow.
+    const field = storm.id === activeStormId ? activeField : fallback;
     if (!field) return [];
     return [{
       stormId: storm.id,

@@ -167,6 +167,21 @@ test("GFS center marker models keep every storm visible while the active storm u
   assert.equal(models[1].active, false);
 });
 
+test("the active storm never falls back to a center from a different wind frame", () => {
+  const bavi = storm("202609", 121, 36.9);
+  const models = buildGfsAnalysisCenterMarkerModels([bavi], bavi.id, null, {
+    [bavi.id]: {
+      stormId: bavi.id,
+      status: "available",
+      source: "NOAA/NCEP NOMADS Grib Filter",
+      updatedAt: "2026-07-25T06:00:00Z",
+      analysisCenter: { lon: 119.25, lat: 35.25, method: "peak-cyclonic-vorticity" }
+    }
+  });
+
+  assert.deepEqual(models, []);
+});
+
 function windField(stormId: string, lon: number, lat: number, resolution: number): WindFieldPayload {
   return {
     stormId,

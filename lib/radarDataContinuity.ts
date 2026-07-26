@@ -1,4 +1,5 @@
 import type { BossProfile, BossStructureSummary } from "@/lib/bossEngine/types";
+import type { WindFieldPayload } from "@/lib/types";
 
 export type TrackSnapshotRecoveryMode =
   | "configured-retention"
@@ -94,4 +95,31 @@ export function retainAvailableRadarPayload<T extends { status: string }>(
   previous: T | null | undefined
 ): T {
   return retainAvailable(next, previous ?? undefined);
+}
+
+/**
+ * Wind requests are keyed by viewport and can finish out of order. Once a
+ * direct model frame is visible, a slower response from an older cycle must
+ * not roll that same storm/source back in time.
+ */
+export function retainNewestWindField(
+  next: WindFieldPayload,
+  previous: WindFieldPayload | null | undefined
+): WindFieldPayload {
+  const available = retainAvailable(next, previous ?? undefined);
+  if (!previous || available === previous) return available;
+  if (available.status !== "available" || previous.status !== "available") return available;
+  if (
+    available.source !== previous.source
+    || available.model !== previous.model
+    || (available.stormId ?? null) !== (previous.stormId ?? null)
+  ) return available;
+
+  const nextTime = Date.parse(available.updatedAt);
+  const previousTime = Date.parse(previous.updatedAt);
+  return Number.isFinite(nextTime)
+    && Number.isFinite(previousTime)
+    && nextTime < previousTime
+    ? previous
+    : available;
 }

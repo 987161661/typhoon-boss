@@ -4,7 +4,7 @@ import { getImpactArea, getSatelliteLayer, getWindField } from "@/lib/environmen
 import { findProvinceReferencePoint, getProvinceBoundaryCoordinates, getProvinceReferencePoints, getProvinceSampleCoordinates, normalizeProvinceName } from "@/lib/provinceGeo";
 import { distanceBetweenKm, distanceToPathKm, windForceFromSpeed } from "@/lib/meteorology";
 import { getDataSourceLabel, getTrackSnapshot, type LastTrackedStorm } from "@/lib/realTyphoonData";
-import { retainAvailableRadarPayload, retainUsableBossProfiles } from "@/lib/radarDataContinuity";
+import { retainAvailableRadarPayload, retainNewestWindField, retainUsableBossProfiles } from "@/lib/radarDataContinuity";
 import type { ImpactAreaPayload, SatelliteLayerPayload, Storm, WindFieldPayload } from "@/lib/types";
 
 const DERIVED_CACHE_TTL_MS = 4 * 60 * 1000;
@@ -209,7 +209,7 @@ async function loadDerivedSnapshot(
     warnings,
     "Satellite layer generation failed."
   ), retained?.environment.satellite);
-  const directWindField = retainAvailableRadarPayload(settleValue(
+  const directWindField = retainNewestWindField(settleValue(
     windResult,
     fallbackWindField(generatedAt),
     warnings,
