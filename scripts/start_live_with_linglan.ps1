@@ -1,7 +1,8 @@
 param(
   [int]$Port = 3038,
   [switch]$OpenBrowser,
-  [switch]$NoLinglan
+  [switch]$NoLinglan,
+  [switch]$Development
 )
 
 $ErrorActionPreference = 'Stop'
@@ -64,10 +65,9 @@ function Wait-TyphoonHealth {
   $stopwatch = [Diagnostics.Stopwatch]::StartNew()
   $lastFailure = 'no response received'
 
-  # A cold Next.js dev server compiles API routes on their first request. That
-  # compile can outlive one HTTP request timeout while continuing successfully
-  # in the server, so retry within one bounded startup budget instead of turning
-  # the first timeout into a false launcher failure.
+  # A cold process can still be hydrating provider state when the HTTP listener
+  # first appears. Retry inside one startup budget instead of turning a single
+  # timeout into a false launcher failure.
   while ($stopwatch.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
     try {
       $health = Invoke-RestMethod -Uri $healthUrl -TimeoutSec $RequestTimeoutSeconds
@@ -174,8 +174,19 @@ if (-not $listener) {
   $previousDistDir = $env:NEXT_DIST_DIR
   try {
     $env:NEXT_DIST_DIR = ".next-live-$Port"
+    if (-not $Development) {
+      & 'npm.cmd' run build
+      if ($LASTEXITCODE -ne 0) {
+        throw "Typhoon production build failed for $env:NEXT_DIST_DIR."
+      }
+    }
+    $serverArguments = if ($Development) {
+      @('run', 'dev', '--', '-H', '127.0.0.1', '-p', [string]$Port)
+    } else {
+      @('run', 'start', '--', '-H', '127.0.0.1', '-p', [string]$Port)
+    }
     Start-Process -FilePath 'npm.cmd' `
-      -ArgumentList @('run', 'dev', '--', '-H', '127.0.0.1', '-p', [string]$Port) `
+      -ArgumentList $serverArguments `
       -WorkingDirectory $projectRoot `
       -WindowStyle Hidden `
       -RedirectStandardOutput (Join-Path $serviceLogDir "live-$Port.current.out.log") `
@@ -186,7 +197,7 @@ if (-not $listener) {
 }
 
 $liveReady = $false
-for ($attempt = 0; $attempt -lt 20; $attempt += 1) {
+for ($attempt = 0; $attempt -lt 120; $attempt += 1) {
   if (Test-TyphoonLiveAssets -Url $liveUrl) {
     $liveReady = $true
     break
@@ -248,6 +259,24 @@ if (-not $NoLinglan) {
   Write-Host 'Linglan runtime: http://127.0.0.1:5173/?overlay=1'
 } else {
   Write-Host 'Linglan runtime: skipped by -NoLinglan'
+}
+
+$readinessArguments = @(
+  '-NoLogo',
+  '-NoProfile',
+  '-ExecutionPolicy',
+  'Bypass',
+  '-File',
+  (Join-Path $PSScriptRoot 'test_live_readiness.ps1'),
+  '-RadarBaseUrl',
+  "http://127.0.0.1:$Port"
+)
+if ($NoLinglan) {
+  $readinessArguments += '-SkipDigitalHost'
+}
+& 'powershell.exe' @readinessArguments
+if ($LASTEXITCODE -ne 0) {
+  throw 'Live readiness gate failed.'
 }
 
 if ($OpenBrowser) {

@@ -7,6 +7,7 @@
     "build": "next build && node scripts/alias_next_chunks.js",
     "start": "next start",
     "live:with-host": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/start_live_with_linglan.ps1",
+    "live:check": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test_live_readiness.ps1",
     "agent:run": "node scripts/run_typhoon_evolution_agent.mjs",
     "cities:rank:refresh": "tsx scripts/refresh_national_city_rank.ts",
     "cities:warnings:scan": "tsx scripts/scan_national_city_warnings.ts",

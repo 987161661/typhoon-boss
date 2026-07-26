@@ -4,6 +4,7 @@ import { join } from "node:path";
 import test from "node:test";
 
 const launcher = join(process.cwd(), "scripts", "start_live_with_linglan.ps1");
+const readinessGate = join(process.cwd(), "scripts", "test_live_readiness.ps1");
 
 test("live launcher retries the data health check across cold route compilation", () => {
   const source = readFileSync(launcher, "utf8");
@@ -26,4 +27,27 @@ test("live launcher replaces the retired Bilibili listener before starting Lingl
   assert.match(source, /scripts\\bilibili-room-supervisor\.mjs/);
   assert.match(source, /Stop-Process -Id \$listenerProcess\.ProcessId -Force/);
   assert.match(source, /Remove-RetiredBilibiliListener -GatewayPort 8197/);
+});
+
+test("live launcher defaults to an isolated production build and keeps development explicit", () => {
+  const source = readFileSync(launcher, "utf8");
+
+  assert.match(source, /\[switch\]\$Development/);
+  assert.match(source, /if \(\$Development\)/);
+  assert.match(source, /& 'npm\.cmd' run build/);
+  assert.match(source, /@?\('run', 'start'/);
+  assert.match(source, /@?\('run', 'dev'/);
+});
+
+test("one readiness gate verifies radar assets, fresh GFS and the digital-host runtime", () => {
+  const source = readFileSync(readinessGate, "utf8");
+
+  assert.match(source, /Test-TyphoonLiveAssets/);
+  assert.match(source, /function Invoke-ReadinessJson/);
+  assert.match(source, /while \(\$stopwatch\.Elapsed\.TotalSeconds -lt \$BudgetSeconds\)/);
+  assert.match(source, /\/api\/environment\/wind-field/);
+  assert.match(source, /NOAA\/NCEP NOMADS Grib Filter/);
+  assert.match(source, /\/api\/digital-host\/health/);
+  assert.match(source, /runtimeOwner/);
+  assert.match(source, /lastFaults/);
 });
